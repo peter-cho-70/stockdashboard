@@ -1,0 +1,31 @@
+# Backend API (Render.com) — Vercel 프론트와 연동용
+# https://render.com 에서 Blueprint로 배포하거나 Web Service로 수동 생성
+services:
+  - type: web
+    name: stockmind-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: KIS_APP_KEY
+        sync: false
+      - key: KIS_APP_SECRET
+        sync: false
+      - key: KIS_ACCOUNT_NO
+        sync: false
+      - key: KIS_IS_MOCK
+        value: "true"
+      - key: DB_PATH
+        value: /tmp/stockmind.db
