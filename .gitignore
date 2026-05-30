@@ -1,0 +1,26 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Backend secrets & local data
+backend/.env
+backend/*.db
+backend/nohup.out
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*
+frontend/*.tsbuildinfo
+
+# Logs
+*.log
+/tmp/
