@@ -29,3 +29,6 @@ services:
         value: "true"
       - key: DB_PATH
         value: /tmp/stockmind.db
+      - key: FRONTEND_URL
+        value: https://stockdashboard-two.vercel.app
+    healthCheckPath: /api/health

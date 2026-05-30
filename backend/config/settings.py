@@ -3,7 +3,7 @@ config/settings.py
 StockMind 전체 설정 관리
 """
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 from functools import lru_cache
 
 
@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     kis_app_secret: str = Field("", env="KIS_APP_SECRET")
     kis_account_no: str = Field("", env="KIS_ACCOUNT_NO")
     kis_is_mock: bool = Field(True, env="KIS_IS_MOCK")
+
+    @field_validator("kis_is_mock", "debug", mode="before")
+    @classmethod
+    def _parse_bool(cls, v):
+        if isinstance(v, str):
+            return v.strip().split()[0].lower() in ("true", "1", "yes")
+        return v
 
     # ── AI API ────────────────────────────────────
     gemini_api_key: str = Field("", env="GEMINI_API_KEY")   # YouTube 문서 추출

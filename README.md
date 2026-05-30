@@ -120,6 +120,21 @@ npm run dev
 
 ---
 
+## 🌐 배포 (Production)
+
+| 서비스 | URL |
+|--------|-----|
+| **프론트엔드** | https://stockdashboard-two.vercel.app |
+| **백엔드 API** | https://stockmind-api.vercel.app |
+| **API 문서** | https://stockmind-api.vercel.app/docs |
+| **GitHub** | https://github.com/peter-cho-70/stockdashboard |
+
+- 프론트: Vercel (`frontend/` 디렉터리, Root Directory 설정)
+- API: Vercel Serverless (`backend/`, `handler.py`)
+- 환경변수: Vercel 대시보드에서 `NEXT_PUBLIC_API_URL=https://stockmind-api.vercel.app/api` (프론트), API 키들 (백엔드)
+
+---
+
 ## ⚠️ 면책 조항
 
 본 플랫폼의 모든 분석 결과는 참고용이며 투자 결정의 근거가 될 수 없습니다.

@@ -13,6 +13,7 @@ env/
 backend/.env
 backend/*.db
 backend/nohup.out
+backend/.vercel
 
 # Node / Next.js
 frontend/node_modules/

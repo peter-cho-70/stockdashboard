@@ -25,26 +25,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 settings = get_settings()
+SERVERLESS = __import__("os").environ.get("SERVERLESS") == "1" or __import__("os").environ.get("VERCEL") == "1"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 시작/종료 이벤트"""
-    # ── 시작 ──────────────────────────────────
-    logger.info("🚀 StockMind 시작 중...")
+    logger.info("🚀 StockMind 시작 중... (serverless=%s)", SERVERLESS)
 
-    # DB 초기화
     init_db()
 
-    # 스케줄러 시작
-    scheduler = create_scheduler()
-    scheduler.start()
-    logger.info("✅ 스케줄러 시작됨")
+    scheduler = None
+    if not SERVERLESS:
+        scheduler = create_scheduler()
+        scheduler.start()
+        logger.info("✅ 스케줄러 시작됨")
+    else:
+        logger.info("ℹ️ Serverless 모드 — 스케줄러 비활성")
 
     yield
 
-    # ── 종료 ──────────────────────────────────
-    scheduler.shutdown()
+    if scheduler:
+        scheduler.shutdown()
     logger.info("👋 StockMind 종료")
 
 
