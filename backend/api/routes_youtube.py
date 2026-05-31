@@ -11,7 +11,15 @@ from datetime import datetime, timedelta
 from config.database import get_db, YouTubeChannel, IntelContent, VideoCache, StockIssue
 from config.settings import get_settings
 from core.youtube_fetcher import resolve_channel_id, fetch_latest_videos
-from core.ai_analyzer import create_analyzer, serialize_intel
+from core.ai_analyzer import (
+    create_analyzer,
+    serialize_intel,
+    ensure_analysis_available,
+    handle_provider_runtime_error,
+    ProviderQuotaError,
+    try_cached_intel,
+)
+from core.analysis_stream import run_youtube_analysis, stream_analysis
 
 CACHE_TTL_HOURS = 1
 
@@ -27,6 +35,8 @@ class ChannelAddBody(BaseModel):
 class AnalyzeVideoBody(BaseModel):
     url: str
     channel_name: Optional[str] = None
+    analysis_provider: Optional[str] = None
+    force_reanalyze: bool = False
 
 
 @youtube_router.get("/channels")
@@ -151,26 +161,59 @@ def _vc_dict(v: VideoCache, analyzed_urls: set) -> dict:
 def analyze_video(body: AnalyzeVideoBody, db: Session = Depends(get_db)):
     if not settings.gemini_api_key:
         raise HTTPException(status_code=400, detail="YouTube 문서 추출에 GEMINI_API_KEY 필요")
-    if not settings.openai_api_key:
-        raise HTTPException(status_code=400, detail="구조화 분석에 OPENAI_API_KEY 필요")
+    try:
+        ensure_analysis_available(settings, body.analysis_provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    cached = try_cached_intel(
+        db,
+        body.url,
+        skip_if_cached=settings.ai_skip_if_cached,
+        force_reanalyze=body.force_reanalyze,
+    )
+    if cached:
+        content, logs = cached
+        return serialize_intel(content, db, logs)
 
     analyzer = create_analyzer(db)
     try:
-        result = analyzer.analyze_youtube(url=body.url, channel_name=body.channel_name or "")
+        result = analyzer.analyze_youtube(
+            url=body.url,
+            channel_name=body.channel_name or "",
+            analysis_provider=body.analysis_provider,
+        )
+    except ProviderQuotaError as e:
+        handle_provider_runtime_error(e)
     except RuntimeError as e:
-        err = str(e)
-        if err.startswith("GEMINI_QUOTA_EXCEEDED:"):
-            secs = err.split(":")[1]
-            raise HTTPException(status_code=429, detail=f"Gemini API 한도 초과. {secs}초 후 재시도.")
-        if err.startswith("OPENAI_QUOTA_EXCEEDED:"):
-            secs = err.split(":")[1]
-            raise HTTPException(status_code=429, detail=f"OpenAI API 한도 초과. {secs}초 후 재시도.")
-        raise HTTPException(status_code=500, detail=err)
+        handle_provider_runtime_error(e)
 
     if not result:
         raise HTTPException(status_code=500, detail={"message": "분석 실패.", "logs": analyzer.logs})
 
     return serialize_intel(result, db, analyzer.logs)
+
+
+@youtube_router.post("/analyze/stream")
+async def analyze_video_stream(body: AnalyzeVideoBody):
+    """YouTube 영상 AI 분석 (SSE 실시간 로그)"""
+    if not settings.gemini_api_key:
+        raise HTTPException(status_code=400, detail="YouTube 문서 추출에 GEMINI_API_KEY 필요")
+    try:
+        ensure_analysis_available(settings, body.analysis_provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return await stream_analysis(
+        lambda on_log: run_youtube_analysis(
+            url=body.url,
+            channel_name=body.channel_name or "",
+            analysis_provider=body.analysis_provider,
+            force_reanalyze=body.force_reanalyze,
+            skip_if_cached=settings.ai_skip_if_cached,
+            on_log=on_log,
+        )
+    )
 
 
 @youtube_router.post("/channels/{channel_db_id}/analyze-latest")
@@ -180,6 +223,11 @@ def analyze_latest(
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db),
 ):
+    if not settings.enable_bulk_youtube_analyze:
+        raise HTTPException(
+            status_code=403,
+            detail="일괄 분석이 비활성화되어 있습니다. ENABLE_BULK_YOUTUBE_ANALYZE=true 또는 영상별 개별 분석을 사용하세요.",
+        )
     if not settings.youtube_api_key:
         raise HTTPException(status_code=400, detail="YouTube API 키 미설정")
     if not settings.gemini_api_key:

@@ -5,7 +5,7 @@ SQLAlchemy 데이터베이스 모델 및 연결 관리
 from datetime import datetime
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float,
-    DateTime, Boolean, Text, ForeignKey
+    DateTime, Boolean, Text, ForeignKey, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 from config.settings import get_settings
@@ -55,6 +55,7 @@ class Stock(Base):
     # 관계
     price_history = relationship("PriceHistory", back_populates="stock")
     issues = relationship("StockIssue", back_populates="stock")
+    move_causes = relationship("PriceMoveCause", back_populates="stock")
 
     @property
     def current_value(self) -> float:
@@ -151,6 +152,9 @@ class IntelContent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     issues = relationship("StockIssue", back_populates="content")
+    macro_signals = relationship("MacroSignal", back_populates="content")
+    sector_signals = relationship("SectorSignal", back_populates="content")
+    stock_signals = relationship("StockSignal", back_populates="content")
 
 
 # ─────────────────────────────────────────────
@@ -168,6 +172,31 @@ class StockIssue(Base):
 
     stock = relationship("Stock", back_populates="issues")
     content = relationship("IntelContent", back_populates="issues")
+
+
+# ─────────────────────────────────────────────
+# 주가 급변 원인 (AI 검색 저장)
+# ─────────────────────────────────────────────
+class PriceMoveCause(Base):
+    __tablename__ = "price_move_causes"
+    __table_args__ = (UniqueConstraint("stock_id", "event_date", name="uq_stock_move_date"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False, index=True)
+    event_date = Column(String(10), nullable=False, index=True)   # YYYY-MM-DD
+    change_pct = Column(Float, nullable=False)
+    direction = Column(String(10), nullable=False)                # up / down
+    close_price = Column(Float, nullable=True)
+    reason = Column(Text, nullable=False)
+    sentiment = Column(String(20), default="NEUTRAL")
+    key_factors = Column(Text, nullable=True)                       # JSON array
+    source_urls = Column(Text, nullable=True)                       # JSON array
+    confidence = Column(String(20), nullable=True)                  # high / medium / low
+    analysis_provider = Column(String(20), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    stock = relationship("Stock", back_populates="move_causes")
 
 
 # ─────────────────────────────────────────────
@@ -230,6 +259,78 @@ class VideoCache(Base):
     thumbnail    = Column(String(500), nullable=True)
     url          = Column(String(200), nullable=False)
     cached_at    = Column(DateTime, default=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
+# 매크로 신호 (영상/텍스트에서 파생)
+# ─────────────────────────────────────────────
+class MacroSignal(Base):
+    __tablename__ = "macro_signals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    content_id = Column(Integer, ForeignKey("intel_contents.id"), nullable=False, index=True)
+    topic = Column(String(50), nullable=False, index=True)   # 금리 | 환율 | CPI | FOMC | 유가 | 중국정책 | 미국정책 | 기타
+    summary = Column(Text, nullable=True)
+    sentiment = Column(String(20), nullable=True)            # POSITIVE / NEUTRAL / NEGATIVE
+    impact = Column(Text, nullable=True)                     # 시장 영향 설명
+    event_date = Column(String(10), nullable=True, index=True)  # YYYY-MM-DD (영상 날짜 기준)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    content = relationship("IntelContent", back_populates="macro_signals")
+
+
+# ─────────────────────────────────────────────
+# 섹터 신호 (영상/텍스트에서 파생)
+# ─────────────────────────────────────────────
+class SectorSignal(Base):
+    __tablename__ = "sector_signals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    content_id = Column(Integer, ForeignKey("intel_contents.id"), nullable=False, index=True)
+    sector = Column(String(50), nullable=False, index=True)  # 반도체 | AI·빅테크 | 2차전지 | ...
+    summary = Column(Text, nullable=True)
+    sentiment = Column(String(20), nullable=True)
+    outlook = Column(Text, nullable=True)                    # 단기/중기 전망 텍스트
+    mentioned_stocks = Column(Text, nullable=True)           # JSON 배열 — 이 섹터에서 언급된 종목명
+    event_date = Column(String(10), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    content = relationship("IntelContent", back_populates="sector_signals")
+
+
+# ─────────────────────────────────────────────
+# 종목 신호 — 언급된 모든 종목 (보유 여부 무관)
+# ─────────────────────────────────────────────
+class StockSignal(Base):
+    __tablename__ = "stock_signals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    content_id = Column(Integer, ForeignKey("intel_contents.id"), nullable=False, index=True)
+    symbol = Column(String(20), nullable=True, index=True)   # 종목코드 (보유 종목이면 stocks.symbol 과 매칭)
+    stock_name = Column(String(100), nullable=False)         # 종목명 (저장 시점)
+    is_portfolio = Column(Boolean, default=False)            # 내 보유 종목 여부
+    summary = Column(Text, nullable=True)                    # 종목 관련 요약
+    sentiment = Column(String(20), nullable=True)
+    event_date = Column(String(10), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    content = relationship("IntelContent", back_populates="stock_signals")
+
+
+# ─────────────────────────────────────────────
+# 관심 종목 (지켜보기 — 모의투자 아님)
+# ─────────────────────────────────────────────
+class WatchlistItem(Base):
+    __tablename__ = "watchlist"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(20), nullable=True, index=True)
+    stock_name = Column(String(100), nullable=False, index=True)
+    sector = Column(String(50), nullable=True)
+    source_type = Column(String(20), nullable=True)   # sector | macro | manual | stock
+    source_id = Column(Integer, nullable=True)
+    memo = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
 def _migrate_intel_columns():

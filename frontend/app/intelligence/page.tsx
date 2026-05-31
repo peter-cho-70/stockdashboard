@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Video, Newspaper, FileText, Send, Loader2,
   TrendingUp, TrendingDown, Minus,
   ChevronDown, ChevronUp, Plus, Trash2,
   RefreshCw, PlayCircle, CheckCircle2,
   Tv, ExternalLink, AlertCircle,
+  Globe, BarChart2, Bell, CalendarDays, Star,
 } from "lucide-react";
-import { api, type AnalysisResult, type IntelContent, type StockIssueItem, type AnalysisLog, type MacroAnalysis, type SectorAnalysisItem } from "@/lib/api";
+import { api, signalApi, watchlistApi, type AnalysisResult, type IntelContent, type StockIssueItem, type AnalysisLog, type MacroAnalysis, type SectorAnalysisItem, type AnalysisProvider, type DailyBriefing, type MacroHub, type SectorHub, type PortfolioReminder, type StockRecommendation } from "@/lib/api";
+import { streamAnalyze, AnalyzeStreamError } from "@/lib/analyzeStream";
+import { IntelDetailPanel, type IntelDetailData } from "@/components/intel-detail-panel";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
@@ -23,34 +26,74 @@ const PAGE_TABS = [
   { id: "analyze",  label: "분석 요청" },
   { id: "channels", label: "채널 구독" },
   { id: "history",  label: "분석 이력" },
+  { id: "briefing", label: "일별 브리핑" },
+  { id: "macro",    label: "매크로" },
+  { id: "sectors",  label: "섹터" },
+  { id: "remind",   label: "리마인드" },
 ] as const;
 
 // ─── 타입 ────────────────────────────────────────
 interface YTChannel { id: number; channel_id: string; channel_name: string; channel_url: string; last_checked_at: string | null; }
 interface YTVideo   { video_id: string; title: string; description: string; published_at: string; thumbnail: string; url: string; already_analyzed: boolean; }
-interface VideoAnalysis {
-  id: number;
-  summary: string;
-  key_points: string[];
-  mentioned_stocks: string[];
-  mentioned_sectors: string[];
-  keywords: string[];
-  sentiment: string;
-  analyzed_at: string | null;
-  stock_issues?: StockIssueItem[];
-  macro_analysis?: MacroAnalysis;
-  sector_analysis?: SectorAnalysisItem[];
+interface VideoAnalysis extends IntelDetailData {
   logs?: AnalysisLog[];
 }
 
-const LOG_STEPS = [
-  "🔍 분석 준비 중...",
-  "📋 보유 종목 목록 로드...",
-  "🎬 Gemini: YouTube 문서 추출 (또는 본문 수집)...",
-  "🤖 GPT: 종목·매크로·섹터 분석 요청...",
-  "⏳ GPT 응답 대기 중...",
-  "🗂️ 보유 종목 매핑 및 DB 저장...",
+const ANALYSIS_PROVIDER_OPTIONS: { id: AnalysisProvider; label: string; hint: string }[] = [
+  { id: "openai", label: "GPT (기본)", hint: "gpt-4o-mini · 텍스트 분석 권장" },
+  { id: "gemini", label: "Gemini", hint: "gemini-3.1-flash-lite · YouTube 추출" },
+  { id: "claude", label: "Claude", hint: "Anthropic API 크레dit 필요" },
 ];
+
+function parseApiError(e: unknown): { message: string; logs: AnalysisLog[] } {
+  if (e instanceof AnalyzeStreamError) {
+    return { message: e.message, logs: e.logs };
+  }
+  const msg = e instanceof Error ? e.message : String(e);
+  try {
+    const parsed = JSON.parse(msg);
+    const detail = parsed.detail;
+    if (typeof detail === "object" && detail !== null) {
+      return {
+        message: detail.message || "분석 실패",
+        logs: detail.logs || [],
+      };
+    }
+    return { message: typeof detail === "string" ? detail : msg, logs: [] };
+  } catch {
+    if (msg.includes("429") || msg.toLowerCase().includes("quota")) {
+      return { message: "AI API 사용 한도 초과입니다. 다른 AI를 선택하거나 잠시 후 재시도하세요.", logs: [] };
+    }
+    return { message: msg, logs: [] };
+  }
+}
+
+function AnalysisProviderSelect({
+  value,
+  onChange,
+}: {
+  value: AnalysisProvider;
+  onChange: (v: AnalysisProvider) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-xs font-medium text-neutral-600 dark:text-neutral-400">구조화 분석 AI</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as AnalysisProvider)}
+        className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-3 py-2 text-sm focus:outline-none"
+      >
+        {ANALYSIS_PROVIDER_OPTIONS.map((o) => (
+          <option key={o.id} value={o.id}>{o.label}</option>
+        ))}
+      </select>
+      <p className="text-[10px] text-neutral-400">
+        YouTube는 Gemini로 추출 → {ANALYSIS_PROVIDER_OPTIONS.find((o) => o.id === value)?.hint}
+        {" · "}선택한 AI 1회만 시도 (재시도·fallback 없음)
+      </p>
+    </div>
+  );
+}
 
 function SentDot({ s }: { s: string }) {
   if (s === "POSITIVE") return <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />;
@@ -59,12 +102,11 @@ function SentDot({ s }: { s: string }) {
 }
 
 function AnalysisLogPanel({ logs, analyzing }: { logs: AnalysisLog[]; analyzing: boolean }) {
-  const [stepIdx, setStepIdx] = useState(0);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    if (!analyzing) { setStepIdx(0); return; }
-    const timers = [0, 1500, 4000, 8000, 12000].map((d, i) => setTimeout(() => setStepIdx(i), d));
-    return () => timers.forEach(clearTimeout);
-  }, [analyzing]);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [logs.length, analyzing]);
 
   const levelColor = (l: string) =>
     l === "error" ? "text-red-400" : l === "warn" ? "text-amber-400" : "text-emerald-400";
@@ -72,21 +114,22 @@ function AnalysisLogPanel({ logs, analyzing }: { logs: AnalysisLog[]; analyzing:
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-950 overflow-hidden">
       <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
-        <span className="text-xs text-neutral-400 font-mono">분석 로그</span>
+        <span className="text-xs text-neutral-400 font-mono">분석 로그 (실시간)</span>
         {analyzing && <span className="ml-auto flex items-center gap-1 text-[10px] text-amber-400"><Loader2 size={10} className="animate-spin" /> 진행 중</span>}
         {!analyzing && logs.length > 0 && <span className="ml-auto text-[10px] text-emerald-400">완료</span>}
       </div>
-      <div className="p-3 font-mono text-[10px] space-y-0.5 max-h-40 overflow-y-auto">
-        {analyzing && LOG_STEPS.slice(0, stepIdx + 1).map((s, i) => (
-          <div key={i} className={i === stepIdx ? "text-amber-300 animate-pulse" : "text-neutral-500"}>{s}</div>
-        ))}
-        {!analyzing && logs.map((l, i) => (
-          <div key={i} className="flex gap-2">
+      <div className="p-3 font-mono text-[10px] space-y-0.5 max-h-48 overflow-y-auto">
+        {analyzing && logs.length === 0 && (
+          <div className="text-amber-300 animate-pulse">서버 연결 중...</div>
+        )}
+        {logs.map((l, i) => (
+          <div key={`${l.ts}-${i}`} className="flex gap-2">
             <span className="text-neutral-600 shrink-0">{l.ts}</span>
             <span className={levelColor(l.level)}>{l.msg}</span>
           </div>
         ))}
         {!analyzing && logs.length === 0 && <span className="text-neutral-600">—</span>}
+        <div ref={bottomRef} />
       </div>
     </div>
   );
@@ -101,7 +144,7 @@ function MacroSectorPanel({ macro, sectors }: { macro?: MacroAnalysis; sectors?:
     <div className="space-y-2 mt-2">
       {hasMacro && (
         <div className="rounded-md border border-purple-200 bg-purple-50 dark:border-purple-800 dark:bg-purple-900/15 p-2.5">
-          <p className="text-[10px] font-semibold text-purple-700 dark:text-purple-400 mb-1">🌍 매크로 분석 (GPT)</p>
+          <p className="text-[10px] font-semibold text-purple-700 dark:text-purple-400 mb-1">🌍 매크로 분석</p>
           {macro!.summary && <p className="text-[10px] text-neutral-600 dark:text-neutral-400 mb-1.5">{macro!.summary}</p>}
           {macro!.topics?.map((t, i) => (
             <div key={i} className="flex gap-2 items-start mb-1">
@@ -117,7 +160,7 @@ function MacroSectorPanel({ macro, sectors }: { macro?: MacroAnalysis; sectors?:
       )}
       {hasSector && (
         <div className="rounded-md border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/15 p-2.5">
-          <p className="text-[10px] font-semibold text-blue-700 dark:text-blue-400 mb-1.5">📊 섹터별 분석 (GPT)</p>
+          <p className="text-[10px] font-semibold text-blue-700 dark:text-blue-400 mb-1.5">📊 섹터별 분석</p>
           <div className="space-y-2">
             {sectors!.map((s, i) => (
               <div key={i} className="flex gap-2 items-start">
@@ -149,79 +192,11 @@ function InlineAnalysisPanel({ analysis }: { analysis: VideoAnalysis }) {
     NEGATIVE: "bg-red-50 border-red-200 dark:bg-red-900/15 dark:border-red-800",
     NEUTRAL:  "bg-neutral-50 border-neutral-200 dark:bg-neutral-800/40 dark:border-neutral-700",
   };
-  const sentLabel: Record<string, string> = { POSITIVE: "긍정", NEGATIVE: "부정", NEUTRAL: "중립" };
-  const sentText: Record<string, string> = {
-    POSITIVE: "text-emerald-700 dark:text-emerald-400",
-    NEGATIVE: "text-red-700 dark:text-red-400",
-    NEUTRAL:  "text-neutral-600 dark:text-neutral-400",
-  };
   const s = analysis.sentiment ?? "NEUTRAL";
 
   return (
-    <div className={`mt-2 rounded-lg border p-3 text-sm ${sentColors[s] ?? sentColors.NEUTRAL}`}>
-      {/* 상단 메타 */}
-      <div className="flex flex-wrap items-center gap-2 mb-2">
-        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${sentText[s]}`}>
-          {s === "POSITIVE" ? <TrendingUp size={11} /> : s === "NEGATIVE" ? <TrendingDown size={11} /> : <Minus size={11} />}
-          {sentLabel[s]}
-        </span>
-        {analysis.analyzed_at && (
-          <span className="text-xs text-neutral-400">{new Date(analysis.analyzed_at).toLocaleDateString("ko-KR")}</span>
-        )}
-      </div>
-
-      {/* 요약 */}
-      {analysis.summary && (
-        <p className="text-xs text-neutral-700 dark:text-neutral-300 leading-relaxed mb-2 line-clamp-2">{analysis.summary}</p>
-      )}
-
-      {/* 핵심 포인트 최대 5개 */}
-      {analysis.key_points.length > 0 && (
-        <ul className="space-y-1 mb-2">
-          {analysis.key_points.slice(0, 5).map((p, i) => (
-            <li key={i} className="flex gap-2 text-xs text-neutral-600 dark:text-neutral-400">
-              <span className="shrink-0 mt-0.5 text-neutral-300 dark:text-neutral-600">•</span>
-              <span>{p}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* 보유 종목 매핑 */}
-      {analysis.stock_issues && analysis.stock_issues.length > 0 && (
-        <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/15 p-2.5">
-          <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 mb-1.5">
-            📌 내 보유 종목 (GPT) ({analysis.stock_issues.length}개)
-          </p>
-          <div className="space-y-2">
-            {analysis.stock_issues.map((iss, i) => (
-              <div key={i} className="flex gap-2">
-                <div className="flex items-start gap-1.5 shrink-0 mt-0.5">
-                  <SentDot s={iss.sentiment} />
-                  <span className="text-[10px] font-semibold text-neutral-700 dark:text-neutral-300 whitespace-nowrap">
-                    {iss.name}
-                  </span>
-                </div>
-                <p className="text-[10px] text-neutral-600 dark:text-neutral-400 leading-relaxed line-clamp-2">
-                  {iss.issue_summary}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <MacroSectorPanel macro={analysis.macro_analysis} sectors={analysis.sector_analysis} />
-
-      {/* 태그 */}
-      <div className="flex flex-wrap gap-1">
-        {analysis.mentioned_sectors.map((s) => (
-          <span key={s} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-400">{s}</span>
-        ))}
-        {analysis.mentioned_stocks.slice(0, 6).map((s) => (
-          <span key={s} className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-0.5 text-[10px] text-neutral-600 dark:text-neutral-400">{s}</span>
-        ))}
-      </div>
+    <div className={`mt-2 rounded-lg border p-3 ${sentColors[s] ?? sentColors.NEUTRAL}`}>
+      <IntelDetailPanel data={analysis} compact />
     </div>
   );
 }
@@ -253,6 +228,27 @@ function SourceIcon({ type }: { type: string }) {
 
 function ContentCard({ content }: { content: IntelContent }) {
   const [expanded, setExpanded] = useState(false);
+  const [detail, setDetail] = useState<IntelContent | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  async function toggleExpand() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !detail && content.id) {
+      setLoadingDetail(true);
+      try {
+        const full = await api.getIntelContent(content.id);
+        setDetail(full);
+      } catch {
+        setDetail(content);
+      } finally {
+        setLoadingDetail(false);
+      }
+    }
+  }
+
+  const display = detail ?? content;
+
   return (
     <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4 hover:border-neutral-300 dark:hover:border-neutral-600 transition-colors">
       <div className="flex items-start gap-3">
@@ -263,27 +259,38 @@ function ContentCard({ content }: { content: IntelContent }) {
             <SentimentBadge sentiment={content.sentiment} />
             {content.analyzed_at && <span className="text-xs text-neutral-400 ml-auto">{new Date(content.analyzed_at).toLocaleDateString("ko-KR")}</span>}
           </div>
-          {content.source_title && <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200 line-clamp-2">{content.source_title}</p>}
-          {content.summary && (
-            <p className={`text-sm text-neutral-600 dark:text-neutral-400 ${expanded ? "" : "line-clamp-2"}`}>{content.summary}</p>
+          {content.source_title && <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200">{content.source_title}</p>}
+          {content.summary && !expanded && (
+            <p className="text-sm text-neutral-600 dark:text-neutral-400 line-clamp-2">{content.summary}</p>
           )}
-          <div className="flex flex-wrap gap-1.5">
-            {content.mentioned_sectors?.map((s) => (
-              <span key={s} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-400">{s}</span>
-            ))}
-            {content.mentioned_stocks?.slice(0, 5).map((s) => (
-              <span key={s} className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[11px] text-neutral-600 dark:text-neutral-400">{s}</span>
-            ))}
-          </div>
+          {!expanded && (
+            <div className="flex flex-wrap gap-1.5">
+              {content.mentioned_sectors?.map((s) => (
+                <span key={s} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-400">{s}</span>
+              ))}
+              {content.mentioned_stocks?.slice(0, 5).map((s) => (
+                <span key={s} className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[11px] text-neutral-600 dark:text-neutral-400">{s}</span>
+              ))}
+            </div>
+          )}
+          {expanded && (
+            loadingDetail ? (
+              <div className="flex items-center gap-2 py-4 text-xs text-neutral-400">
+                <Loader2 size={14} className="animate-spin" /> 상세 불러오는 중...
+              </div>
+            ) : (
+              <IntelDetailPanel data={{ ...display, source_type: display.source_type, source_url: display.source_url }} />
+            )
+          )}
           <div className="flex items-center gap-3">
             {content.source_url && (
               <a href={content.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-500 hover:underline">
-                원문 보기 <ExternalLink size={10} />
+                원문 링크 <ExternalLink size={10} />
               </a>
             )}
-            <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-1 text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300">
+            <button onClick={toggleExpand} className="flex items-center gap-1 text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300">
               {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-              {expanded ? "접기" : "더 보기"}
+              {expanded ? "접기" : "상세 보기 (분석·추출·원문)"}
             </button>
           </div>
         </div>
@@ -293,7 +300,15 @@ function ContentCard({ content }: { content: IntelContent }) {
 }
 
 // ─── 채널 패널 ────────────────────────────────────
-function ChannelPanel({ onAnalyzeDone }: { onAnalyzeDone?: (id: number) => void }) {
+function ChannelPanel({
+  onAnalyzeDone,
+  analysisProvider,
+  enableBulkYoutubeAnalyze,
+}: {
+  onAnalyzeDone?: (id: number) => void;
+  analysisProvider: AnalysisProvider;
+  enableBulkYoutubeAnalyze: boolean;
+}) {
   const [channels, setChannels]     = useState<YTChannel[]>([]);
   const [handle, setHandle]         = useState("");
   const [customName, setCustomName] = useState("");
@@ -305,6 +320,8 @@ function ChannelPanel({ onAnalyzeDone }: { onAnalyzeDone?: (id: number) => void 
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   const [bulkAnalyzing, setBulkAnalyzing] = useState(false);
   const [bulkMsg, setBulkMsg]       = useState("");
+  const [channelAnalyzeLogs, setChannelAnalyzeLogs] = useState<AnalysisLog[]>([]);
+  const [channelAnalyzeError, setChannelAnalyzeError] = useState("");
 
   // 영상별 분석 결과 & 펼침 상태
   const [analysisMap, setAnalysisMap] = useState<Record<string, VideoAnalysis>>({});
@@ -375,20 +392,27 @@ function ChannelPanel({ onAnalyzeDone }: { onAnalyzeDone?: (id: number) => void 
         } catch { /* ignore */ }
       }
     } else {
-      // 미분석 → AI 분석 시작
       setAnalyzingId(v.video_id);
+      setChannelAnalyzeLogs([]);
+      setChannelAnalyzeError("");
       try {
-        const r = await fetchJson<VideoAnalysis>("/youtube/analyze", {
-          method: "POST",
-          body: JSON.stringify({ url: v.url, channel_name: channelName }),
-        });
+        const r = await streamAnalyze<VideoAnalysis>(
+          "/youtube/analyze/stream",
+          { url: v.url, channel_name: channelName, analysis_provider: analysisProvider },
+          (log) => setChannelAnalyzeLogs((prev) => [...prev, log]),
+        );
         setVideos((prev) => prev.map((x) => x.video_id === v.video_id ? { ...x, already_analyzed: true } : x));
         setAnalysisMap((prev) => ({ ...prev, [v.video_id]: r }));
+        setChannelAnalyzeLogs(r.logs || []);
         setExpandedIds((prev) => new Set(prev).add(v.video_id));
-        // 이력 탭으로 이동
         if (onAnalyzeDone && r.id) onAnalyzeDone(r.id);
-      } catch { /* ignore */ }
-      finally { setAnalyzingId(null); }
+      } catch (e: unknown) {
+        const { message, logs } = parseApiError(e);
+        setChannelAnalyzeError(message);
+        setChannelAnalyzeLogs((prev) => (logs.length ? logs : prev));
+      } finally {
+        setAnalyzingId(null);
+      }
     }
   }
 
@@ -485,12 +509,13 @@ function ChannelPanel({ onAnalyzeDone }: { onAnalyzeDone?: (id: number) => void 
               <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
                 {selectedCh.channel_name} · 최신 영상
               </h2>
-              <p className="text-xs text-neutral-400 mt-0.5">클릭하면 개별 분석, 일괄 분석은 미분석 영상만 처리</p>
+              <p className="text-xs text-neutral-400 mt-0.5">영상 클릭으로 개별 분석 · 저장된 결과는 AI 재호출 없음</p>
             </div>
             <div className="flex gap-2">
               <button onClick={() => loadVideos(selectedCh, true)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800">
                 <RefreshCw size={12} /> YouTube에서 새로고침
               </button>
+              {enableBulkYoutubeAnalyze && (
               <button
                 onClick={() => bulkAnalyze(selectedCh)}
                 disabled={bulkAnalyzing}
@@ -499,12 +524,24 @@ function ChannelPanel({ onAnalyzeDone }: { onAnalyzeDone?: (id: number) => void 
                 {bulkAnalyzing ? <Loader2 size={12} className="animate-spin" /> : <PlayCircle size={12} />}
                 {bulkAnalyzing ? "분석 중..." : "최신 5개 일괄 분석"}
               </button>
+              )}
             </div>
           </div>
 
           {bulkMsg && (
             <div className="border-b border-[var(--border-subtle)] bg-emerald-50 dark:bg-emerald-900/15 px-4 py-2 text-xs text-emerald-700 dark:text-emerald-400">
               ✅ {bulkMsg}
+            </div>
+          )}
+
+          {(analyzingId || channelAnalyzeLogs.length > 0 || channelAnalyzeError) && (
+            <div className="border-b border-[var(--border-subtle)] px-4 py-3 space-y-2">
+              {channelAnalyzeError && (
+                <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
+                  <AlertCircle size={13} /> {channelAnalyzeError}
+                </div>
+              )}
+              <AnalysisLogPanel logs={channelAnalyzeLogs} analyzing={!!analyzingId} />
             </div>
           )}
 
@@ -588,12 +625,20 @@ function ChannelPanel({ onAnalyzeDone }: { onAnalyzeDone?: (id: number) => void 
 }
 
 // ─── 분석 요청 패널 ───────────────────────────────
-function AnalyzePanel({ onDone, onGoToHistory }: { onDone: (id?: number) => void; onGoToHistory: (id: number) => void }) {
+function AnalyzePanel({
+  onDone,
+  onGoToHistory,
+  analysisProvider,
+}: {
+  onDone: (id?: number) => void;
+  onGoToHistory: (id: number) => void;
+  analysisProvider: AnalysisProvider;
+}) {
   const [inputUrl,     setInputUrl]     = useState("");
   const [inputText,    setInputText]    = useState("");
   const [inputTitle,   setInputTitle]   = useState("");
   const [inputChannel, setInputChannel] = useState("");
-  const [inputMode,    setInputMode]    = useState<"url" | "text">("url");
+  const [inputMode,    setInputMode]    = useState<"url" | "text">("text");
   const [analyzing,    setAnalyzing]    = useState(false);
   const [lastResult,   setLastResult]   = useState<AnalysisResult | null>(null);
   const [lastLogs,     setLastLogs]     = useState<AnalysisLog[]>([]);
@@ -604,30 +649,25 @@ function AnalyzePanel({ onDone, onGoToHistory }: { onDone: (id?: number) => void
     if (inputMode === "text" && !inputText.trim()) return;
     setAnalyzing(true); setError(""); setLastResult(null); setLastLogs([]);
     try {
-      const result = await api.analyzeContent(
+      const payload =
         inputMode === "url"
-          ? { url: inputUrl.trim(), channel_name: inputChannel.trim() || undefined }
-          : { text: inputText.trim(), title: inputTitle.trim() || undefined }
+          ? { url: inputUrl.trim(), channel_name: inputChannel.trim() || undefined, analysis_provider: analysisProvider }
+          : { text: inputText.trim(), title: inputTitle.trim() || undefined, analysis_provider: analysisProvider };
+
+      const result = await streamAnalyze<AnalysisResult>(
+        "/intel/analyze/stream",
+        payload,
+        (log) => setLastLogs((prev) => [...prev, log]),
       );
       setLastResult(result);
       setLastLogs(result.logs || []);
       setInputUrl(""); setInputText(""); setInputTitle(""); setInputChannel("");
-      // 이력 탭으로 이동 + 해당 항목 스크롤
       onDone(result.id);
-      onGoToHistory(result.id);
+      // 결과는 현재 탭에 표시 — 이력 이동은 사용자가 선택
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      try {
-        const parsed = JSON.parse(msg);
-        setError(parsed.detail || msg);
-      } catch {
-        // HTTP 429 body는 이미 JSON이므로 다시 시도
-        if (msg.includes("429") || msg.toLowerCase().includes("quota")) {
-          setError("Gemini API 사용 한도 초과입니다. 잠시 후(1분) 다시 시도해 주세요.");
-        } else {
-          setError(msg);
-        }
-      }
+      const { message, logs } = parseApiError(e);
+      setError(message);
+      setLastLogs(logs);
     } finally { setAnalyzing(false); }
   }
 
@@ -636,10 +676,10 @@ function AnalyzePanel({ onDone, onGoToHistory }: { onDone: (id?: number) => void
       <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
         <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">새 분석 요청</h2>
         <div className="flex gap-1 rounded-md border border-[var(--border-subtle)] p-0.5">
-          {(["url", "text"] as const).map((m) => (
+          {(["text", "url"] as const).map((m) => (
             <button key={m} onClick={() => setInputMode(m)}
               className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${inputMode === m ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900" : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"}`}>
-              {m === "url" ? "URL" : "텍스트"}
+              {m === "text" ? "텍스트" : "URL"}
             </button>
           ))}
         </div>
@@ -672,7 +712,7 @@ function AnalyzePanel({ onDone, onGoToHistory }: { onDone: (id?: number) => void
         <button onClick={handleAnalyze} disabled={analyzing}
           className="flex items-center gap-2 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900">
           {analyzing ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-          {analyzing ? "분석 중 (Gemini→GPT)..." : "AI 분석 시작"}
+          {analyzing ? "분석 중 (Gemini→AI)..." : "AI 분석 시작"}
         </button>
         {(analyzing || lastLogs.length > 0) && (
           <AnalysisLogPanel logs={lastLogs} analyzing={analyzing} />
@@ -681,60 +721,385 @@ function AnalyzePanel({ onDone, onGoToHistory }: { onDone: (id?: number) => void
 
       {lastResult && (
         <div className="border-t border-[var(--border-subtle)] bg-[var(--surface-elevated)] p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">✅ 분석 완료</span>
-            <SentimentBadge sentiment={lastResult.sentiment} />
-          </div>
-          <p className="text-sm text-neutral-700 dark:text-neutral-300">{lastResult.summary}</p>
-          <div>
-            <p className="text-xs font-medium text-neutral-500 mb-1.5">핵심 포인트</p>
-            <ul className="space-y-1">
-              {lastResult.key_points.map((p, i) => (
-                <li key={i} className="flex gap-2 text-xs text-neutral-600 dark:text-neutral-400">
-                  <span className="text-neutral-300 dark:text-neutral-600">•</span>{p}
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* 보유 종목 매핑 결과 */}
-          {lastResult.stock_issues && lastResult.stock_issues.length > 0 ? (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/15 p-3">
-              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-2">
-                📌 내 보유 종목 관련 분석 ({lastResult.stock_issues.length}개)
-              </p>
-              <div className="space-y-2.5">
-                {lastResult.stock_issues.map((iss, i) => (
-                  <div key={i} className="flex gap-2.5 items-start">
-                    <div className="shrink-0 flex items-center gap-1.5 mt-0.5">
-                      {iss.sentiment === "POSITIVE" && <span className="h-2 w-2 rounded-full bg-emerald-500" />}
-                      {iss.sentiment === "NEGATIVE" && <span className="h-2 w-2 rounded-full bg-red-500" />}
-                      {iss.sentiment === "NEUTRAL"  && <span className="h-2 w-2 rounded-full bg-neutral-400" />}
-                      <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 whitespace-nowrap">
-                        {iss.name}
-                      </span>
-                    </div>
-                    <p className="text-xs text-neutral-600 dark:text-neutral-400 leading-relaxed">
-                      {iss.issue_summary}
-                    </p>
-                  </div>
-                ))}
-              </div>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">✅ 분석 완료</span>
+              <SentimentBadge sentiment={lastResult.sentiment} />
             </div>
-          ) : (
-            <p className="text-xs text-neutral-400">보유 종목 중 이 콘텐츠에서 언급된 종목이 없습니다.</p>
-          )}
-
-          <MacroSectorPanel macro={lastResult.macro_analysis} sectors={lastResult.sector_analysis} />
-
-          <div className="flex flex-wrap gap-1.5">
-            {lastResult.mentioned_sectors.map((s) => (
-              <span key={s} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-400">{s}</span>
-            ))}
-            {lastResult.mentioned_stocks.map((s) => (
-              <span key={s} className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[11px] text-neutral-600 dark:text-neutral-400">{s}</span>
-            ))}
+            <button
+              type="button"
+              onClick={() => onGoToHistory(lastResult.id)}
+              className="text-xs text-blue-500 hover:underline"
+            >
+              분석 이력에서 보기 →
+            </button>
           </div>
+          <IntelDetailPanel data={lastResult} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 신호 패널 공통 ───────────────────────────────
+function SentBadge({ s }: { s: string | null }) {
+  if (!s) return null;
+  if (s === "POSITIVE") return <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">긍정</span>;
+  if (s === "NEGATIVE") return <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">부정</span>;
+  return <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">중립</span>;
+}
+
+// ─── 일별 브리핑 패널 ─────────────────────────────
+function BriefingPanel() {
+  const [briefings, setBriefings] = useState<DailyBriefing[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [days, setDays]           = useState(7);
+  const [backfilling, setBackfilling] = useState(false);
+  const [expanded, setExpanded]   = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    signalApi.getDaily(days).then((r) => {
+      setBriefings(r.briefings);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [days]);
+
+  async function handleBackfill() {
+    setBackfilling(true);
+    try { await signalApi.backfill(); } catch { /* ignore */ }
+    signalApi.getDaily(days).then((r) => setBriefings(r.briefings)).catch(() => {}).finally(() => setBackfilling(false));
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <CalendarDays size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">일별 분석 브리핑</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs">
+            {[3, 7, 14, 30].map((d) => <option key={d} value={d}>{d}일</option>)}
+          </select>
+          <button onClick={handleBackfill} disabled={backfilling}
+            className="flex items-center gap-1 rounded-md border border-[var(--border-subtle)] px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50">
+            {backfilling ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+            백필
+          </button>
+        </div>
+      </div>
+      {loading ? (
+        <div className="flex items-center justify-center gap-2 py-10 text-sm text-neutral-400"><Loader2 size={14} className="animate-spin" /> 불러오는 중...</div>
+      ) : briefings.length === 0 ? (
+        <div className="rounded-lg border border-dashed py-10 text-center text-sm text-neutral-400">
+          분석 이력이 없습니다. 영상/텍스트를 분석한 후 백필을 실행하세요.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {briefings.map((b) => (
+            <div key={b.date} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] overflow-hidden">
+              <button
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface-elevated)] transition-colors"
+                onClick={() => setExpanded(expanded === b.date ? null : b.date)}
+              >
+                <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-200 w-24 shrink-0">{b.date}</span>
+                <div className="flex flex-wrap gap-2 flex-1 text-xs text-neutral-500">
+                  <span className="flex items-center gap-1"><Video size={10} /> 분석 {b.content_count}건</span>
+                  <span className="flex items-center gap-1"><Globe size={10} /> 매크로 {b.macro_count}</span>
+                  <span className="flex items-center gap-1"><BarChart2 size={10} /> 섹터 {b.sector_count}</span>
+                </div>
+                <div className="flex gap-1 shrink-0">
+                  {b.top_topics.slice(0, 3).map((t) => (
+                    <span key={t.topic} className="rounded-full bg-purple-50 px-2 py-0.5 text-[10px] text-purple-700 dark:bg-purple-900/20 dark:text-purple-400">{t.topic}</span>
+                  ))}
+                </div>
+                {expanded === b.date ? <ChevronUp size={14} className="shrink-0 text-neutral-400" /> : <ChevronDown size={14} className="shrink-0 text-neutral-400" />}
+              </button>
+              {expanded === b.date && (
+                <div className="border-t border-[var(--border-subtle)] px-4 py-3 space-y-2">
+                  {b.contents.map((c) => (
+                    <div key={c.id} className="flex items-start gap-2 text-xs text-neutral-600 dark:text-neutral-400">
+                      <SentDot s={c.sentiment || "NEUTRAL"} />
+                      <div className="flex-1 min-w-0">
+                        <p className="truncate font-medium text-neutral-700 dark:text-neutral-300">{c.source_title || c.summary?.slice(0, 60)}</p>
+                        <p className="text-[10px] text-neutral-400">{c.channel_name} · {c.analyzed_at}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 매크로 신호 패널 ─────────────────────────────
+function MacroHubPanel() {
+  const [data, setData]         = useState<MacroHub | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [days, setDays]         = useState(30);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    signalApi.getMacro(days).then((r) => { setData(r); setLoading(false); }).catch(() => setLoading(false));
+  }, [days]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Globe size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">매크로 신호</span>
+          {data && <span className="text-xs text-neutral-400">({data.total}건)</span>}
+        </div>
+        <select value={days} onChange={(e) => setDays(Number(e.target.value))}
+          className="rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs">
+          {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d}일</option>)}
+        </select>
+      </div>
+      {loading ? (
+        <div className="flex items-center justify-center gap-2 py-10 text-sm text-neutral-400"><Loader2 size={14} className="animate-spin" /> 불러오는 중...</div>
+      ) : !data || data.topics.length === 0 ? (
+        <div className="rounded-lg border border-dashed py-10 text-center text-sm text-neutral-400">매크로 신호가 없습니다.</div>
+      ) : (
+        <div className="space-y-2">
+          {data.topics.map((tg) => (
+            <div key={tg.topic} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] overflow-hidden">
+              <button
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface-elevated)] transition-colors"
+                onClick={() => setExpanded(expanded === tg.topic ? null : tg.topic)}
+              >
+                <span className="rounded-full bg-purple-100 px-2.5 py-1 text-xs font-semibold text-purple-800 dark:bg-purple-900/30 dark:text-purple-300">{tg.topic}</span>
+                <span className="text-xs text-neutral-500">{tg.count}건</span>
+                <div className="flex gap-1 flex-1 justify-end">
+                  {tg.signals.slice(0, 2).map((s) => <SentBadge key={s.id} s={s.sentiment} />)}
+                </div>
+                {expanded === tg.topic ? <ChevronUp size={14} className="shrink-0 text-neutral-400" /> : <ChevronDown size={14} className="shrink-0 text-neutral-400" />}
+              </button>
+              {expanded === tg.topic && (
+                <div className="border-t border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">
+                  {tg.signals.map((sig) => (
+                    <div key={sig.id} className="px-4 py-3 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-neutral-400">{sig.event_date}</span>
+                        <SentBadge s={sig.sentiment} />
+                      </div>
+                      <p className="text-xs text-neutral-700 dark:text-neutral-300">{sig.summary}</p>
+                      {sig.impact && <p className="text-[10px] text-neutral-400">→ {sig.impact}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 섹터 추천 종목 (지켜보기) ─────────────────────
+function SectorRecommendations({ sector, days }: { sector: string; days: number }) {
+  const [recs, setRecs] = useState<StockRecommendation[]>([]);
+  const [adding, setAdding] = useState<string | null>(null);
+
+  useEffect(() => {
+    signalApi.getRecommendations(days, sector).then((r) => setRecs(r.recommendations)).catch(() => setRecs([]));
+  }, [sector, days]);
+
+  if (recs.length === 0) return null;
+
+  return (
+    <div className="border-b border-[var(--border-subtle)] bg-amber-50/50 dark:bg-amber-900/10 px-4 py-2">
+      <p className="text-[10px] font-semibold text-amber-800 dark:text-amber-400 mb-1.5">📌 AI 언급 종목</p>
+      <div className="flex flex-wrap gap-1.5">
+        {recs.slice(0, 8).map((rec) => (
+          <button
+            key={rec.stock_name}
+            type="button"
+            disabled={adding === rec.stock_name}
+            onClick={async () => {
+              setAdding(rec.stock_name);
+              try {
+                await watchlistApi.add({ stock_name: rec.stock_name, symbol: rec.symbol ?? undefined, sector, source_type: "sector" });
+              } catch { /* ignore */ }
+              finally { setAdding(null); }
+            }}
+            className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white px-2 py-0.5 text-[10px] text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200"
+            title={rec.latest_summary}
+          >
+            {adding === rec.stock_name ? <Loader2 size={10} className="animate-spin" /> : <Star size={10} />}
+            {rec.stock_name}
+            <SentBadge s={rec.latest_sentiment} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── 섹터 허브 패널 ───────────────────────────────
+function SectorHubPanel() {
+  const [data, setData]         = useState<SectorHub | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [days, setDays]         = useState(30);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const sentColor = (s: string | null) =>
+    s === "POSITIVE" ? "text-emerald-600 dark:text-emerald-400"
+    : s === "NEGATIVE" ? "text-red-600 dark:text-red-400"
+    : "text-neutral-500";
+
+  useEffect(() => {
+    setLoading(true);
+    signalApi.getSectors(days).then((r) => { setData(r); setLoading(false); }).catch(() => setLoading(false));
+  }, [days]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <BarChart2 size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">섹터별 신호</span>
+          {data && <span className="text-xs text-neutral-400">({data.total}건)</span>}
+        </div>
+        <select value={days} onChange={(e) => setDays(Number(e.target.value))}
+          className="rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs">
+          {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d}일</option>)}
+        </select>
+      </div>
+      {loading ? (
+        <div className="flex items-center justify-center gap-2 py-10 text-sm text-neutral-400"><Loader2 size={14} className="animate-spin" /> 불러오는 중...</div>
+      ) : !data || data.sectors.length === 0 ? (
+        <div className="rounded-lg border border-dashed py-10 text-center text-sm text-neutral-400">섹터 신호가 없습니다.</div>
+      ) : (
+        <div className="space-y-2">
+          {data.sectors.map((sg) => (
+            <div key={sg.sector} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] overflow-hidden">
+              <button
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface-elevated)] transition-colors"
+                onClick={() => setExpanded(expanded === sg.sector ? null : sg.sector)}
+              >
+                <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-200 w-28 shrink-0 text-left">{sg.sector}</span>
+                <div className="flex gap-2 text-[11px]">
+                  <span className="text-emerald-600 dark:text-emerald-400">▲{sg.positive}</span>
+                  <span className="text-neutral-400">━{sg.neutral}</span>
+                  <span className="text-red-500">▼{sg.negative}</span>
+                </div>
+                <div className="flex-1" />
+                <span className="text-xs text-neutral-400">{sg.count}건</span>
+                {expanded === sg.sector ? <ChevronUp size={14} className="shrink-0 text-neutral-400" /> : <ChevronDown size={14} className="shrink-0 text-neutral-400" />}
+              </button>
+              {expanded === sg.sector && (
+                <>
+                  <SectorRecommendations sector={sg.sector} days={days} />
+                <div className="border-t border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">
+                  {sg.signals.map((sig) => (
+                    <div key={sig.id} className="px-4 py-3 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-neutral-400">{sig.event_date}</span>
+                        <SentBadge s={sig.sentiment} />
+                      </div>
+                      <p className="text-xs text-neutral-700 dark:text-neutral-300">{sig.summary}</p>
+                      {sig.outlook && <p className="text-[10px] text-neutral-400">전망: {sig.outlook}</p>}
+                      {Array.isArray(sig.mentioned_stocks) && sig.mentioned_stocks.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {sig.mentioned_stocks.map((s) => (
+                            <span key={s} className="rounded-full border border-[var(--border-subtle)] px-1.5 py-0.5 text-[10px] text-neutral-500">{s}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 포트폴리오 리마인드 패널 ─────────────────────
+function RemindPanel() {
+  const [reminders, setReminders] = useState<PortfolioReminder[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [days, setDays]           = useState(30);
+  const [expanded, setExpanded]   = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    signalApi.getReminders(days).then((r) => { setReminders(r.reminders); setLoading(false); }).catch(() => setLoading(false));
+  }, [days]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bell size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">내 종목 리마인드</span>
+          <span className="text-xs text-neutral-400">보유 종목에 관련된 분석 신호</span>
+        </div>
+        <select value={days} onChange={(e) => setDays(Number(e.target.value))}
+          className="rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs">
+          {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d}일</option>)}
+        </select>
+      </div>
+      {loading ? (
+        <div className="flex items-center justify-center gap-2 py-10 text-sm text-neutral-400"><Loader2 size={14} className="animate-spin" /> 불러오는 중...</div>
+      ) : reminders.length === 0 ? (
+        <div className="rounded-lg border border-dashed py-10 text-center text-sm text-neutral-400">
+          보유 종목 관련 신호가 없습니다.<br />
+          <span className="text-xs">영상을 분석하고 백필을 실행하면 자동으로 연결됩니다.</span>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {reminders.map((r) => (
+            <div key={r.symbol} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] overflow-hidden">
+              <button
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface-elevated)] transition-colors"
+                onClick={() => setExpanded(expanded === r.symbol ? null : r.symbol)}
+              >
+                <div className="flex-1 flex items-center gap-3 text-left min-w-0">
+                  <div>
+                    <p className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">{r.stock_name}</p>
+                    <p className="text-[10px] text-neutral-400">{r.symbol}</p>
+                  </div>
+                  {r.change_rate != null && (
+                    <span className={`text-xs font-medium ${r.change_rate >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-500"}`}>
+                      {r.change_rate >= 0 ? "+" : ""}{r.change_rate.toFixed(2)}%
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <SentBadge s={r.latest_sentiment} />
+                  <span className="text-xs text-neutral-400">{r.signal_count}건 · {r.latest_date}</span>
+                  {expanded === r.symbol ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
+                </div>
+              </button>
+              {expanded === r.symbol && (
+                <div className="border-t border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">
+                  {r.signals.map((sig) => (
+                    <div key={sig.id} className="px-4 py-2.5 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-neutral-400">{sig.event_date}</span>
+                        <SentBadge s={sig.sentiment} />
+                      </div>
+                      <p className="text-xs text-neutral-600 dark:text-neutral-400">{sig.summary}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -743,11 +1108,13 @@ function AnalyzePanel({ onDone, onGoToHistory }: { onDone: (id?: number) => void
 
 // ─── 메인 페이지 ──────────────────────────────────
 export default function IntelligencePage() {
-  const [pageTab,        setPageTab]      = useState<"analyze" | "channels" | "history">("analyze");
+  const [pageTab,        setPageTab]      = useState<"analyze" | "channels" | "history" | "briefing" | "macro" | "sectors" | "remind">("analyze");
   const [contents,       setContents]     = useState<IntelContent[]>([]);
   const [sourceFilter,   setSourceFilter] = useState<"ALL" | "YOUTUBE" | "NEWS" | "TEXT">("ALL");
   const [loading,        setLoading]      = useState(true);
   const [highlightId,    setHighlightId]  = useState<number | null>(null);
+  const [analysisProvider, setAnalysisProvider] = useState<AnalysisProvider>("openai");
+  const [enableBulkYoutubeAnalyze, setEnableBulkYoutubeAnalyze] = useState(false);
 
   const loadContents = useCallback(async () => {
     try {
@@ -759,20 +1126,28 @@ export default function IntelligencePage() {
 
   useEffect(() => { loadContents(); }, [loadContents]);
 
-  // 분석 완료 → 이력 탭 이동 + 해당 항목 스크롤
+  useEffect(() => {
+    api.getAnalysisProviders().then((r) => {
+      setAnalysisProvider(r.default);
+      setEnableBulkYoutubeAnalyze(r.enable_bulk_youtube_analyze);
+    }).catch(() => {});
+  }, []);
+
+  // 분석 완료 → 이력 탭 이동 + 해당 항목 스크롤 (분석 요청 탭에서만 사용)
   function handleGoToHistory(id: number) {
     setHighlightId(id);
     setSourceFilter("ALL");
     setPageTab("history");
-    // DOM이 렌더링된 후 스크롤
     setTimeout(() => {
       const el = document.getElementById(`intel-item-${id}`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-      // 3초 후 하이라이트 해제
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
       setTimeout(() => setHighlightId(null), 3000);
     }, 150);
+  }
+
+  // 채널 탭: 분석 완료 후 탭 이동 없이 데이터만 갱신
+  function handleChannelAnalyzeDone(_id: number) {
+    loadContents();
   }
 
   return (
@@ -780,8 +1155,10 @@ export default function IntelligencePage() {
       {/* 헤더 */}
       <div>
         <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">AI 인텔리전스 허브</h1>
-        <p className="mt-0.5 text-xs text-neutral-400">YouTube→Gemini 문서 추출 · GPT 종목·매크로·섹터 분석</p>
+        <p className="mt-0.5 text-xs text-neutral-400">텍스트 분석 기본 · GPT 구조화 분석 (YouTube/URL은 Gemini 추출)</p>
       </div>
+
+      <AnalysisProviderSelect value={analysisProvider} onChange={setAnalysisProvider} />
 
       {/* 탭 */}
       <div className="flex gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-1 w-fit">
@@ -794,9 +1171,26 @@ export default function IntelligencePage() {
       </div>
 
       {/* 탭 콘텐츠 */}
-      {pageTab === "analyze" && <AnalyzePanel onDone={() => loadContents()} onGoToHistory={handleGoToHistory} />}
+      {pageTab === "analyze" && (
+        <AnalyzePanel
+          onDone={() => loadContents()}
+          onGoToHistory={handleGoToHistory}
+          analysisProvider={analysisProvider}
+        />
+      )}
 
-      {pageTab === "channels" && <ChannelPanel onAnalyzeDone={handleGoToHistory} />}
+      {pageTab === "channels" && (
+        <ChannelPanel
+          onAnalyzeDone={handleChannelAnalyzeDone}
+          analysisProvider={analysisProvider}
+          enableBulkYoutubeAnalyze={enableBulkYoutubeAnalyze}
+        />
+      )}
+
+      {pageTab === "briefing" && <BriefingPanel />}
+      {pageTab === "macro"    && <MacroHubPanel />}
+      {pageTab === "sectors"  && <SectorHubPanel />}
+      {pageTab === "remind"   && <RemindPanel />}
 
       {pageTab === "history" && (
         <div>

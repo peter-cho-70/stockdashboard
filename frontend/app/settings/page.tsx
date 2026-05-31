@@ -100,26 +100,42 @@ export default function SettingsPage() {
         </div>
       </Section>
 
-      {/* Gemini API — YouTube 문서 추출 */}
-      <Section title="Google Gemini AI (YouTube)" icon={<KeyRound size={15} />}>
+      {/* Gemini API — YouTube 추출 + Gemini 분석 */}
+      <Section title="Google Gemini AI (Flash-Lite)" icon={<KeyRound size={15} />}>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
-          YouTube 영상 내용을 문서로 추출할 때 사용합니다.
-          <a href="https://aistudio.google.com" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">aistudio.google.com</a>
+          YouTube 문서 추출 및 UI에서 Gemini 선택 시 사용합니다. 모델: gemini-3.1-flash-lite (google-genai SDK).
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">aistudio.google.com</a>
         </p>
-        <div className="rounded-md bg-[var(--surface-elevated)] p-3 font-mono text-xs text-neutral-600 dark:text-neutral-400">
-          <p>GEMINI_API_KEY=<span className="text-amber-600 dark:text-amber-400">your_gemini_api_key</span></p>
+        <div className="rounded-md bg-[var(--surface-elevated)] p-3 font-mono text-xs text-neutral-600 dark:text-neutral-400 space-y-1">
+          <p>GEMINI_API_KEY=<span className="text-amber-600 dark:text-amber-400">AIzaSy...</span></p>
+          <p>GEMINI_MODEL=<span className="text-amber-600 dark:text-amber-400">gemini-3.1-flash-lite</span></p>
+          <p>GEMINI_EXTRACT_MODEL=<span className="text-amber-600 dark:text-amber-400">gemini-3.1-flash-lite</span></p>
+          <p>GEMINI_PROMPT_CACHE=<span className="text-amber-600 dark:text-amber-400">true</span></p>
         </div>
       </Section>
 
-      {/* OpenAI GPT — 종목·매크로·섹터 분석 */}
-      <Section title="OpenAI GPT (분석)" icon={<KeyRound size={15} />}>
+      {/* Anthropic Claude — 분석 옵션 */}
+      <Section title="Anthropic Claude (분석 옵션)" icon={<KeyRound size={15} />}>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
-          종목별 · 매크로 · 섹터별 구조화 분석에 사용합니다.
+          UI에서 Claude 선택 시 사용합니다. API Console 크레dit이 필요합니다.
+          <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">console.anthropic.com</a>
+        </p>
+        <div className="rounded-md bg-[var(--surface-elevated)] p-3 font-mono text-xs text-neutral-600 dark:text-neutral-400 space-y-1">
+          <p>ANTHROPIC_API_KEY=<span className="text-amber-600 dark:text-amber-400">your_anthropic_api_key</span></p>
+          <p>ANTHROPIC_MODEL=<span className="text-amber-600 dark:text-amber-400">claude-3-5-haiku-latest</span></p>
+        </div>
+      </Section>
+
+      {/* OpenAI GPT — 기본 구조화 분석 */}
+      <Section title="OpenAI GPT (기본 분석)" icon={<KeyRound size={15} />}>
+        <p className="text-sm text-neutral-600 dark:text-neutral-400">
+          텍스트·뉴스 구조화 분석의 기본 AI입니다.
           <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">platform.openai.com</a>
         </p>
         <div className="rounded-md bg-[var(--surface-elevated)] p-3 font-mono text-xs text-neutral-600 dark:text-neutral-400 space-y-1">
           <p>OPENAI_API_KEY=<span className="text-amber-600 dark:text-amber-400">your_openai_api_key</span></p>
           <p>OPENAI_MODEL=<span className="text-amber-600 dark:text-amber-400">gpt-4o-mini</span></p>
+          <p>ANALYSIS_PROVIDER=<span className="text-amber-600 dark:text-amber-400">openai</span></p>
         </div>
       </Section>
 

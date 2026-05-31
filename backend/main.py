@@ -15,6 +15,8 @@ from config.settings import get_settings
 from api.routes import router
 from api.routes_gains import gains_router
 from api.routes_youtube import youtube_router
+from api.routes_signals import signals_router
+from api.routes_watchlist import watchlist_router
 from scheduler.jobs import create_scheduler
 
 # 로깅 설정
@@ -24,6 +26,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+get_settings.cache_clear()
 settings = get_settings()
 SERVERLESS = __import__("os").environ.get("SERVERLESS") == "1" or __import__("os").environ.get("VERCEL") == "1"
 
@@ -79,6 +82,8 @@ app.add_middleware(
 app.include_router(router, prefix="/api")
 app.include_router(gains_router, prefix="/api")
 app.include_router(youtube_router, prefix="/api")
+app.include_router(signals_router, prefix="/api")
+app.include_router(watchlist_router, prefix="/api")
 
 
 @app.get("/")

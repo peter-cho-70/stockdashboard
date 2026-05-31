@@ -18,6 +18,7 @@ const menuGroups = [
     title: "인텔리전스",
     links: [
       { href: "/intelligence", label: "AI 분석" },
+      { href: "/watchlist", label: "관심 종목" },
       { href: "/alerts", label: "알림" },
     ],
   },

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -10,7 +11,7 @@ import {
   Plus, Trash2, PenLine, Check, X,
   TrendingUp, TrendingDown, Gift, Wallet,
   Receipt, Banknote, ArrowUpRight, ArrowDownRight,
-  BarChart as BarChartIcon, Star,
+  Star,
 } from "lucide-react";
 import {
   LineChart, Line, ReferenceLine,
@@ -78,6 +79,7 @@ function RateTag({ rate }: { rate: number }) {
 
 // ─── 메인 페이지 ──────────────────────────────────────
 export default function GainsPage() {
+  const router = useRouter();
   const [stocks, setStocks] = useState<StockItem[]>([]);
   const [summary, setSummary] = useState<{ yearly: YearlySummary[]; all_time: AllTime } | null>(null);
   const [gains, setGains] = useState<GainItem[]>([]);
@@ -490,7 +492,6 @@ export default function GainsPage() {
                   <th className="px-4 py-2.5 text-right font-medium">평가손익</th>
                   <th className="px-4 py-2.5 text-right font-medium">수익률</th>
                   <th className="px-4 py-2.5 text-right font-medium">비중</th>
-                  <th className="px-4 py-2.5 text-center font-medium">차트</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border-subtle)]">
@@ -502,7 +503,11 @@ export default function GainsPage() {
                     const pnl      = evalAmt - purchAmt;
                     const weight   = totalAssets > 0 ? (evalAmt / totalAssets) * 100 : 0;
                     return (
-                      <tr key={s.symbol} className="hover:bg-[var(--surface-elevated)] transition-colors">
+                      <tr
+                        key={s.symbol}
+                        onClick={() => router.push(`/chart?symbol=${s.symbol}`)}
+                        className="cursor-pointer hover:bg-[var(--surface-elevated)] transition-colors"
+                      >
                         <td className="px-4 py-3">
                           <div className="font-medium text-neutral-900 dark:text-neutral-100">{s.name}</div>
                           <div className="text-xs text-neutral-400">{s.symbol}</div>
@@ -528,12 +533,6 @@ export default function GainsPage() {
                             <span className="text-xs text-neutral-500 w-10 text-right">{weight.toFixed(1)}%</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-center">
-                          <Link href={`/chart?symbol=${s.symbol}`}
-                            className="inline-flex items-center justify-center rounded p-1 text-neutral-300 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">
-                            <BarChartIcon size={14} />
-                          </Link>
-                        </td>
                       </tr>
                     );
                   })}
@@ -550,7 +549,6 @@ export default function GainsPage() {
                     <RateTag rate={totalPurch > 0 ? (totalUnreal / totalPurch) * 100 : 0} />
                   </td>
                   <td className="px-4 py-3 text-right text-xs text-neutral-500">100%</td>
-                  <td />
                 </tr>
                 {cashBalance > 0 && (
                   <tr className="border-t border-[var(--border-subtle)] bg-amber-50/40 dark:bg-amber-900/10">

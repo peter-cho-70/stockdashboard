@@ -14,7 +14,16 @@ from config.database import get_db, Stock, AlertHistory, IntelContent, StockIssu
 from config.settings import get_settings
 from core.kis_client import create_kis_client_from_settings
 from core.portfolio import PortfolioManager
-from core.ai_analyzer import create_analyzer, serialize_intel
+from core.ai_analyzer import (
+    create_analyzer,
+    serialize_intel,
+    ensure_analysis_available,
+    handle_provider_runtime_error,
+    ProviderQuotaError,
+    try_cached_intel,
+)
+from core.analysis_stream import run_intel_analysis, stream_analysis, run_explain_move
+from core.move_explainer import explain_and_save, get_move_causes_for_stock, serialize_move_cause
 from core.price_updater import update_prices_from_krx, save_daily_snapshot
 
 settings = get_settings()
@@ -300,8 +309,8 @@ def get_portfolio_summary(db: Session = Depends(get_db)):
 
 @router.get("/portfolio/stocks")
 def get_stocks(db: Session = Depends(get_db)):
-    """보유 종목 전체 목록"""
-    stocks = db.query(Stock).filter(Stock.is_active == True).all()
+    """보유 종목 전체 목록 (qty > 0)"""
+    stocks = db.query(Stock).filter(Stock.is_active == True, Stock.qty > 0).all()
     return [
         {
             "id": s.id,
@@ -424,39 +433,62 @@ class AnalyzeRequest(BaseModel):
     text: Optional[str] = None          # 직접 입력 텍스트
     title: Optional[str] = None         # 텍스트 제목 (선택)
     channel_name: Optional[str] = None  # 유튜브 채널명 (선택)
+    analysis_provider: Optional[str] = None  # claude | openai | gemini
+    force_reanalyze: bool = False       # true면 캐시 무시하고 AI 재호출
+
+
+class ReanalyzeRequest(BaseModel):
+    analysis_provider: Optional[str] = None
+
+
+class ExplainMoveRequest(BaseModel):
+    event_date: str
+    change_pct: float
+    direction: str
+    close_price: Optional[float] = None
+    analysis_provider: Optional[str] = None
+    force: bool = False                 # true면 저장된 원인 무시하고 재검색
 
 
 @router.post("/intel/analyze")
 def analyze_content(body: AnalyzeRequest, db: Session = Depends(get_db)):
-    """콘텐츠 AI 분석 (YouTube→Gemini+GPT / 뉴스·텍스트→GPT)"""
+    """콘텐츠 AI 분석 (YouTube→Gemini 추출 / 구조화→Claude·GPT·Gemini)"""
     if not body.url and not body.text:
         raise HTTPException(status_code=400, detail="url 또는 text 중 하나는 필수입니다.")
 
     is_youtube = body.url and ("youtube.com" in body.url or "youtu.be" in body.url)
     if is_youtube and not settings.gemini_api_key:
         raise HTTPException(status_code=400, detail="YouTube 분석에 GEMINI_API_KEY가 필요합니다.")
-    if not settings.openai_api_key:
-        raise HTTPException(status_code=400, detail="구조화 분석에 OPENAI_API_KEY가 필요합니다.")
+    try:
+        ensure_analysis_available(settings, body.analysis_provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    cached = try_cached_intel(
+        db,
+        body.url,
+        skip_if_cached=settings.ai_skip_if_cached,
+        force_reanalyze=body.force_reanalyze,
+    )
+    if cached:
+        content, logs = cached
+        return serialize_intel(content, db, logs)
 
     analyzer = create_analyzer(db)
+    provider = body.analysis_provider
 
     try:
         if body.url:
             if is_youtube:
-                content = analyzer.analyze_youtube(body.url, body.channel_name or "")
+                content = analyzer.analyze_youtube(body.url, body.channel_name or "", provider)
             else:
-                content = analyzer.analyze_url(body.url)
+                content = analyzer.analyze_url(body.url, provider)
         else:
-            content = analyzer.analyze_text(body.text, body.title or "")
+            content = analyzer.analyze_text(body.text, body.title or "", provider)
+    except ProviderQuotaError as e:
+        handle_provider_runtime_error(e)
     except RuntimeError as e:
-        err = str(e)
-        if err.startswith("GEMINI_QUOTA_EXCEEDED:"):
-            secs = err.split(":")[1]
-            raise HTTPException(status_code=429, detail=f"Gemini API 한도 초과. {secs}초 후 재시도.")
-        if err.startswith("OPENAI_QUOTA_EXCEEDED:"):
-            secs = err.split(":")[1]
-            raise HTTPException(status_code=429, detail=f"OpenAI API 한도 초과. {secs}초 후 재시도.")
-        raise HTTPException(status_code=500, detail=str(e))
+        handle_provider_runtime_error(e)
 
     if not content:
         raise HTTPException(
@@ -467,6 +499,94 @@ def analyze_content(body: AnalyzeRequest, db: Session = Depends(get_db)):
     return serialize_intel(content, db, analyzer.logs)
 
 
+@router.post("/intel/analyze/stream")
+async def analyze_content_stream(body: AnalyzeRequest):
+    """콘텐츠 AI 분석 (SSE 실시간 로그)"""
+    if not body.url and not body.text:
+        raise HTTPException(status_code=400, detail="url 또는 text 중 하나는 필수입니다.")
+
+    is_youtube = body.url and ("youtube.com" in body.url or "youtu.be" in body.url)
+    if is_youtube and not settings.gemini_api_key:
+        raise HTTPException(status_code=400, detail="YouTube 분석에 GEMINI_API_KEY가 필요합니다.")
+    try:
+        ensure_analysis_available(settings, body.analysis_provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return await stream_analysis(
+        lambda on_log: run_intel_analysis(
+            url=body.url,
+            text=body.text,
+            title=body.title or "",
+            channel_name=body.channel_name or "",
+            analysis_provider=body.analysis_provider,
+            force_reanalyze=body.force_reanalyze,
+            skip_if_cached=settings.ai_skip_if_cached,
+            on_log=on_log,
+        )
+    )
+
+
+@router.post("/intel/reanalyze/{content_id}")
+def reanalyze_content(
+    content_id: int,
+    body: ReanalyzeRequest,
+    db: Session = Depends(get_db),
+):
+    """저장된 원문으로 Gemini 재호출 없이 다른 AI로 재분석"""
+    try:
+        ensure_analysis_available(settings, body.analysis_provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    analyzer = create_analyzer(db)
+    try:
+        content = analyzer.reanalyze_content(content_id, body.analysis_provider)
+    except ProviderQuotaError as e:
+        handle_provider_runtime_error(e)
+    except RuntimeError as e:
+        handle_provider_runtime_error(e)
+
+    if not content:
+        raise HTTPException(
+            status_code=500,
+            detail={"message": "재분석 실패.", "logs": analyzer.logs},
+        )
+    return serialize_intel(content, db, analyzer.logs)
+
+
+@router.get("/intel/providers")
+def list_analysis_providers():
+    """사용 가능한 분석 AI 목록"""
+    return {
+        "default": settings.analysis_provider,
+        "ai_fallback": settings.ai_fallback,
+        "ai_skip_if_cached": settings.ai_skip_if_cached,
+        "enable_bulk_youtube_analyze": settings.enable_bulk_youtube_analyze,
+        "providers": [
+            {
+                "id": "claude",
+                "label": "Claude",
+                "available": bool(settings.anthropic_api_key),
+                "model": settings.anthropic_model,
+            },
+            {
+                "id": "openai",
+                "label": "GPT (기본)",
+                "available": bool(settings.openai_api_key),
+                "model": settings.openai_model,
+            },
+            {
+                "id": "gemini",
+                "label": "Gemini",
+                "available": bool(settings.gemini_api_key),
+                "model": settings.gemini_model,
+                "extract_model": settings.gemini_extract_model,
+            },
+        ],
+    }
+
+
 @router.get("/intel/contents")
 def get_intel_contents(
     limit: int = 20,
@@ -474,29 +594,20 @@ def get_intel_contents(
     db: Session = Depends(get_db)
 ):
     """분석 콘텐츠 목록 조회"""
-    import json
     query = db.query(IntelContent)
     if source_type:
         query = query.filter(IntelContent.source_type == source_type)
     contents = query.order_by(IntelContent.created_at.desc()).limit(limit).all()
+    return [serialize_intel(c, db) for c in contents]
 
-    return [
-        {
-            "id": c.id,
-            "source_type": c.source_type,
-            "source_url": c.source_url,
-            "source_title": c.source_title,
-            "channel_name": c.channel_name,
-            "summary": c.summary,
-            "mentioned_stocks": json.loads(c.mentioned_stocks or "[]"),
-            "mentioned_sectors": json.loads(c.mentioned_sectors or "[]"),
-            "macro_analysis": json.loads(c.macro_analysis or "{}"),
-            "sector_analysis": json.loads(c.sector_analysis or "[]"),
-            "sentiment": c.sentiment,
-            "analyzed_at": c.analyzed_at.isoformat() if c.analyzed_at else None,
-        }
-        for c in contents
-    ]
+
+@router.get("/intel/contents/{content_id}")
+def get_intel_content(content_id: int, db: Session = Depends(get_db)):
+    """분석 콘텐츠 상세 (추출 문서·원문 포함)"""
+    c = db.query(IntelContent).filter(IntelContent.id == content_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="콘텐츠 없음")
+    return serialize_intel(c, db)
 
 
 @router.get("/intel/by-url")
@@ -535,7 +646,102 @@ def get_stock_issues(symbol: str, limit: int = 20, db: Session = Depends(get_db)
                 "source_url": i.content.source_url if i.content else None,
                 "source_title": i.content.source_title if i.content else None,
                 "created_at": i.created_at.isoformat(),
+                "analyzed_at": (
+                    i.content.analyzed_at.isoformat()
+                    if i.content and i.content.analyzed_at
+                    else None
+                ),
             }
             for i in issues
         ],
     }
+
+
+@router.get("/intel/stocks/{symbol}/move-causes")
+def get_move_causes(
+    symbol: str,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """저장된 주가 급변 AI 원인 목록"""
+    stock = db.query(Stock).filter(Stock.symbol == symbol).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+
+    rows = get_move_causes_for_stock(db, stock, from_date=from_date, to_date=to_date)
+    return {
+        "symbol": symbol,
+        "name": stock.name,
+        "causes": [serialize_move_cause(r) for r in rows],
+    }
+
+
+@router.post("/intel/stocks/{symbol}/explain-move")
+def explain_move(
+    symbol: str,
+    body: ExplainMoveRequest,
+    db: Session = Depends(get_db),
+):
+    """주가 급변 구간 AI 원인 검색 (동기)"""
+    stock = db.query(Stock).filter(Stock.symbol == symbol).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+
+    try:
+        ensure_analysis_available(settings, body.analysis_provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        row, logs = explain_and_save(
+            db,
+            stock,
+            event_date=body.event_date,
+            change_pct=body.change_pct,
+            direction=body.direction,
+            close_price=body.close_price,
+            analysis_provider=body.analysis_provider,
+            force=body.force,
+        )
+    except ProviderQuotaError as e:
+        handle_provider_runtime_error(e)
+    except RuntimeError as e:
+        handle_provider_runtime_error(e)
+
+    if not row:
+        raise HTTPException(
+            status_code=500,
+            detail={"message": "AI 원인 분석 실패. API 키와 로그를 확인하세요.", "logs": logs},
+        )
+
+    return {**serialize_move_cause(row), "logs": logs}
+
+
+@router.post("/intel/stocks/{symbol}/explain-move/stream")
+async def explain_move_stream(symbol: str, body: ExplainMoveRequest, db: Session = Depends(get_db)):
+    """주가 급변 구간 AI 원인 검색 (SSE 실시간 로그)"""
+    stock = db.query(Stock).filter(Stock.symbol == symbol).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+
+    try:
+        ensure_analysis_available(settings, body.analysis_provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    stock_id = stock.id
+
+    return await stream_analysis(
+        lambda on_log: run_explain_move(
+            stock_id=stock_id,
+            event_date=body.event_date,
+            change_pct=body.change_pct,
+            direction=body.direction,
+            close_price=body.close_price,
+            analysis_provider=body.analysis_provider,
+            force=body.force,
+            on_log=on_log,
+        ),
+        serialize_result=lambda row, logs: {**serialize_move_cause(row), "logs": logs},
+    )

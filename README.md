@@ -1,6 +1,13 @@
 # StockMind — AI 주식 인텔리전스 플랫폼
 
-> 한국투자증권 계좌 자동 연동 + Gemini AI로 유튜브·뉴스를 분석해 **내 종목 중심** 인텔리전스를 제공하는 개인용 주식 대시보드
+> 한국투자증권 계좌 연동 + Gemini/Claude/GPT AI로 유튜브·뉴스를 분석하고,  
+> **매크로·섹터·종목 신호**를 포트폴리오와 차트에 연결하는 개인용 주식 대시보드
+
+---
+
+## 📚 상세 문서
+
+- [AI 분석 · 저장 · 차트 연동 가이드](docs/AI-분석-저장-차트연동.md) — 분석 파이프라인, Signal 레이어, 차트 급변 연결
 
 ---
 
@@ -8,66 +15,62 @@
 
 ```
 stockdashboard/
-├── backend/          ← Python FastAPI 백엔드
+├── backend/                    Python FastAPI 백엔드
 │   ├── config/
-│   │   ├── settings.py     환경변수 관리
-│   │   └── database.py     SQLAlchemy DB 모델
+│   │   ├── settings.py         환경변수 (Gemini, KIS, AI provider)
+│   │   └── database.py         SQLAlchemy 모델
 │   ├── core/
-│   │   ├── kis_client.py   KIS Open API 클라이언트
-│   │   ├── portfolio.py    포트폴리오 동기화/수익률
-│   │   └── ai_analyzer.py  Gemini AI 분석 엔진
-│   ├── scheduler/
-│   │   └── jobs.py         자동 갱신 스케줄러
+│   │   ├── kis_client.py       KIS Open API
+│   │   ├── portfolio.py        포트폴리오 동기화·알림
+│   │   ├── ai_analyzer.py      하이브리드 AI 분석 (YouTube→Gemini, 구조화→GPT/Claude)
+│   │   ├── gemini_client.py      google-genai SDK (gemini-3.1-flash-lite)
+│   │   ├── signal_extractor.py   IntelContent → Macro/Sector/Stock Signal
+│   │   ├── signal_related.py     연관 분석 점수·공유 신호
+│   │   ├── sector_peers.py       섹터 정규화 (자동차 peer 등)
+│   │   ├── recommendations.py    AI 언급 종목 집계
+│   │   ├── watchlist_service.py  관심 종목 등록
+│   │   └── move_explainer.py     주가 급변 AI 원인 + 신호 재사용
 │   ├── api/
-│   │   └── routes.py       FastAPI REST 엔드포인트
-│   ├── main.py
-│   ├── requirements.txt
-│   └── .env.example
-└── frontend/         ← Next.js 14 프론트엔드
+│   │   ├── routes.py           포트폴리오·차트·인텔
+│   │   ├── routes_youtube.py   YouTube 채널·영상 분석
+│   │   ├── routes_signals.py   신호·브리핑·공유·연관 API
+│   │   └── routes_watchlist.py 관심 종목·추천 API
+│   ├── scheduler/jobs.py         자동 갱신 (08:50 / 15:35 / 23:35 / 07:05 KST)
+│   └── main.py
+└── frontend/                   Next.js 14
     ├── app/
-    │   ├── page.tsx           대시보드 홈
-    │   ├── portfolio/         종목 현황 테이블
-    │   ├── intelligence/      AI 분석 허브
-    │   ├── alerts/            알림 목록
-    │   └── settings/          설정 및 API 키 안내
-    ├── components/
-    │   ├── app-shell.tsx      네비게이션 쉘
-    │   └── theme-toggle.tsx   라이트/딤/다크 테마
+    │   ├── page.tsx            대시보드 홈
+    │   ├── portfolio/          종목 현황 (컬럼 정렬)
+    │   ├── chart/              차트 + 급변·섹터·매크로 연동
+    │   ├── intelligence/       AI 분석·브리핑·매크로·섹터·리마인드
+    │   ├── watchlist/          관심 종목 + AI 추천
+    │   ├── alerts/             알림
+    │   ├── gains/              실현 수익
+    │   └── settings/           API 키 설정
     └── lib/
-        └── api.ts             백엔드 API 클라이언트
+        ├── api.ts              REST 클라이언트
+        └── chartAnalysis.ts    차트 분석·급변·공유 신호 매칭
 ```
 
 ---
 
 ## 🚀 빠른 시작
 
-### 1. 백엔드 실행
+### 백엔드
 
 ```bash
-cd stockdashboard/backend
-
-# 가상환경 생성
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-
-# 패키지 설치
+cd backend
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-
-# 환경변수 설정
-cp .env.example .env
-# .env 파일 편집 → KIS, Gemini API 키 입력
-
-# 서버 시작
+cp .env.example .env   # API 키 입력
 python main.py
-# → http://localhost:8000
-# → API 문서: http://localhost:8000/docs
+# → http://localhost:8000/docs
 ```
 
-### 2. 프론트엔드 실행
+### 프론트엔드
 
 ```bash
-cd stockdashboard/frontend
-
+cd frontend
 npm install
 npm run dev
 # → http://localhost:3000
@@ -75,66 +78,136 @@ npm run dev
 
 ---
 
-## 🔑 필요한 API 키
+## 🔑 API 키
 
-| 키 | 발급처 | 필수 |
-|----|--------|------|
-| `KIS_APP_KEY` / `KIS_APP_SECRET` | [KIS Developers](https://apiportal.koreainvestment.com) | ✅ |
-| `KIS_ACCOUNT_NO` | 한국투자증권 계좌번호 (XXXXXXXX-XX) | ✅ |
-| `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com) (무료) | ✅ (YouTube 문서 추출) |
-| `OPENAI_API_KEY` | [OpenAI Platform](https://platform.openai.com) | ✅ (종목·매크로·섹터 분석) |
-| `OPENAI_MODEL` | GPT 모델명 (기본: `gpt-4o-mini`) | 선택 |
-| `YOUTUBE_API_KEY` | [Google Cloud Console](https://console.cloud.google.com) | 선택 |
+| 키 | 용도 | 필수 |
+|----|------|------|
+| `KIS_APP_KEY` / `KIS_APP_SECRET` | 잔고·시세 동기화 | ✅ |
+| `GEMINI_API_KEY` | YouTube 문서 추출 (`AIzaSy...` 또는 `AQ....`) | ✅ |
+| `OPENAI_API_KEY` | 구조화 분석 (기본 `gpt-4o-mini`) | 권장 |
+| `ANTHROPIC_API_KEY` | Claude 분석 옵션 | 선택 |
+| `YOUTUBE_API_KEY` | 채널 영상 목록 | 선택 |
 
----
-
-## 📋 주요 기능 (3 Phases)
-
-### Phase 1 — 포트폴리오 트래커 ✅
-- KIS API 잔고 자동 동기화 (국내 + 해외)
-- 종목별 수익률·수익금액·전일대비 등락 표시
-- ±5% 변동 감지 알림
-- 자동 갱신 스케줄러 (08:50 / 15:35 / 23:35 / 07:05 KST)
-
-### Phase 2 — 인텔리전스 허브 🔄
-- YouTube URL → Gemini AI 자동 분석
-- 뉴스 기사 URL 크롤링 → AI 분석
-- 텍스트 직접 입력 분석
-- 섹터별·종목별 이슈 타임라인
-
-### Phase 3 — 차트 AI 분석기 📈 (예정)
-- TradingView 위젯 연동
-- Gemini Vision 차트 패턴 분석
-- 이슈-차트 오버레이 뷰
+모델: `GEMINI_MODEL=gemini-3.1-flash-lite` (기본)
 
 ---
 
-## 🕐 자동 갱신 스케줄 (KST)
+## ✨ 주요 기능
+
+### Phase 1 — 포트폴리오 ✅
+- KIS API 잔고 동기화 (국내·해외)
+- 종목별 수익률·평가손익·전일대비
+- **종목 현황 컬럼 정렬** (평가금액·수익률·섹터 등, localStorage 저장)
+- ±5% 변동 알림
+- 자동 갱신 스케줄러
+
+### Phase 2 — AI 인텔리전스 ✅
+
+**분석 파이프라인**
+1. YouTube → Gemini: 영상 → 문서 추출
+2. 문서 → GPT/Claude/Gemini: 매크로·섹터·종목 구조화 JSON
+3. 저장 → Signal 테이블 자동 파생
+
+**Signal 레이어 (3단계)**
+| 테이블 | 내용 |
+|--------|------|
+| `MacroSignal` | 금리·환율·CPI·FOMC 등 매크로 토픽 |
+| `SectorSignal` | 섹터별 요약·전망·`mentioned_stocks` |
+| `StockSignal` | 언급 종목 (보유 여부 `is_portfolio`) |
+
+**UI 탭 (AI 분석 페이지)**
+- 분석 요청 / 채널 구독 / 분석 이력
+- **일별 브리핑** — 날짜별 분석·토픽 요약 + 백필
+- **매크로** — 토픽별 신호 허브
+- **섹터** — 섹터별 신호 + **AI 언급 종목 → 지켜보기**
+- **리마인드** — 보유 종목 관련 신호
+
+### Phase 2.5 — 신호 공유·연관 ✅
+
+**섹터 peer 정규화** (`sector_peers.py`)
+- `운송장비·부품` → `자동차`, 현대차·기아·모비스 코드 매핑
+- 같은 섹터 Signal을 peer 종목 차트에 **자동 연결**
+
+**차트 급변 구간**
+- 우선순위: 종목 이슈 → **섹터 공유** → **매크로** → AI 원인 검색
+- 클릭 시 **관련 분석 패널** (키워드·섹터·매크로 점수순, 참고용)
+- AI 원인 검색: Gemini/GPT/Claude 선택, **동일일 섹터 신호면 AI 스킵**
+
+**API**
+```
+GET  /api/intel/daily
+GET  /api/intel/macro
+GET  /api/intel/sectors
+GET  /api/intel/portfolio/remind
+GET  /api/intel/stocks/{symbol}/shared-signals
+GET  /api/intel/stocks/{symbol}/related?date=YYYY-MM-DD
+GET  /api/intel/recommendations?sector=자동차
+POST /api/intel/signals/backfill
+```
+
+### Phase 2.6 — 관심 종목 (Watchlist) ✅
+
+모의투자 없이 **AI가 언급한 종목을 지켜보기**:
+- `/watchlist` 페이지 — AI 추천 목록 + 내 관심 목록
+- 섹터 허브에서 ★ **지켜보기** 클릭
+- 등록 시 KRX 종목코드 자동 매칭 (pykrx)
+- **차트**에서 보유 + 관심 종목 함께 선택 가능
+
+```
+GET    /api/watchlist
+POST   /api/watchlist
+DELETE /api/watchlist/{id}
+```
+
+### Phase 3 — 차트 AI 분석 ✅
+- pykrx OHLCV + MA5/20/60, 볼린저, RSI
+- 실전 가이드 기반 **차트 분석 모드** (눌림목·골든크로스 등)
+- 급등·급락 탐지 + AI 이슈·섹터·매크로 마커
+- 주가 급변 **AI 원인 검색** (뉴스 RSS + 신호 재사용)
+
+---
+
+## 🗄️ 데이터 영속성
+
+- SQLite `stockmind.db` — 분석 결과·신호·관심종목 영구 저장
+- `IntelContent` 원본은 삭제하지 않음; Signal은 content_id 기준 재생성
+- 백필: 인텔리전스 → **일별 브리핑 → 백필** (기존 분석 → Signal 변환)
+- `.env`: `DB_PATH=./stockmind.db` (Render 등 배포 시 영구 볼륨 권장)
+
+---
+
+## 🕐 자동 갱신 (KST)
 
 | 시간 | 동작 |
 |------|------|
-| 평일 08:50 | 전일 미국 마감가 확인 + 오전 브리핑 |
-| 평일 15:35 | 국내 종가 동기화 + 5% 알림 체크 |
-| 평일 23:35 | 미국 장 오픈 확인 |
-| 화~토 07:05 | 미국 장 마감 → 미국 종가 동기화 |
+| 평일 08:50 | 미국 마감 확인 |
+| 평일 15:35 | 국내 종가 + 5% 알림 |
+| 평일 23:35 | 미국 장 오픈 |
+| 화~토 07:05 | 미국 종가 동기화 |
 
 ---
 
-## 🌐 배포 (Production)
+## 🌐 배포
 
 | 서비스 | URL |
 |--------|-----|
-| **프론트엔드** | https://stockdashboard-two.vercel.app |
-| **백엔드 API** | https://stockmind-api.vercel.app |
-| **API 문서** | https://stockmind-api.vercel.app/docs |
-| **GitHub** | https://github.com/peter-cho-70/stockdashboard |
+| 프론트 | https://stockdashboard-two.vercel.app |
+| API | https://stockmind-api.vercel.app |
+| GitHub | https://github.com/peter-cho-70/stockdashboard |
 
-- 프론트: Vercel (`frontend/` 디렉터리, Root Directory 설정)
-- API: Vercel Serverless (`backend/`, `handler.py`)
-- 환경변수: Vercel 대시보드에서 `NEXT_PUBLIC_API_URL=https://stockmind-api.vercel.app/api` (프론트), API 키들 (백엔드)
+---
+
+## 📋 사용 팁
+
+1. **YouTube 분석** → 인텔리전스 → 채널 구독 (분석 후 같은 탭에 결과 표시)
+2. **백필 1회** → 일별 브리핑 → 백필 (기존 영상 → Signal)
+3. **자동차 3사 공유** → 5/21 섹터 Signal이 현대차·기아·모비스 차트에 `섹터 공유` 배지
+4. **관심 종목** → 섹터 탭 ★ 또는 `/watchlist` → 차트에서 추세 확인
+5. **종목 현황** → 컬럼 헤더 클릭으로 정렬 (기본: 평가금액 내림차순)
 
 ---
 
 ## ⚠️ 면책 조항
 
-본 플랫폼의 모든 분석 결과는 참고용이며 투자 결정의 근거가 될 수 없습니다.
+본 플랫폼의 AI 분석·추천·연관 표시는 **참고용**이며 투자 결정의 근거가 될 수 없습니다.  
+섹터/매크로 공유 신호는 **동일 원인을 단정하지 않고** 맥락 제공 목적입니다.

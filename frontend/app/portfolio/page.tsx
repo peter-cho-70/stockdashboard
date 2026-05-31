@@ -1,9 +1,31 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
-import { RefreshCw, ArrowUpRight, ArrowDownRight, Minus, PenLine, X, Check, BarChart } from "lucide-react";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
+import { RefreshCw, ArrowUpRight, ArrowDownRight, Minus, PenLine, X, Check, BarChart, ChevronUp, ChevronDown } from "lucide-react";
 import { api, type StockItem } from "@/lib/api";
+
+type SortKey = "name" | "current_price" | "change_rate" | "qty" | "avg_price" | "eval_value" | "pnl" | "profit_rate" | "sector";
+type SortDir = "asc" | "desc";
+
+const SORT_STORAGE_KEY = "stockmind-portfolio-sort";
+
+function loadSort(): { key: SortKey; dir: SortDir } {
+  if (typeof window === "undefined") return { key: "eval_value", dir: "desc" };
+  try {
+    const raw = localStorage.getItem(SORT_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return { key: "eval_value", dir: "desc" };
+}
+
+function evalValue(s: StockItem) {
+  return s.current_value ?? s.current_price * s.qty;
+}
+
+function pnlValue(s: StockItem) {
+  return evalValue(s) - s.avg_price * s.qty;
+}
 
 function RateCell({ rate }: { rate: number }) {
   if (rate > 0)
@@ -40,6 +62,7 @@ const SECTORS = [
 ];
 
 export default function PortfolioPage() {
+  const router = useRouter();
   const [stocks, setStocks] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -47,6 +70,32 @@ export default function PortfolioPage() {
   const [editMemo, setEditMemo] = useState("");
   const [editSector, setEditSector] = useState("");
   const [filter, setFilter] = useState<"ALL" | "KRX" | "US">("ALL");
+  const [sortKey, setSortKey] = useState<SortKey>(() => loadSort().key);
+  const [sortDir, setSortDir] = useState<SortDir>(() => loadSort().dir);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  }
+
+  function SortHeader({ label, col, align = "left" }: { label: string; col: SortKey; align?: "left" | "right" }) {
+    const active = sortKey === col;
+    return (
+      <th
+        className={`px-4 py-3 font-medium cursor-pointer select-none hover:text-neutral-700 dark:hover:text-neutral-200 ${align === "right" ? "text-right" : "text-left"}`}
+        onClick={() => toggleSort(col)}
+      >
+        <span className={`inline-flex items-center gap-0.5 ${align === "right" ? "justify-end w-full" : ""}`}>
+          {label}
+          {active && (sortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+        </span>
+      </th>
+    );
+  }
 
   const load = useCallback(async () => {
     try {
@@ -90,6 +139,51 @@ export default function PortfolioPage() {
     if (filter === "US") return s.market !== "KRX";
     return true;
   });
+
+  const sorted = useMemo(() => {
+    const list = [...filtered];
+    const dir = sortDir === "asc" ? 1 : -1;
+    list.sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "name":
+          cmp = a.name.localeCompare(b.name, "ko");
+          break;
+        case "sector":
+          cmp = (a.sector || "").localeCompare(b.sector || "", "ko");
+          break;
+        case "current_price":
+          cmp = a.current_price - b.current_price;
+          break;
+        case "change_rate":
+          cmp = a.change_rate - b.change_rate;
+          break;
+        case "qty":
+          cmp = a.qty - b.qty;
+          break;
+        case "avg_price":
+          cmp = a.avg_price - b.avg_price;
+          break;
+        case "eval_value":
+          cmp = evalValue(a) - evalValue(b);
+          break;
+        case "pnl":
+          cmp = pnlValue(a) - pnlValue(b);
+          break;
+        case "profit_rate":
+          cmp = a.profit_rate - b.profit_rate;
+          break;
+        default:
+          cmp = 0;
+      }
+      return cmp * dir;
+    });
+    return list;
+  }, [filtered, sortKey, sortDir]);
+
+  useEffect(() => {
+    localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({ key: sortKey, dir: sortDir }));
+  }, [sortKey, sortDir]);
 
   const krxStocks = stocks.filter((s) => s.market === "KRX");
   const usStocks = stocks.filter((s) => s.market !== "KRX");
@@ -144,34 +238,37 @@ export default function PortfolioPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface-elevated)] text-xs text-neutral-500 dark:text-neutral-400">
-                  <th className="px-4 py-3 text-left font-medium">종목</th>
-                  <th className="px-4 py-3 text-right font-medium">현재가</th>
-                  <th className="px-4 py-3 text-right font-medium">전일대비</th>
-                  <th className="px-4 py-3 text-right font-medium">수량</th>
-                  <th className="px-4 py-3 text-right font-medium">평균단가</th>
-                  <th className="px-4 py-3 text-right font-medium">평가금액</th>
-                  <th className="px-4 py-3 text-right font-medium">평가손익</th>
-                  <th className="px-4 py-3 text-right font-medium">수익률</th>
-                  <th className="px-4 py-3 text-left font-medium">섹터</th>
+                  <SortHeader label="종목" col="name" />
+                  <SortHeader label="현재가" col="current_price" align="right" />
+                  <SortHeader label="전일대비" col="change_rate" align="right" />
+                  <SortHeader label="수량" col="qty" align="right" />
+                  <SortHeader label="평균단가" col="avg_price" align="right" />
+                  <SortHeader label="평가금액" col="eval_value" align="right" />
+                  <SortHeader label="평가손익" col="pnl" align="right" />
+                  <SortHeader label="수익률" col="profit_rate" align="right" />
+                  <SortHeader label="섹터" col="sector" />
                   <th className="px-4 py-3 text-left font-medium">메모</th>
                   <th className="px-4 py-3 text-center font-medium">편집</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border-subtle)]">
-                {filtered.map((stock) => (
+                {sorted.map((stock) => (
                   <tr
                     key={stock.id}
-                    className="hover:bg-[var(--surface-elevated)] transition-colors"
+                    onClick={() => {
+                      if (editingId !== stock.id) router.push(`/chart?symbol=${stock.symbol}`);
+                    }}
+                    className={`transition-colors ${
+                      editingId === stock.id
+                        ? "bg-[var(--surface-elevated)]"
+                        : "cursor-pointer hover:bg-[var(--surface-elevated)]"
+                    }`}
                   >
                     <td className="px-4 py-3">
-                      <Link
-                        href={`/chart?symbol=${stock.symbol}`}
-                        className="group inline-flex flex-col"
-                        title="차트 보기"
-                      >
+                      <div className="inline-flex flex-col" title="차트 보기">
                         <div className="flex items-center gap-1.5 font-medium text-neutral-900 dark:text-neutral-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                           {stock.name}
-                          <BarChart size={12} className="text-neutral-300 group-hover:text-blue-400 transition-colors" />
+                          <BarChart size={12} className="text-neutral-300" />
                         </div>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <span className="text-xs text-neutral-400">{stock.symbol}</span>
@@ -179,7 +276,7 @@ export default function PortfolioPage() {
                             {stock.market}
                           </span>
                         </div>
-                      </Link>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right font-medium text-neutral-900 dark:text-neutral-100">
                       {fmt(stock.current_price, stock.currency)}
@@ -225,6 +322,7 @@ export default function PortfolioPage() {
                         <select
                           value={editSector}
                           onChange={(e) => setEditSector(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
                           className="rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-xs focus:outline-none"
                         >
                           <option value="">선택</option>
@@ -243,6 +341,7 @@ export default function PortfolioPage() {
                         <textarea
                           value={editMemo}
                           onChange={(e) => setEditMemo(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
                           rows={2}
                           placeholder="투자 thesis, 메모..."
                           className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-xs focus:outline-none resize-none"
@@ -253,16 +352,18 @@ export default function PortfolioPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                       {editingId === stock.id ? (
                         <div className="flex items-center justify-center gap-1">
                           <button
+                            type="button"
                             onClick={() => saveMemo(stock.symbol)}
                             className="rounded p-1 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20"
                           >
                             <Check size={14} />
                           </button>
                           <button
+                            type="button"
                             onClick={() => setEditingId(null)}
                             className="rounded p-1 text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
                           >
@@ -271,6 +372,7 @@ export default function PortfolioPage() {
                         </div>
                       ) : (
                         <button
+                          type="button"
                           onClick={() => {
                             setEditingId(stock.id);
                             setEditMemo(stock.memo || "");

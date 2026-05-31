@@ -14,18 +14,43 @@ class Settings(BaseSettings):
     kis_account_no: str = Field("", env="KIS_ACCOUNT_NO")
     kis_is_mock: bool = Field(True, env="KIS_IS_MOCK")
 
-    @field_validator("kis_is_mock", "debug", mode="before")
+    @field_validator(
+        "kis_is_mock",
+        "debug",
+        "ai_fallback",
+        "ai_skip_if_cached",
+        "enable_bulk_youtube_analyze",
+        "gemini_prompt_cache",
+        mode="before",
+    )
     @classmethod
     def _parse_bool(cls, v):
         if isinstance(v, str):
             return v.strip().split()[0].lower() in ("true", "1", "yes")
         return v
 
+    @field_validator("gemini_api_key", "openai_api_key", "anthropic_api_key", mode="before")
+    @classmethod
+    def _strip_api_key(cls, v):
+        if isinstance(v, str):
+            return v.strip().strip('"').strip("'")
+        return v
+
     # ── AI API ────────────────────────────────────
-    gemini_api_key: str = Field("", env="GEMINI_API_KEY")   # YouTube 문서 추출
-    openai_api_key: str = Field("", env="OPENAI_API_KEY")   # 종목·매크로·섹터 분석
+    gemini_api_key: str = Field("", env="GEMINI_API_KEY")       # AIzaSy... 또는 AQ.... (신규)
+    gemini_model: str = Field("gemini-3.1-flash-lite", env="GEMINI_MODEL")
+    gemini_extract_model: str = Field("gemini-3.1-flash-lite", env="GEMINI_EXTRACT_MODEL")
+    gemini_prompt_cache: bool = Field(False, env="GEMINI_PROMPT_CACHE")
+    gemini_cache_ttl: str = Field("3600s", env="GEMINI_CACHE_TTL")
+    anthropic_api_key: str = Field("", env="ANTHROPIC_API_KEY")  # Claude (기본 분석)
+    anthropic_model: str = Field("claude-3-5-haiku-latest", env="ANTHROPIC_MODEL")
+    openai_api_key: str = Field("", env="OPENAI_API_KEY")       # GPT (분석 옵션)
     openai_model: str = Field("gpt-4o-mini", env="OPENAI_MODEL")
+    analysis_provider: str = Field("openai", env="ANALYSIS_PROVIDER")  # claude|openai|gemini
     youtube_api_key: str = Field("", env="YOUTUBE_API_KEY")
+    ai_fallback: bool = Field(False, env="AI_FALLBACK")  # false=선택 provider만, true=429 시만 전환
+    ai_skip_if_cached: bool = Field(True, env="AI_SKIP_IF_CACHED")
+    enable_bulk_youtube_analyze: bool = Field(False, env="ENABLE_BULK_YOUTUBE_ANALYZE")
 
     # ── 데이터베이스 ──────────────────────────────
     db_path: str = Field("./stockmind.db", env="DB_PATH")
