@@ -217,7 +217,7 @@ export default function DashboardPage() {
       )}
 
       {/* 요약 카드 */}
-      {summary && (
+      {summary && summary.stock_count > 0 && (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <SummaryCard
             icon={<Wallet size={18} className="text-blue-500" />}
@@ -369,7 +369,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {apiStatus === "ok" && (!summary || summary.stock_count === 0) && (
+      {apiStatus === "ok" && summary && summary.stock_count === 0 && (
         <div className="rounded-lg border border-dashed border-[var(--border-subtle)] px-8 py-16 text-center">
           <Wallet size={40} className="mx-auto mb-3 text-neutral-300 dark:text-neutral-600" />
           <p className="font-medium text-neutral-600 dark:text-neutral-400">보유 종목이 없습니다</p>

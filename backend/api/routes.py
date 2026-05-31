@@ -417,7 +417,14 @@ def get_portfolio_summary(db: Session = Depends(get_db)):
     """포트폴리오 요약 (총 평가금액, 수익률, 상위/하위 종목)"""
     stocks = db.query(Stock).filter(Stock.is_active == True).all()
     if not stocks:
-        return {"message": "보유 종목 없음. /portfolio/sync 로 동기화하세요."}
+        return {
+            "total_value": 0,
+            "total_purchase": 0,
+            "total_profit": 0,
+            "total_profit_rate": 0,
+            "stock_count": 0,
+            "stocks": [],
+        }
 
     total_value = sum(s.current_value for s in stocks)
     total_purchase = sum(s.purchase_amount for s in stocks)
