@@ -40,8 +40,8 @@ interface VideoAnalysis extends IntelDetailData {
 }
 
 const ANALYSIS_PROVIDER_OPTIONS: { id: AnalysisProvider; label: string; hint: string }[] = [
-  { id: "openai", label: "GPT (기본)", hint: "gpt-4o-mini · 텍스트 분석 권장" },
-  { id: "gemini", label: "Gemini", hint: "gemini-3.1-flash-lite · YouTube 추출" },
+  { id: "gemini", label: "Gemini (기본)", hint: "gemini-3.1-flash-lite · YouTube 추출·구조화" },
+  { id: "openai", label: "GPT", hint: "gpt-4o-mini · 텍스트 분석" },
   { id: "claude", label: "Claude", hint: "Anthropic API 크레dit 필요" },
 ];
 
@@ -1113,7 +1113,7 @@ export default function IntelligencePage() {
   const [sourceFilter,   setSourceFilter] = useState<"ALL" | "YOUTUBE" | "NEWS" | "TEXT">("ALL");
   const [loading,        setLoading]      = useState(true);
   const [highlightId,    setHighlightId]  = useState<number | null>(null);
-  const [analysisProvider, setAnalysisProvider] = useState<AnalysisProvider>("openai");
+  const [analysisProvider, setAnalysisProvider] = useState<AnalysisProvider>("gemini");
   const [enableBulkYoutubeAnalyze, setEnableBulkYoutubeAnalyze] = useState(false);
 
   const loadContents = useCallback(async () => {

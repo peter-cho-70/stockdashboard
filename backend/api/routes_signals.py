@@ -319,3 +319,123 @@ def backfill_signals(db: Session = Depends(get_db)):
     """기존 IntelContent 전체 백필 (1회성)"""
     result = backfill_all_signals(db)
     return {"ok": True, "result": result}
+
+
+@signals_router.get("/intel/stocks/{symbol}/buy-score")
+def get_buy_score(
+    symbol: str,
+    days: int = Query(30, ge=7, le=180),
+    db: Session = Depends(get_db),
+):
+    """매수 타이밍 종합 스코어 (0~100, Signal DB 기반)."""
+    from core.buy_score import calculate_buy_score
+
+    stock = db.query(Stock).filter(Stock.symbol == symbol).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+    return calculate_buy_score(db, stock, days=days)
+
+
+@signals_router.get("/intel/portfolio/risk-radar")
+def get_portfolio_risk_radar(
+    days: int = Query(30, ge=7, le=180),
+    db: Session = Depends(get_db),
+):
+    """포트폴리오 리스크 레이더 (5축)."""
+    from collections import Counter
+
+    from config.database import PriceMoveCause, StockIssue
+    from core.sector_peers import normalize_sector
+
+    stocks = db.query(Stock).filter(Stock.is_active == True, Stock.qty > 0).all()
+    if not stocks:
+        return {"days": days, "stock_count": 0, "axes": [], "sector_distribution": {}}
+
+    since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    since_dt = datetime.utcnow() - timedelta(days=days)
+    n = len(stocks)
+
+    sector_counts = Counter(
+        normalize_sector(s.sector, s.symbol) or "미분류" for s in stocks
+    )
+    hhi = sum((c / n) ** 2 for c in sector_counts.values()) if n > 0 else 0
+    concentration = round(hhi * 100, 1)
+
+    macro_all = db.query(MacroSignal).filter(MacroSignal.event_date >= since).all()
+    macro_neg = sum(1 for m in macro_all if (m.sentiment or "") == "NEGATIVE")
+    macro_exposure = round((macro_neg / len(macro_all) * 100) if macro_all else 0, 1)
+
+    issue_counts: dict[int, tuple[int, int]] = {}
+    for stock in stocks:
+        issues = (
+            db.query(StockIssue)
+            .join(IntelContent, StockIssue.content_id == IntelContent.id)
+            .filter(StockIssue.stock_id == stock.id)
+            .filter(IntelContent.analyzed_at >= since_dt)
+            .all()
+        )
+        neg_cnt = sum(1 for i in issues if (i.sentiment or "") == "NEGATIVE")
+        issue_counts[stock.id] = (neg_cnt, len(issues))
+
+    stocks_with_neg = sum(1 for v in issue_counts.values() if v[0] > 0)
+    negative_ratio = round(stocks_with_neg / n * 100, 1) if n > 0 else 0
+
+    stocks_with_cause = {
+        r[0]
+        for r in db.query(PriceMoveCause.stock_id)
+        .filter(PriceMoveCause.event_date >= since)
+        .all()
+    }
+    unexplained = round((1 - len(stocks_with_cause) / n) * 100, 1) if n > 0 else 100
+
+    covered_ids = {
+        r[0]
+        for r in db.query(StockIssue.stock_id)
+        .join(IntelContent, StockIssue.content_id == IntelContent.id)
+        .filter(IntelContent.analyzed_at >= since_dt)
+        .all()
+    }
+    coverage = round(len(covered_ids) / n * 100, 1) if n > 0 else 0
+    coverage_gap = round(100 - coverage, 1)
+
+    top_sector = sector_counts.most_common(1)[0] if sector_counts else ("—", 0)
+    axes = [
+        {
+            "axis": "섹터집중도",
+            "value": concentration,
+            "risk_level": "높음" if concentration > 50 else "보통" if concentration > 30 else "낮음",
+            "description": f"최다 섹터: {top_sector[0]} ({top_sector[1]}개)",
+        },
+        {
+            "axis": "매크로노출",
+            "value": macro_exposure,
+            "risk_level": "높음" if macro_exposure > 50 else "보통" if macro_exposure > 25 else "낮음",
+            "description": f"최근 {days}일 부정 매크로 {macro_neg}/{len(macro_all)}건",
+        },
+        {
+            "axis": "부정이슈",
+            "value": negative_ratio,
+            "risk_level": "높음" if negative_ratio > 40 else "보통" if negative_ratio > 20 else "낮음",
+            "description": f"부정 이슈 보유 종목 {stocks_with_neg}/{n}개",
+        },
+        {
+            "axis": "미설명급변",
+            "value": unexplained,
+            "risk_level": "높음" if unexplained > 60 else "보통" if unexplained > 30 else "낮음",
+            "description": f"AI 원인 미검색 {n - len(stocks_with_cause)}/{n}개",
+        },
+        {
+            "axis": "분석공백",
+            "value": coverage_gap,
+            "risk_level": "높음" if coverage_gap > 50 else "보통" if coverage_gap > 25 else "낮음",
+            "description": f"미분석 종목 {n - len(covered_ids)}/{n}개",
+        },
+    ]
+
+    return {
+        "days": days,
+        "stock_count": n,
+        "axes": axes,
+        "sector_distribution": dict(sector_counts.most_common()),
+        "calculated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+    }

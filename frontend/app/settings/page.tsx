@@ -135,7 +135,7 @@ export default function SettingsPage() {
         <div className="rounded-md bg-[var(--surface-elevated)] p-3 font-mono text-xs text-neutral-600 dark:text-neutral-400 space-y-1">
           <p>OPENAI_API_KEY=<span className="text-amber-600 dark:text-amber-400">your_openai_api_key</span></p>
           <p>OPENAI_MODEL=<span className="text-amber-600 dark:text-amber-400">gpt-4o-mini</span></p>
-          <p>ANALYSIS_PROVIDER=<span className="text-amber-600 dark:text-amber-400">openai</span></p>
+          <p>ANALYSIS_PROVIDER=<span className="text-amber-600 dark:text-amber-400">gemini</span></p>
         </div>
       </Section>
 

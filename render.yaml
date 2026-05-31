@@ -18,7 +18,7 @@ services:
       - key: ANTHROPIC_MODEL
         value: claude-3-5-haiku-latest
       - key: ANALYSIS_PROVIDER
-        value: claude
+        value: gemini
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL

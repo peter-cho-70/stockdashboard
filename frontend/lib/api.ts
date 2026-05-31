@@ -35,7 +35,45 @@ export interface StockItem {
   profit_loss?: number;
   current_value?: number;
   memo: string | null;
+  position_source?: "kis" | "manual";
   last_synced_at: string | null;
+}
+
+export interface StockCreatePayload {
+  symbol: string;
+  name: string;
+  market?: string;
+  sector?: string;
+  currency?: string;
+  qty: number;
+  avg_price: number;
+  current_price?: number;
+}
+
+export interface PositionUpdatePayload {
+  qty?: number;
+  avg_price?: number;
+  name?: string;
+  sector?: string;
+  current_price?: number;
+}
+
+export interface PortfolioTradePayload {
+  side: "BUY" | "SELL";
+  qty: number;
+  price: number;
+  traded_at?: string;
+  memo?: string;
+}
+
+export interface PortfolioTradeItem {
+  id: number;
+  side: string;
+  qty: number;
+  price: number;
+  traded_at: string;
+  memo: string | null;
+  created_at: string | null;
 }
 
 export interface PortfolioSummary {
@@ -64,6 +102,29 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ memo, sector }),
     }),
+  addStock: (body: StockCreatePayload) =>
+    fetchApi<{ message: string; stock: StockItem }>("/portfolio/stocks", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deleteStock: (symbol: string) =>
+    fetchApi<{ message: string; symbol: string }>(`/portfolio/stocks/${symbol}`, {
+      method: "DELETE",
+    }),
+  updatePosition: (symbol: string, body: PositionUpdatePayload) =>
+    fetchApi<{ message: string; stock: StockItem }>(`/portfolio/stocks/${symbol}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  createTrade: (symbol: string, body: PortfolioTradePayload) =>
+    fetchApi<{ message: string; stock: StockItem; trade: PortfolioTradeItem }>(
+      `/portfolio/stocks/${symbol}/trades`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  getStockTrades: (symbol: string, limit = 30) =>
+    fetchApi<{ symbol: string; trades: PortfolioTradeItem[] }>(
+      `/portfolio/stocks/${symbol}/trades?limit=${limit}`,
+    ),
 
   // ── 알림 ──────────────────────────────────────
   getAlerts: (unreadOnly?: boolean) =>
@@ -256,6 +317,9 @@ export interface StockIssueTimeline {
   source_title: string | null;
   created_at: string;
   analyzed_at?: string | null;
+  published_at?: string | null;
+  event_date?: string | null;
+  match_source?: string | null;
 }
 
 export interface StockIssues {
@@ -459,6 +523,57 @@ export interface WatchlistItem {
   change_rate: number | null;
   created_at: string | null;
 }
+
+export interface BuyScoreComponent {
+  category: string;
+  score: number;
+  label: string;
+  reason: string;
+  signal_count?: number;
+  note?: string;
+}
+
+export interface BuyScoreResult {
+  symbol: string;
+  name: string;
+  score: number;
+  raw_score: number;
+  grade: string;
+  grade_label: string;
+  components: BuyScoreComponent[];
+  recent_issues: {
+    sentiment: string;
+    summary: string;
+    analyzed_at: string | null;
+    source_title: string | null;
+  }[];
+  warnings: string[];
+  disclaimer: string;
+  calculated_at: string;
+  days_window: number;
+}
+
+export interface RiskAxis {
+  axis: string;
+  value: number;
+  risk_level: "낮음" | "보통" | "높음";
+  description: string;
+}
+
+export interface RiskRadarResult {
+  days: number;
+  stock_count: number;
+  axes: RiskAxis[];
+  sector_distribution: Record<string, number>;
+  calculated_at: string;
+}
+
+export const scoreApi = {
+  getBuyScore: (symbol: string, days = 30) =>
+    fetchApi<BuyScoreResult>(`/intel/stocks/${symbol}/buy-score?days=${days}`),
+  getRiskRadar: (days = 30) =>
+    fetchApi<RiskRadarResult>(`/intel/portfolio/risk-radar?days=${days}`),
+};
 
 export const watchlistApi = {
   getAll: () => fetchApi<{ total: number; items: WatchlistItem[] }>("/watchlist"),

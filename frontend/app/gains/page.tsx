@@ -40,6 +40,11 @@ interface AllTime { capital: number; dividend: number; total: number; tax: numbe
 // ─── 유틸 ─────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString("ko-KR");
 const fmtW = (n: number) => `${fmt(Math.round(n))}원`;
+const isValidGainAmount = (v: string) => {
+  if (v === "" || v === "-") return false;
+  const n = Number(v);
+  return Number.isFinite(n) && n !== 0;
+};
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${BASE}${path}`, {
@@ -132,7 +137,7 @@ export default function GainsPage() {
   }
 
   async function handleSubmit() {
-    if (!form.amount || Number(form.amount) <= 0) return;
+    if (!isValidGainAmount(form.amount)) return;
     setSubmitting(true);
     try {
       await fetchJson("/gains", {
@@ -365,9 +370,9 @@ export default function GainsPage() {
                 </div>
               </div>
               <div>
-                <label className="block mb-1 text-xs font-medium text-neutral-500">금액 (원) *</label>
+                <label className="block mb-1 text-xs font-medium text-neutral-500">금액 (원) * <span className="font-normal text-neutral-400">오입력 정정 시 음수 입력</span></label>
                 <input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}
-                  placeholder="3500000" className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-3 py-2 text-sm focus:outline-none" />
+                  placeholder="3500000 (정정: -3500000)" className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-3 py-2 text-sm focus:outline-none" />
               </div>
               <div>
                 <label className="block mb-1 text-xs font-medium text-neutral-500">세금 (원)</label>
@@ -393,7 +398,7 @@ export default function GainsPage() {
               </div>
             </div>
             <div className="flex gap-2">
-              <button onClick={handleSubmit} disabled={submitting || !form.amount}
+              <button onClick={handleSubmit} disabled={submitting || !isValidGainAmount(form.amount)}
                 className="flex items-center gap-2 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900">
                 <Plus size={14} />{submitting ? "저장 중..." : "저장"}
               </button>

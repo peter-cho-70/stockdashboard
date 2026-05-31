@@ -47,6 +47,7 @@ class Stock(Base):
 
     # 메타
     memo = Column(Text, nullable=True)             # 투자 thesis / 메모
+    position_source = Column(String(10), default="kis")  # kis | manual
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -56,6 +57,7 @@ class Stock(Base):
     price_history = relationship("PriceHistory", back_populates="stock")
     issues = relationship("StockIssue", back_populates="stock")
     move_causes = relationship("PriceMoveCause", back_populates="stock")
+    trades = relationship("PortfolioTrade", back_populates="stock")
 
     @property
     def current_value(self) -> float:
@@ -73,6 +75,25 @@ class Stock(Base):
         if self.purchase_amount == 0:
             return 0.0
         return (self.profit_loss / self.purchase_amount) * 100
+
+
+# ─────────────────────────────────────────────
+# 포트폴리오 매매 이력
+# ─────────────────────────────────────────────
+class PortfolioTrade(Base):
+    __tablename__ = "portfolio_trades"
+
+    id = Column(Integer, primary_key=True, index=True)
+    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False, index=True)
+    side = Column(String(4), nullable=False)  # BUY | SELL
+    qty = Column(Float, nullable=False)
+    price = Column(Float, nullable=False)
+    traded_at = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD
+    memo = Column(Text, nullable=True)
+    source = Column(String(10), default="manual")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    stock = relationship("Stock", back_populates="trades")
 
 
 # ─────────────────────────────────────────────
@@ -168,6 +189,8 @@ class StockIssue(Base):
     content_id = Column(Integer, ForeignKey("intel_contents.id"), nullable=False)
     issue_summary = Column(Text, nullable=True)   # 해당 종목 관련 요약만 추출
     sentiment = Column(String(20), nullable=True)
+    event_date = Column(String(10), nullable=True, index=True)   # 차트 연결용 YYYY-MM-DD
+    match_source = Column(String(30), nullable=True)              # published_at | extracted | ...
     created_at = Column(DateTime, default=datetime.utcnow)
 
     stock = relationship("Stock", back_populates="issues")
@@ -350,10 +373,76 @@ def _migrate_intel_columns():
                 pass
 
 
+def _migrate_stock_columns():
+    """stocks 테이블 컬럼 추가"""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE stocks ADD COLUMN position_source VARCHAR(10)"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(
+                text("UPDATE stocks SET position_source = 'kis' WHERE position_source IS NULL")
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+
+def _migrate_stock_issue_columns():
+    """stock_issues event_date 컬럼 추가 및 published_at 백필"""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        for col, typ in [
+            ("event_date", "VARCHAR(10)"),
+            ("match_source", "VARCHAR(30)"),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE stock_issues ADD COLUMN {col} {typ}"))
+                conn.commit()
+            except Exception:
+                pass
+
+    db = SessionLocal()
+    try:
+        from core.issue_event_date import resolve_issue_event_date
+
+        rows = db.query(StockIssue).filter(StockIssue.event_date.is_(None)).all()
+        updated = 0
+        for si in rows:
+            content = si.content
+            if not content:
+                continue
+            if content.published_at:
+                si.event_date = content.published_at.strftime("%Y-%m-%d")
+                si.match_source = "published_at"
+                updated += 1
+                continue
+            ev, src = resolve_issue_event_date(
+                content, si.issue_summary or "", content.source_title or ""
+            )
+            if ev:
+                si.event_date = ev
+                si.match_source = src
+                updated += 1
+        if updated:
+            db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
 def init_db():
     """테이블 생성"""
     Base.metadata.create_all(bind=engine)
     _migrate_intel_columns()
+    _migrate_stock_columns()
+    _migrate_stock_issue_columns()
     print("✅ 데이터베이스 초기화 완료")
 
 

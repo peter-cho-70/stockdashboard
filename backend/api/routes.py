@@ -10,7 +10,17 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
-from config.database import get_db, Stock, AlertHistory, IntelContent, StockIssue, PortfolioSnapshot, RealizedGain
+from config.database import (
+    get_db, Stock, AlertHistory, IntelContent, StockIssue, PortfolioSnapshot,
+    RealizedGain, PortfolioTrade,
+)
+from core.portfolio_positions import (
+    serialize_stock,
+    get_stock_by_symbol,
+    apply_position,
+    execute_trade,
+    mark_manual,
+)
 from config.settings import get_settings
 from core.kis_client import create_kis_client_from_settings
 from core.portfolio import PortfolioManager
@@ -56,7 +66,8 @@ class StockCreate(BaseModel):
 @router.post("/portfolio/stocks")
 def add_stock(body: StockCreate, db: Session = Depends(get_db)):
     """종목 단건 수동 등록 (KIS API 없이 직접 입력)"""
-    existing = db.query(Stock).filter(Stock.symbol == body.symbol).first()
+    symbol = body.symbol.strip()
+    existing = db.query(Stock).filter(Stock.symbol == symbol).first()
     purchase_amount = body.qty * body.avg_price
     current_price = body.current_price if body.current_price else body.avg_price
     if existing:
@@ -68,13 +79,15 @@ def add_stock(body: StockCreate, db: Session = Depends(get_db)):
         existing.avg_price = body.avg_price
         existing.purchase_amount = purchase_amount
         existing.current_price = current_price
-        existing.is_active = True
+        existing.is_active = body.qty > 0
+        existing.position_source = "manual"
         existing.last_synced_at = datetime.utcnow()
         db.commit()
-        return {"message": "종목 업데이트 완료", "symbol": body.symbol}
+        db.refresh(existing)
+        return {"message": "종목 업데이트 완료", "stock": serialize_stock(existing)}
 
     stock = Stock(
-        symbol=body.symbol,
+        symbol=symbol,
         name=body.name,
         market=body.market,
         sector=body.sector,
@@ -83,12 +96,14 @@ def add_stock(body: StockCreate, db: Session = Depends(get_db)):
         avg_price=body.avg_price,
         purchase_amount=purchase_amount,
         current_price=current_price,
-        is_active=True,
+        position_source="manual",
+        is_active=body.qty > 0,
         last_synced_at=datetime.utcnow(),
     )
     db.add(stock)
     db.commit()
-    return {"message": "종목 등록 완료", "symbol": body.symbol}
+    db.refresh(stock)
+    return {"message": "종목 등록 완료", "stock": serialize_stock(stock)}
 
 
 @router.post("/portfolio/stocks/bulk")
@@ -109,6 +124,7 @@ def bulk_add_stocks(body: List[StockCreate], db: Session = Depends(get_db)):
             existing.purchase_amount = purchase_amount
             existing.current_price = current_price
             existing.is_active = True
+            existing.position_source = "manual"
             existing.last_synced_at = datetime.utcnow()
             results.append({"symbol": item.symbol, "action": "updated"})
         else:
@@ -122,6 +138,7 @@ def bulk_add_stocks(body: List[StockCreate], db: Session = Depends(get_db)):
                 avg_price=item.avg_price,
                 purchase_amount=purchase_amount,
                 current_price=current_price,
+                position_source="manual",
                 is_active=True,
                 last_synced_at=datetime.utcnow(),
             )
@@ -133,13 +150,129 @@ def bulk_add_stocks(body: List[StockCreate], db: Session = Depends(get_db)):
 
 @router.delete("/portfolio/stocks/{symbol}")
 def delete_stock(symbol: str, db: Session = Depends(get_db)):
-    """종목 삭제"""
-    stock = db.query(Stock).filter(Stock.symbol == symbol).first()
+    """종목 보유 제외 (soft delete)"""
+    stock = get_stock_by_symbol(db, symbol)
     if not stock:
         raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
     stock.is_active = False
+    stock.qty = 0
+    stock.purchase_amount = 0
+    mark_manual(stock)
     db.commit()
     return {"message": "종목 비활성화 완료", "symbol": symbol}
+
+
+class PositionUpdate(BaseModel):
+    qty: Optional[float] = None
+    avg_price: Optional[float] = None
+    name: Optional[str] = None
+    sector: Optional[str] = None
+    current_price: Optional[float] = None
+
+
+@router.patch("/portfolio/stocks/{symbol}")
+def update_stock_position(symbol: str, body: PositionUpdate, db: Session = Depends(get_db)):
+    """잔고 수동 수정 (수량·평단 등)"""
+    stock = get_stock_by_symbol(db, symbol)
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+
+    if body.name is not None:
+        stock.name = body.name.strip()
+    if body.sector is not None:
+        stock.sector = body.sector or None
+    if body.current_price is not None:
+        stock.current_price = body.current_price
+
+    if body.qty is not None or body.avg_price is not None:
+        qty = body.qty if body.qty is not None else stock.qty
+        avg = body.avg_price if body.avg_price is not None else stock.avg_price
+        try:
+            apply_position(stock, qty=qty, avg_price=avg)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    else:
+        mark_manual(stock)
+
+    db.commit()
+    db.refresh(stock)
+    return {"message": "잔고 수정 완료", "stock": serialize_stock(stock)}
+
+
+class TradeCreate(BaseModel):
+    side: str  # BUY | SELL
+    qty: float
+    price: float
+    traded_at: Optional[str] = None
+    memo: Optional[str] = None
+
+
+@router.post("/portfolio/stocks/{symbol}/trades")
+def create_stock_trade(symbol: str, body: TradeCreate, db: Session = Depends(get_db)):
+    """매수·매도 체결 반영"""
+    stock = get_stock_by_symbol(db, symbol)
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+
+    try:
+        trade = execute_trade(
+            db,
+            stock,
+            side=body.side,
+            qty=body.qty,
+            price=body.price,
+            traded_at=body.traded_at,
+            memo=body.memo,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    db.commit()
+    db.refresh(stock)
+    db.refresh(trade)
+    return {
+        "message": f"{'매수' if body.side.upper() == 'BUY' else '매도'} 반영 완료",
+        "stock": serialize_stock(stock),
+        "trade": {
+            "id": trade.id,
+            "side": trade.side,
+            "qty": trade.qty,
+            "price": trade.price,
+            "traded_at": trade.traded_at,
+            "memo": trade.memo,
+        },
+    }
+
+
+@router.get("/portfolio/stocks/{symbol}/trades")
+def list_stock_trades(symbol: str, limit: int = 30, db: Session = Depends(get_db)):
+    """종목별 매매 이력"""
+    stock = get_stock_by_symbol(db, symbol)
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+
+    trades = (
+        db.query(PortfolioTrade)
+        .filter(PortfolioTrade.stock_id == stock.id)
+        .order_by(PortfolioTrade.traded_at.desc(), PortfolioTrade.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "symbol": symbol,
+        "trades": [
+            {
+                "id": t.id,
+                "side": t.side,
+                "qty": t.qty,
+                "price": t.price,
+                "traded_at": t.traded_at,
+                "memo": t.memo,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+            }
+            for t in trades
+        ],
+    }
 
 
 # ─────────────────────────────────────────────
@@ -174,7 +307,16 @@ def get_stock_chart(
             symbol
         )
         if df.empty:
-            return {"symbol": symbol, "name": stock.name, "data": []}
+            return {
+                "symbol": symbol,
+                "name": stock.name,
+                "sector": stock.sector,
+                "avg_price": stock.avg_price or 0,
+                "current_price": stock.current_price or 0,
+                "profit_rate": stock.profit_rate,
+                "period": period,
+                "data": [],
+            }
 
         # 이동평균 계산
         closes = df.iloc[:, 3] if "종가" not in df.columns else df["종가"]
@@ -311,24 +453,7 @@ def get_portfolio_summary(db: Session = Depends(get_db)):
 def get_stocks(db: Session = Depends(get_db)):
     """보유 종목 전체 목록 (qty > 0)"""
     stocks = db.query(Stock).filter(Stock.is_active == True, Stock.qty > 0).all()
-    return [
-        {
-            "id": s.id,
-            "symbol": s.symbol,
-            "name": s.name,
-            "market": s.market,
-            "sector": s.sector,
-            "currency": s.currency,
-            "qty": s.qty,
-            "avg_price": s.avg_price,
-            "current_price": s.current_price,
-            "change_rate": s.change_rate,
-            "profit_rate": s.profit_rate,
-            "memo": s.memo,
-            "last_synced_at": s.last_synced_at.isoformat() if s.last_synced_at else None,
-        }
-        for s in stocks
-    ]
+    return [serialize_stock(s) for s in stocks]
 
 
 @router.post("/portfolio/sync")
@@ -642,9 +767,16 @@ def get_stock_issues(symbol: str, limit: int = 20, db: Session = Depends(get_db)
                 "id": i.id,
                 "issue_summary": i.issue_summary,
                 "sentiment": i.sentiment,
+                "event_date": i.event_date,
+                "match_source": i.match_source,
                 "source_type": i.content.source_type if i.content else None,
                 "source_url": i.content.source_url if i.content else None,
                 "source_title": i.content.source_title if i.content else None,
+                "published_at": (
+                    i.content.published_at.isoformat()
+                    if i.content and i.content.published_at
+                    else None
+                ),
                 "created_at": i.created_at.isoformat(),
                 "analyzed_at": (
                     i.content.analyzed_at.isoformat()

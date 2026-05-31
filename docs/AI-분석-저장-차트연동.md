@@ -84,7 +84,7 @@ flowchart TB
 | 단계 | AI | 입력 | 출력 |
 |------|-----|------|------|
 | **1. 문서 추출** | Gemini (`gemini-3.1-flash-lite`) | 자막 최대 30,000자 (없으면 URL) | `{ title, document, speakers, topics }` |
-| **2. 구조화 분석** | 사용자 선택 (기본 GPT) | `document` 최대 20,000자 + 보유종목 목록 | summary, macro, sector, stock_issues 등 JSON |
+| **2. 구조화 분석** | 사용자 선택 (기본 Gemini) | `document` 최대 20,000자 + 보유종목 목록 | summary, macro, sector, stock_issues 등 JSON |
 
 **1단계 프롬프트 요점** (`YOUTUBE_EXTRACT_PROMPT`):
 
@@ -320,22 +320,45 @@ enrichMovesWithSavedCauses()   → ai_search
 | `backend/core/signal_extractor.py` | IntelContent → Signal |
 | `backend/core/signal_related.py` | 공유 신호, 연관 점수 |
 | `backend/core/sector_peers.py` | 섹터 정규화 |
+| `backend/core/stock_resolver.py` | 종목명 → 코드 (별칭·정적·pykrx·DB) |
+| `backend/core/buy_score.py` | 매수 타이밍 스코어 (0~100) |
 | `backend/core/move_explainer.py` | 급변 AI 원인 + Signal 재사용 |
+| `backend/api/routes_signals.py` | buy-score, risk-radar API |
 | `frontend/lib/chartAnalysis.ts` | 급변 탐지, 원인 매칭 |
 | `frontend/app/chart/page.tsx` | 차트 UI |
 | `frontend/components/intel-detail-panel.tsx` | 분석·추출·원문 탭 |
 
 ---
 
-## 9. 제한사항
+## 9. 종목 해석 · 매수 스코어
 
-- Signal `event_date`는 분석 **실행일** 기준 (영상 게시일과 다를 수 있음)
-- AI `mentioned_stocks`는 종목명만인 경우가 많음 → pykrx 코드 매칭 실패 가능
+### 9.1 `stock_resolver`
+
+- `resolve_symbol(name, db)` — 별칭 정규화 → DB 보유 종목 → 정적 맵(대형주) → pykrx 일일 캐시
+- 사용처: `signal_extractor`, `watchlist_service`, `recommendations`
+
+### 9.2 매수 타이밍 스코어
+
+- API: `GET /api/intel/stocks/{symbol}/buy-score?days=30`
+- Signal DB만 사용 (추가 AI 호출 없음). 섹터·매크로·종목 이슈·기술(평단 대비) 가중 합산
+- 차트 페이지 상단에 등급(A~D)·구성 요소 표시
+
+### 9.3 포트폴리오 리스크 레이더
+
+- API: `GET /api/intel/portfolio/risk-radar?days=30`
+- 5축: 섹터집중도, 매크로노출, 부정이슈, 미설명급변, 분석공백
+
+---
+
+## 10. 제한사항
+
+- YouTube는 `published_at` 파싱 시도 → Signal `event_date` 우선순위: `published_at` → `analyzed_at` → `created_at`
+- AI `mentioned_stocks`는 여전히 비상장·오타 시 코드 매칭 실패 가능
 - 섹터/매크로 공유는 **참고용**이며 동일 원인을 보장하지 않음
 - `source_document` 없는 **구버전 분석**은 추출/원문 탭 비표시 → 재분석 필요
 
 ---
 
-## 10. 면책
+## 11. 면책
 
 본 시스템의 AI 분석·Signal 연결·차트 표시는 투자 판단의 근거가 될 수 없으며, 사용자의 참고용 정보 제공 목적입니다.

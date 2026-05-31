@@ -31,7 +31,7 @@ import {
   LayoutGrid,
   Sparkles,
 } from "lucide-react";
-import { api, signalApi, watchlistApi, type StockItem, type StockIssueTimeline, type AnalysisLog, type MoveCause, type StockSignal, type SharedSignalsResponse, type RelatedAnalysisItem } from "@/lib/api";
+import { api, signalApi, scoreApi, watchlistApi, type StockItem, type StockIssueTimeline, type AnalysisLog, type MoveCause, type StockSignal, type SharedSignalsResponse, type RelatedAnalysisItem, type BuyScoreResult } from "@/lib/api";
 import { streamAnalyze, AnalyzeStreamError } from "@/lib/analyzeStream";
 import {
   analyzeChart,
@@ -72,6 +72,13 @@ const PERIODS: { id: Period; label: string }[] = [
 const ANALYSIS_DISPLAY_DAYS = 22;
 const CHART_SYMBOL_STORAGE = "stockmind-chart-symbol";
 const CHART_PERIOD_STORAGE = "stockmind-chart-period";
+
+function fmtMoney(n: number, currency = "KRW") {
+  if (currency === "USD") {
+    return `$${n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  }
+  return `${Math.round(n).toLocaleString("ko-KR")}원`;
+}
 
 function ChartTooltip({
   active,
@@ -490,10 +497,11 @@ function IssueSourceIcon({ type }: { type: string | null }) {
 }
 
 function ExplainLogPanel({ logs, analyzing }: { logs: AnalysisLog[]; analyzing: boolean }) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [logs.length, analyzing]);
 
   if (!analyzing && logs.length === 0) return null;
@@ -511,22 +519,52 @@ function ExplainLogPanel({ logs, analyzing }: { logs: AnalysisLog[]; analyzing: 
           </span>
         )}
       </div>
-      <div className="p-3 font-mono text-[10px] space-y-0.5 max-h-36 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        className="p-3 font-mono text-[10px] space-y-0.5 max-h-36 overflow-y-auto"
+      >
         {logs.map((l, i) => (
           <div key={`${l.ts}-${i}`} className="flex gap-2">
             <span className="text-neutral-600 shrink-0">{l.ts}</span>
             <span className={levelColor(l.level)}>{l.msg}</span>
           </div>
         ))}
-        <div ref={bottomRef} />
       </div>
     </div>
   );
 }
 
+type PriorCauseContext = {
+  reason: string;
+  sourceTitle?: string | null;
+  sourceUrl?: string | null;
+  label: string;
+};
+
+function causeSourceLabel(m: SignificantMove): string {
+  if (m.matchedIssue) return "종목 이슈";
+  if (m.causeSource === "sector") return "섹터 공유";
+  if (m.causeSource === "macro") return "매크로";
+  if (m.causeSource === "ai_search") return "AI 원인";
+  return "가격 변동";
+}
+
+function snapshotPriorCause(move: SignificantMove): PriorCauseContext {
+  return {
+    reason: move.reason,
+    sourceTitle: move.sourceTitle,
+    sourceUrl: move.sourceUrl,
+    label: causeSourceLabel(move),
+  };
+}
+
+function logTs() {
+  return new Date().toLocaleTimeString("ko-KR", { hour12: false });
+}
+
 const EXPLAIN_PROVIDER_OPTIONS = [
-  { id: "openai" as const,  label: "GPT",    hint: "gpt-4o-mini" },
   { id: "gemini" as const,  label: "Gemini", hint: "gemini-3.1-flash-lite" },
+  { id: "openai" as const,  label: "GPT",    hint: "gpt-4o-mini" },
   { id: "claude" as const,  label: "Claude", hint: "claude-3-5-haiku" },
 ];
 
@@ -610,6 +648,7 @@ function PriceEventsPanel({
   onExplainMove,
   explainProvider,
   onProviderChange,
+  priorCauses,
 }: {
   moves: SignificantMove[];
   activeEventId: string | null;
@@ -618,6 +657,7 @@ function PriceEventsPanel({
   onExplainMove: (move: SignificantMove, force?: boolean) => void;
   explainProvider: "openai" | "gemini" | "claude";
   onProviderChange: (p: "openai" | "gemini" | "claude") => void;
+  priorCauses: Record<string, PriorCauseContext>;
 }) {
   return (
     <div className="space-y-3">
@@ -652,6 +692,15 @@ function PriceEventsPanel({
       {moves.map((m) => {
         const id = `event-${m.date}-${m.direction}`;
         const active = activeEventId === id;
+        const prior = priorCauses[m.date];
+        const isSearching = explainingDate === m.date;
+        const hasAiResult = m.causeSource === "ai_search" || !!prior;
+        const needsForce =
+          !!prior ||
+          m.matchedIssue ||
+          m.causeSource === "sector" ||
+          m.causeSource === "macro" ||
+          m.causeSource === "ai_search";
         return (
           <div
             key={id}
@@ -678,7 +727,11 @@ function PriceEventsPanel({
               >
                 {m.date.slice(5)} {m.changePct >= 0 ? "+" : ""}{m.changePct.toFixed(1)}%
               </span>
-              {m.matchedIssue ? (
+              {prior ? (
+                <span className="text-[10px] rounded-full bg-violet-100 text-violet-700 px-1.5 py-0.5 dark:bg-violet-900/30 dark:text-violet-400">
+                  AI 원인
+                </span>
+              ) : m.matchedIssue ? (
                 <span className="text-[10px] rounded-full bg-blue-100 text-blue-700 px-1.5 py-0.5 dark:bg-blue-900/30 dark:text-blue-400">
                   종목 이슈
                 </span>
@@ -704,53 +757,57 @@ function PriceEventsPanel({
                 <span className="text-[10px] text-red-600">부정</span>
               )}
             </div>
-            <p className="text-xs text-neutral-600 dark:text-neutral-400 line-clamp-2 leading-relaxed">
-              {m.reason}
+
+            {prior && (
+              <div className="mt-1.5 rounded-md border border-neutral-200 bg-neutral-50 px-2.5 py-2 dark:border-neutral-700 dark:bg-neutral-900/40">
+                <p className="text-[10px] font-medium text-neutral-500 dark:text-neutral-400">
+                  기존 연결 · {prior.label}
+                </p>
+                <p className="mt-0.5 text-xs text-neutral-600 dark:text-neutral-400 leading-relaxed">
+                  {prior.reason}
+                </p>
+                {prior.sourceTitle && (
+                  <p className="mt-1 text-[10px] text-neutral-400 truncate">{prior.sourceTitle}</p>
+                )}
+              </div>
+            )}
+
+            {prior && (
+              <p className="mt-2 text-[10px] font-medium text-violet-600 dark:text-violet-400">
+                AI 원인 검색
+              </p>
+            )}
+
+            <p className={`text-xs text-neutral-600 dark:text-neutral-400 leading-relaxed ${prior ? "mt-0.5" : ""} ${isSearching ? "italic text-neutral-400" : ""}`}>
+              {isSearching && !prior ? "AI가 원인을 분석하는 중입니다…" : m.reason}
             </p>
-            {m.sourceTitle && (
+            {m.sourceTitle && !isSearching && (
               <p className="mt-1 text-[10px] text-neutral-400 truncate">{m.sourceTitle}</p>
             )}
-            {!m.matchedIssue && m.causeSource !== "ai_search" && (
-              <div className="mt-2 flex justify-end" onClick={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  disabled={explainingDate === m.date}
-                  onClick={() => onExplainMove(m, false)}
-                  className="inline-flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2 py-1 text-[10px] font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50 dark:border-violet-700 dark:bg-violet-900/20 dark:text-violet-300 dark:hover:bg-violet-900/40"
-                >
-                  {explainingDate === m.date ? (
-                    <>
-                      <Loader2 size={10} className="animate-spin" /> 검색 중...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles size={10} />
-                      {m.causeSource === "sector" || m.causeSource === "macro"
-                        ? "종목별 원인 검색"
-                        : "AI 원인 검색"}
-                    </>
-                  )}
-                </button>
-              </div>
-            )}
-            {!m.matchedIssue && m.causeSource === "ai_search" && (
-              <div className="mt-2 flex justify-end" onClick={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  disabled={explainingDate === m.date}
-                  onClick={() => onExplainMove(m, true)}
-                  className="inline-flex items-center gap-1 rounded-md border border-neutral-300 px-2 py-1 text-[10px] text-neutral-600 hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-600 dark:text-neutral-400 dark:hover:bg-neutral-800"
-                >
-                  {explainingDate === m.date ? (
-                    <>
-                      <Loader2 size={10} className="animate-spin" /> 재검색 중...
-                    </>
-                  ) : (
-                    "다시 검색"
-                  )}
-                </button>
-              </div>
-            )}
+
+            <div className="mt-2 flex justify-end" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                disabled={isSearching}
+                onClick={() => onExplainMove(m, needsForce)}
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium disabled:opacity-50 ${
+                  hasAiResult
+                    ? "border-neutral-300 text-neutral-600 hover:bg-neutral-100 dark:border-neutral-600 dark:text-neutral-400 dark:hover:bg-neutral-800"
+                    : "border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-900/20 dark:text-violet-300 dark:hover:bg-violet-900/40"
+                }`}
+              >
+                {isSearching ? (
+                  <>
+                    <Loader2 size={10} className="animate-spin" /> 검색 중...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={10} />
+                    {hasAiResult ? "다시 검색" : "AI 원인 검색"}
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         );
       })}
@@ -782,7 +839,9 @@ function ChartContent() {
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [explainingDate, setExplainingDate] = useState<string | null>(null);
   const [explainLogs, setExplainLogs] = useState<AnalysisLog[]>([]);
-  const [explainProvider, setExplainProvider] = useState<"openai" | "gemini" | "claude">("openai");
+  const [explainProvider, setExplainProvider] = useState<"openai" | "gemini" | "claude">("gemini");
+  const [aiOverrideDates, setAiOverrideDates] = useState<Record<string, boolean>>({});
+  const [priorCauses, setPriorCauses] = useState<Record<string, PriorCauseContext>>({});
   const [activeSignalId, setActiveSignalId] = useState<string | null>(null);
   const [activeEventId, setActiveEventId] = useState<string | null>(null);
   const [showPriceEvents, setShowPriceEvents] = useState(true);
@@ -792,6 +851,8 @@ function ChartContent() {
       boolean
     >
   );
+  const [buyScore, setBuyScore] = useState<BuyScoreResult | null>(null);
+  const [buyScoreLoading, setBuyScoreLoading] = useState(false);
 
   const fetchPeriod = analysisMode ? "6M" : period;
 
@@ -880,7 +941,20 @@ function ChartContent() {
         setChartError("차트 데이터 형식이 올바르지 않습니다.");
         return;
       }
-      setChartData(data);
+      const normalized: ChartData = {
+        symbol: data.symbol,
+        name: data.name,
+        sector: data.sector ?? null,
+        avg_price: data.avg_price ?? 0,
+        current_price: data.current_price ?? 0,
+        profit_rate: data.profit_rate ?? 0,
+        period: data.period ?? fetchPeriod,
+        data: data.data,
+      };
+      setChartData(normalized);
+      if (data.data.length === 0) {
+        setChartError("표시할 차트 데이터가 없습니다. 종목코드·시장(KRX)을 확인하세요.");
+      }
     } catch (e) {
       setChartData(null);
       setChartError(e instanceof Error ? e.message : "차트를 불러오지 못했습니다.");
@@ -900,6 +974,19 @@ function ChartContent() {
     } finally {
       setIssuesLoading(false);
     }
+  }, [selectedSymbol]);
+
+  useEffect(() => {
+    if (!selectedSymbol) {
+      setBuyScore(null);
+      return;
+    }
+    setBuyScoreLoading(true);
+    scoreApi
+      .getBuyScore(selectedSymbol, 30)
+      .then(setBuyScore)
+      .catch(() => setBuyScore(null))
+      .finally(() => setBuyScoreLoading(false));
   }, [selectedSymbol]);
 
   const loadMoveCauses = useCallback(async () => {
@@ -964,11 +1051,42 @@ function ChartContent() {
       .finally(() => setRelatedLoading(false));
   }, [selectedSymbol, activeEventDate]);
 
+  useEffect(() => {
+    setAiOverrideDates({});
+    setPriorCauses({});
+    setExplainLogs([]);
+    setExplainingDate(null);
+  }, [selectedSymbol]);
+
   const handleExplainMove = useCallback(
     async (move: SignificantMove, force = false) => {
       if (!selectedSymbol || explainingDate) return;
+
+      const shouldSnapshot =
+        move.matchedIssue ||
+        move.causeSource === "sector" ||
+        move.causeSource === "macro" ||
+        move.causeSource === "ai_search";
+
+      setPriorCauses((prev) => {
+        if (prev[move.date] || !shouldSnapshot) return prev;
+        return { ...prev, [move.date]: snapshotPriorCause(move) };
+      });
+
+      if (shouldSnapshot || force) {
+        setAiOverrideDates((prev) => ({ ...prev, [move.date]: true }));
+      }
+
       setExplainingDate(move.date);
-      setExplainLogs([]);
+      setExplainLogs((prev) => [
+        ...prev,
+        {
+          level: "info",
+          msg: `── ${move.date} AI 원인 검색 ${force ? "(재검색)" : ""} ──`,
+          ts: logTs(),
+        },
+      ]);
+
       try {
         await streamAnalyze(
           `/intel/stocks/${selectedSymbol}/explain-move/stream`,
@@ -985,7 +1103,7 @@ function ChartContent() {
         await loadMoveCauses();
       } catch (e) {
         if (e instanceof AnalyzeStreamError) {
-          setExplainLogs(e.logs);
+          setExplainLogs((prev) => [...prev, ...e.logs]);
         }
       } finally {
         setExplainingDate(null);
@@ -1050,17 +1168,32 @@ function ChartContent() {
       source_title: m.source_title,
       channel_name: m.channel_name,
     }));
-    const { moves, annotations } = buildPriceEventsFromChart(
+    const { moves: rawMoves, annotations } = buildPriceEventsFromChart(
       chartData.data,
       issues,
       visibleDates,
       moveCauses,
       sectorForMatch,
       macroForMatch,
+      aiOverrideDates,
     );
+    const moves = rawMoves.map((move) => {
+      if (aiOverrideDates[move.date] && explainingDate === move.date) {
+        const saved = moveCauses.find((c) => c.event_date === move.date);
+        if (!saved) {
+          return {
+            ...move,
+            matchedIssue: false,
+            causeSource: "ai_search" as const,
+            reason: "AI가 원인을 분석하는 중입니다…",
+          };
+        }
+      }
+      return move;
+    });
     const eventByDate = Object.fromEntries(moves.map((m) => [m.date, m]));
     return { moves, annotations, eventByDate };
-  }, [chartData, issues, displayPlotData, moveCauses, sharedSignals]);
+  }, [chartData, issues, displayPlotData, moveCauses, sharedSignals, aiOverrideDates, explainingDate]);
 
   const analysisResult = useMemo(() => {
     if (!chartData?.data?.length) return null;
@@ -1080,6 +1213,17 @@ function ChartContent() {
   const periodReturn = firstClose > 0 ? ((lastClose - firstClose) / firstClose) * 100 : 0;
 
   const currentStock = stocks.find((s) => s.symbol === selectedSymbol);
+
+  const displayPrice = chartData?.current_price ?? currentStock?.current_price ?? 0;
+  const displayAvg = chartData?.avg_price ?? currentStock?.avg_price ?? 0;
+  const displayProfitRate = chartData?.profit_rate ?? currentStock?.profit_rate ?? 0;
+  const displayQty = currentStock?.qty ?? 0;
+  const displayCurrency = currentStock?.currency ?? "KRW";
+  const evalAmount =
+    currentStock?.current_value ?? displayQty * displayPrice;
+  const pnlAmount =
+    currentStock?.profit_loss ?? evalAmount - displayQty * displayAvg;
+  const hasHoldings = displayQty > 0;
 
   const maToggles = [
     { key: "ma5" as const, label: "MA5", color: "#f59e0b" },
@@ -1153,24 +1297,50 @@ function ChartContent() {
       </div>
 
       {chartData && currentStock && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
             <div className="text-xs text-neutral-400">현재가</div>
             <div className="mt-1 text-base font-bold text-neutral-900 dark:text-neutral-100">
-              {chartData.current_price.toLocaleString("ko-KR")}원
+              {fmtMoney(displayPrice, displayCurrency)}
             </div>
           </div>
           <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
             <div className="text-xs text-neutral-400">평균단가</div>
             <div className="mt-1 text-base font-bold text-neutral-900 dark:text-neutral-100">
-              {chartData.avg_price.toLocaleString("ko-KR")}원
+              {fmtMoney(displayAvg, displayCurrency)}
             </div>
           </div>
           <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
+            <div className="text-xs text-neutral-400">
+              평가액{hasHoldings ? ` · ${displayQty.toLocaleString()}주` : ""}
+            </div>
+            <div className="mt-1 text-base font-bold text-neutral-900 dark:text-neutral-100">
+              {hasHoldings ? fmtMoney(evalAmount, displayCurrency) : "—"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
+            <div className="text-xs text-neutral-400">차익액</div>
+            {hasHoldings ? (
+              <div
+                className={`mt-1 flex items-center gap-1 text-base font-bold ${
+                  pnlAmount >= 0
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-red-600 dark:text-red-400"
+                }`}
+              >
+                {pnlAmount >= 0 ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
+                {pnlAmount >= 0 ? "+" : "-"}
+                {fmtMoney(Math.abs(pnlAmount), displayCurrency)}
+              </div>
+            ) : (
+              <div className="mt-1 text-base font-bold text-neutral-400">—</div>
+            )}
+          </div>
+          <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
             <div className="text-xs text-neutral-400">보유 수익률</div>
-            <div className={`mt-1 flex items-center gap-1 text-base font-bold ${chartData.profit_rate >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-              {chartData.profit_rate >= 0 ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
-              {chartData.profit_rate >= 0 ? "+" : ""}{chartData.profit_rate.toFixed(2)}%
+            <div className={`mt-1 flex items-center gap-1 text-base font-bold ${displayProfitRate >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+              {displayProfitRate >= 0 ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
+              {displayProfitRate >= 0 ? "+" : ""}{displayProfitRate.toFixed(2)}%
             </div>
           </div>
           <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
@@ -1182,6 +1352,71 @@ function ChartContent() {
               {periodReturn >= 0 ? "+" : ""}{periodReturn.toFixed(2)}%
             </div>
           </div>
+        </div>
+      )}
+
+      {selectedSymbol && (
+        <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Sparkles size={16} className="text-violet-500" />
+              <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
+                매수 타이밍 스코어
+              </span>
+              <span className="text-xs text-neutral-400">Signal DB · 최근 30일</span>
+            </div>
+            {buyScoreLoading && <Loader2 size={14} className="animate-spin text-neutral-400" />}
+          </div>
+          {buyScore ? (
+            <div className="mt-3 space-y-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <span
+                    className={`text-3xl font-bold ${
+                      buyScore.score >= 70
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : buyScore.score >= 45
+                          ? "text-amber-600 dark:text-amber-400"
+                          : "text-red-600 dark:text-red-400"
+                    }`}
+                  >
+                    {buyScore.score}
+                  </span>
+                  <span className="ml-1 text-sm text-neutral-400">/ 100</span>
+                </div>
+                <span className="rounded-md bg-neutral-100 px-2 py-0.5 text-xs font-semibold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
+                  {buyScore.grade} · {buyScore.grade_label}
+                </span>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {buyScore.components.map((c) => (
+                  <div
+                    key={c.category}
+                    className="rounded-md border border-[var(--border-subtle)] px-3 py-2 text-xs"
+                  >
+                    <div className="flex justify-between text-neutral-500">
+                      <span>{c.label}</span>
+                      <span className="font-medium text-neutral-800 dark:text-neutral-200">
+                        {c.score > 0 ? "+" : ""}
+                        {c.score}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-neutral-600 dark:text-neutral-400 line-clamp-2">{c.reason}</p>
+                  </div>
+                ))}
+              </div>
+              {buyScore.warnings.length > 0 && (
+                <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-0.5">
+                  {buyScore.warnings.map((w, i) => (
+                    <li key={i}>⚠ {w}</li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-[10px] text-neutral-400">{buyScore.disclaimer}</p>
+            </div>
+          ) : !buyScoreLoading ? (
+            <p className="mt-2 text-xs text-neutral-400">스코어를 불러올 수 없습니다 (보유·관심 종목만 지원).</p>
+          ) : null}
         </div>
       )}
 
@@ -1322,7 +1557,7 @@ function ChartContent() {
             {priceEventData.moves.length > 0 && (
               <span className="ml-2 text-xs font-normal text-neutral-400">
                 {priceEventData.moves.length}건 · 종목{" "}
-                {priceEventData.moves.filter((m) => m.matchedIssue).length} · 섹터{" "}
+                {priceEventData.moves.filter((m) => m.issueMatchQuality === "strong").length} · 섹터{" "}
                 {priceEventData.moves.filter((m) => m.causeSource === "sector").length} · 매크로{" "}
                 {priceEventData.moves.filter((m) => m.causeSource === "macro").length} · AI{" "}
                 {priceEventData.moves.filter((m) => m.causeSource === "ai_search").length}
@@ -1342,6 +1577,7 @@ function ChartContent() {
             onExplainMove={handleExplainMove}
             explainProvider={explainProvider}
             onProviderChange={setExplainProvider}
+            priorCauses={priorCauses}
           />
           <ExplainLogPanel logs={explainLogs} analyzing={!!explainingDate} />
           <RelatedAnalysisPanel
@@ -1362,7 +1598,9 @@ function ChartContent() {
                 <span className="ml-2 text-xs font-normal text-neutral-400">{issues.length}건</span>
               )}
             </h2>
-            <p className="mt-0.5 text-xs text-neutral-400">이 종목이 언급된 분석 이력</p>
+            <p className="mt-0.5 text-xs text-neutral-400">
+            이 종목이 언급된 분석 — 이벤트 날짜가 있는 경우만 차트 급등·급락에 자동 연결
+          </p>
           </div>
           <button
             onClick={loadIssues}
@@ -1386,11 +1624,14 @@ function ChartContent() {
         ) : (
           <div className="divide-y divide-[var(--border-subtle)]">
             {issues.map((issue) => {
-              const linkedMove = priceEventData.moves.find((m) => m.issueId === issue.id);
+              const linkedMove = priceEventData.moves.find(
+                (m) => m.issueId === issue.id && m.issueMatchQuality === "strong",
+              );
               const linkedEventId = linkedMove
                 ? `event-${linkedMove.date}-${linkedMove.direction}`
                 : null;
               const isLinkedActive = linkedEventId && activeEventId === linkedEventId;
+              const hasEventDate = !!issue.event_date;
 
               return (
               <div
@@ -1439,6 +1680,15 @@ function ChartContent() {
                     {issue.sentiment === "NEUTRAL" && (
                       <span className="text-[10px] font-medium text-neutral-500 bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 rounded-full">중립</span>
                     )}
+                    {hasEventDate ? (
+                      <span className="text-[10px] text-neutral-400">
+                        이벤트 {issue.event_date}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] rounded-full bg-neutral-100 text-neutral-500 px-1.5 py-0.5 dark:bg-neutral-800">
+                        종목 분석 · 날짜 무관
+                      </span>
+                    )}
                   </div>
                   {issue.source_title && (
                     <p className="text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1 line-clamp-1">
@@ -1448,9 +1698,17 @@ function ChartContent() {
                   <p className="text-xs text-neutral-600 dark:text-neutral-400 leading-relaxed line-clamp-3">
                     {issue.issue_summary}
                   </p>
-                  {linkedEventId && (
+                  {linkedEventId ? (
                     <p className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
                       차트 급변 구간과 연결됨 · 클릭하여 차트에서 강조
+                    </p>
+                  ) : hasEventDate ? (
+                    <p className="mt-1 text-[10px] text-neutral-400">
+                      표시 기간 내 급등·급락과 날짜 불일치 — 종목 참고용
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[10px] text-neutral-400">
+                      차트 자동 연결 없음 — 이 종목 분석 이력만 표시
                     </p>
                   )}
                   {issue.source_url && (

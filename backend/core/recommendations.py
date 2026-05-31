@@ -12,6 +12,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from config.database import IntelContent, SectorSignal, StockSignal
+from core.stock_resolver import resolve_symbol
 
 
 def _parse_json_list(val: Optional[str]) -> list:
@@ -76,14 +77,17 @@ def get_stock_recommendations(
         q = q.filter(SectorSignal.sector == sector)
     for sig in q.all():
         for name in _parse_json_list(sig.mentioned_stocks):
+            nm = str(name).strip()
+            sym = resolve_symbol(nm, db)
             _touch(
-                str(name),
+                nm,
                 sector_name=sig.sector,
                 sentiment=sig.sentiment or "NEUTRAL",
                 summary=(sig.summary or "")[:200],
                 event_date=sig.event_date or since,
                 source_type="sector",
                 source_id=sig.id,
+                symbol=sym,
             )
 
     # StockSignal (비보유 포함)
@@ -97,6 +101,7 @@ def get_stock_recommendations(
             ).first()
             if not sec:
                 continue
+        sym = sig.symbol or resolve_symbol(sig.stock_name, db)
         _touch(
             sig.stock_name,
             sector_name=sector or "",
@@ -105,7 +110,7 @@ def get_stock_recommendations(
             event_date=sig.event_date or since,
             source_type="stock",
             source_id=sig.id,
-            symbol=sig.symbol,
+            symbol=sym,
         )
 
     results = sorted(agg.values(), key=lambda x: (-x["mention_count"], x.get("latest_date") or ""))

@@ -18,6 +18,7 @@ from config.database import (
     IntelContent, Stock,
     MacroSignal, SectorSignal, StockSignal,
 )
+from core.stock_resolver import resolve_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +51,13 @@ def _normalize_topic(raw_topic: str) -> str:
 
 
 def _get_event_date(content: IntelContent) -> Optional[str]:
-    """영상 분석 날짜 또는 생성 날짜를 YYYY-MM-DD 문자열로"""
-    dt = content.analyzed_at or content.created_at
-    if dt:
-        return dt.strftime("%Y-%m-%d")
+    """Signal event_date: 영상/기사 게시일 우선, 없으면 분석일"""
+    if content.published_at:
+        return content.published_at.strftime("%Y-%m-%d")
+    if content.analyzed_at:
+        return content.analyzed_at.strftime("%Y-%m-%d")
+    if content.created_at:
+        return content.created_at.strftime("%Y-%m-%d")
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
@@ -150,7 +154,9 @@ def extract_signals(content: IntelContent, db: Session, portfolio_symbols: set[s
             name = str(m).strip()
             if not name or name in saved_names:
                 continue
-            symbol = portfolio_name_map.get(name) or (name if name in portfolio_symbols else None)
+            symbol = portfolio_name_map.get(name)
+            if not symbol:
+                symbol = resolve_symbol(name, db)
             is_portfolio = symbol in portfolio_symbols if symbol else False
             db.add(StockSignal(
                 content_id=content.id,

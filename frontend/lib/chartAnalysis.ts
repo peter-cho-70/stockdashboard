@@ -1083,6 +1083,9 @@ export interface IssueForMatch {
   source_title: string | null;
   created_at: string;
   analyzed_at?: string | null;
+  published_at?: string | null;
+  event_date?: string | null;
+  match_source?: string | null;
 }
 
 export interface SignificantMove {
@@ -1097,6 +1100,8 @@ export interface SignificantMove {
   sourceTitle?: string | null;
   sentiment?: string;
   matchedIssue: boolean;
+  /** 차트에 Intel 이슈가 strong 날짜 매칭된 경우만 true */
+  issueMatchQuality?: "strong" | null;
   causeSource?: "intel" | "sector" | "macro" | "ai_search" | "none";
   signalId?: string;
   relatedCount?: number;
@@ -1121,6 +1126,9 @@ export interface SavedMoveCause {
 const MOVE_THRESHOLD_PCT = 5;
 const MOVE_VOL_MIN_PCT = 3;
 const MOVE_VOL_SPIKE_RATIO = 1.8;
+/** 차트 급등락 ↔ Intel 이슈 연결 허용 일수 (분석 실행일 제외, 이벤트 날짜만) */
+const ISSUE_CHART_DATE_WINDOW_DAYS = 3;
+/** @deprecated 섹터/매크로 공유 신호용 */
 const ISSUE_DATE_WINDOW_DAYS = 7;
 
 function parseYmd(dateStr: string): Date {
@@ -1285,7 +1293,22 @@ export function enrichMovesWithSharedSignals(
   });
 }
 
-/** Intel 이슈를 급등·급락 날짜에 매칭 */
+/** 차트 연결용 날짜 후보 (분석 실행일·created_at 제외) */
+export function issueChartDateCandidates(issue: IssueForMatch, refYear: number): string[] {
+  const dates = new Set<string>();
+  if (issue.event_date) {
+    dates.add(issue.event_date.slice(0, 10));
+    return [...dates];
+  }
+  if (issue.published_at) {
+    dates.add(issue.published_at.slice(0, 10));
+  }
+  for (const d of parseDatesFromText(issue.issue_summary, refYear)) dates.add(d);
+  for (const d of parseDatesFromText(issue.source_title ?? "", refYear)) dates.add(d);
+  return [...dates];
+}
+
+/** Intel 이슈를 급등·급락 날짜에 매칭 (이벤트 날짜 있는 경우만 차트 표시) */
 export function enrichMovesWithIssues(
   moves: Omit<SignificantMove, "reason" | "matchedIssue">[],
   issues: IssueForMatch[],
@@ -1293,18 +1316,15 @@ export function enrichMovesWithIssues(
   return moves.map((move) => {
     const refYear = parseInt(move.date.slice(0, 4), 10);
     let bestIssue: IssueForMatch | null = null;
-    let bestDist = ISSUE_DATE_WINDOW_DAYS + 1;
+    let bestDist = ISSUE_CHART_DATE_WINDOW_DAYS + 1;
 
     for (const issue of issues) {
-      const dateCandidates: string[] = [];
-      if (issue.analyzed_at) dateCandidates.push(issue.analyzed_at.slice(0, 10));
-      dateCandidates.push(issue.created_at.slice(0, 10));
-      dateCandidates.push(...parseDatesFromText(issue.issue_summary, refYear));
-      dateCandidates.push(...parseDatesFromText(issue.source_title ?? "", refYear));
+      const candidates = issueChartDateCandidates(issue, refYear);
+      if (candidates.length === 0) continue;
 
-      for (const cd of dateCandidates) {
+      for (const cd of candidates) {
         const dist = daysBetween(cd, move.date);
-        if (dist <= ISSUE_DATE_WINDOW_DAYS && dist < bestDist) {
+        if (dist <= ISSUE_CHART_DATE_WINDOW_DAYS && dist < bestDist) {
           bestDist = dist;
           bestIssue = issue;
         }
@@ -1320,6 +1340,7 @@ export function enrichMovesWithIssues(
         sourceTitle: bestIssue.source_title,
         sentiment: bestIssue.sentiment,
         matchedIssue: true,
+        issueMatchQuality: "strong",
         causeSource: "intel" as const,
       };
     }
@@ -1328,41 +1349,58 @@ export function enrichMovesWithIssues(
       ...move,
       reason: defaultMoveReason(move),
       matchedIssue: false,
+      issueMatchQuality: null,
       causeSource: "none" as const,
     };
   });
+}
+
+/** 타임라인: 차트 strong 매칭 여부 */
+export function isIssueChartLinked(
+  issue: IssueForMatch,
+  moves: SignificantMove[],
+): boolean {
+  const linked = moves.find((m) => m.issueId === issue.id && m.issueMatchQuality === "strong");
+  return !!linked;
+}
+
+/** 저장된 AI 원인을 급변 구간에 반영 */
+export function applySavedCauseToMove(move: SignificantMove, saved: SavedMoveCause): SignificantMove {
+  const firstUrl = saved.source_urls?.[0] ?? null;
+  const factorHint = saved.key_factors?.[0];
+  const causeSource =
+    saved.analysis_provider === "sector_reuse" ? ("sector" as const)
+    : saved.analysis_provider === "macro_reuse" ? ("macro" as const)
+    : ("ai_search" as const);
+  return {
+    ...move,
+    reason: saved.reason,
+    sentiment: saved.sentiment,
+    sourceUrl: firstUrl,
+    sourceTitle: factorHint ?? (saved.confidence ? `신뢰도 ${saved.confidence}` : "AI 원인 검색"),
+    matchedIssue: false,
+    causeSource,
+    savedCauseId: saved.id,
+    confidence: saved.confidence,
+  };
 }
 
 /** 저장된 AI 원인 검색 결과를 미매칭 급변 구간에 연결 */
 export function enrichMovesWithSavedCauses(
   moves: SignificantMove[],
   causes: SavedMoveCause[],
+  aiOverrideDates?: Record<string, boolean>,
 ): SignificantMove[] {
   if (causes.length === 0) return moves;
   const byDate = Object.fromEntries(causes.map((c) => [c.event_date, c]));
 
   return moves.map((move) => {
-    if (move.matchedIssue || move.causeSource === "sector" || move.causeSource === "macro") return move;
     const saved = byDate[move.date];
+    const forceAi = aiOverrideDates?.[move.date];
     if (!saved) return move;
-
-    const firstUrl = saved.source_urls?.[0] ?? null;
-    const factorHint = saved.key_factors?.[0];
-    const causeSource =
-      saved.analysis_provider === "sector_reuse" ? "sector" as const
-      : saved.analysis_provider === "macro_reuse" ? "macro" as const
-      : "ai_search" as const;
-    return {
-      ...move,
-      reason: saved.reason,
-      sentiment: saved.sentiment,
-      sourceUrl: firstUrl,
-      sourceTitle: factorHint ?? (saved.confidence ? `신뢰도 ${saved.confidence}` : "AI 원인 검색"),
-      matchedIssue: false,
-      causeSource,
-      savedCauseId: saved.id,
-      confidence: saved.confidence,
-    };
+    if (forceAi) return applySavedCauseToMove(move, saved);
+    if (move.matchedIssue || move.causeSource === "sector" || move.causeSource === "macro") return move;
+    return applySavedCauseToMove(move, saved);
   });
 }
 
@@ -1404,11 +1442,12 @@ export function buildPriceEventsFromChart(
   savedCauses: SavedMoveCause[] = [],
   sharedSectorSignals: SharedSignalForMatch[] = [],
   sharedMacroSignals: SharedSignalForMatch[] = [],
+  aiOverrideDates?: Record<string, boolean>,
 ): { moves: SignificantMove[]; annotations: ChartAnnotation[] } {
   const dates = visibleDates ?? data.map((d) => d.date);
   const withIssues = enrichMovesWithIssues(detectSignificantMoves(data), issues);
   const withShared = enrichMovesWithSharedSignals(withIssues, sharedSectorSignals, sharedMacroSignals);
-  const moves = sortMovesNewestFirst(enrichMovesWithSavedCauses(withShared, savedCauses));
+  const moves = sortMovesNewestFirst(enrichMovesWithSavedCauses(withShared, savedCauses, aiOverrideDates));
   const annotations = buildPriceEventAnnotations(moves, dates);
   return { moves, annotations };
 }

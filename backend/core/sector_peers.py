@@ -18,6 +18,7 @@ SECTOR_ALIASES: dict[str, list[str]] = {
     "소비재": ["소비재", "유통", "식품", "consumer"],
     "방산": ["방산", "국방", "defense"],
     "부동산·리츠": ["부동산", "리츠", "reit", "건설"],
+    "기타": ["기타", "etc", "other", "기타업종"],
 }
 
 # 종목코드 → canonical (stock.sector 비어 있을 때 fallback)

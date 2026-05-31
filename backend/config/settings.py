@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     anthropic_model: str = Field("claude-3-5-haiku-latest", env="ANTHROPIC_MODEL")
     openai_api_key: str = Field("", env="OPENAI_API_KEY")       # GPT (분석 옵션)
     openai_model: str = Field("gpt-4o-mini", env="OPENAI_MODEL")
-    analysis_provider: str = Field("openai", env="ANALYSIS_PROVIDER")  # claude|openai|gemini
+    analysis_provider: str = Field("gemini", env="ANALYSIS_PROVIDER")  # claude|openai|gemini
     youtube_api_key: str = Field("", env="YOUTUBE_API_KEY")
     ai_fallback: bool = Field(False, env="AI_FALLBACK")  # false=선택 provider만, true=429 시만 전환
     ai_skip_if_cached: bool = Field(True, env="AI_SKIP_IF_CACHED")

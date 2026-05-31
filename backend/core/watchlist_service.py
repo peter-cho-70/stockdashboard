@@ -4,34 +4,19 @@ core/watchlist_service.py
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from config.database import Stock, WatchlistItem
 from core.sector_peers import normalize_sector
+from core.stock_resolver import resolve_symbol
 
 
-def resolve_symbol_by_name(name: str) -> Optional[str]:
-    """KRX 종목명 → 종목코드 (pykrx)."""
-    try:
-        from pykrx import stock as krx
-        today = date.today().strftime("%Y%m%d")
-        for market in ("KOSPI", "KOSDAQ"):
-            try:
-                tickers = krx.get_market_ticker_list(today, market=market)
-            except Exception:
-                continue
-            for t in tickers:
-                try:
-                    if krx.get_market_ticker_name(t) == name:
-                        return t
-                except Exception:
-                    continue
-    except Exception:
-        pass
-    return None
+def resolve_symbol_by_name(name: str, db: Optional[Session] = None) -> Optional[str]:
+    """종목명 → 종목코드 (별칭·정적·pykrx)."""
+    return resolve_symbol(name, db)
 
 
 def ensure_stock_for_watch(
@@ -43,7 +28,7 @@ def ensure_stock_for_watch(
     market: str = "KRX",
 ) -> Optional[Stock]:
     """차트·시세용 Stock 레코드 확보 (qty=0)."""
-    sym = symbol or resolve_symbol_by_name(stock_name)
+    sym = symbol or resolve_symbol_by_name(stock_name, db)
     if sym:
         existing = db.query(Stock).filter(Stock.symbol == sym).first()
         if existing:
@@ -78,7 +63,7 @@ def add_to_watchlist(
     source_id: Optional[int] = None,
     memo: Optional[str] = None,
 ) -> WatchlistItem:
-    sym = symbol or resolve_symbol_by_name(stock_name)
+    sym = symbol or resolve_symbol_by_name(stock_name, db)
     existing = (
         db.query(WatchlistItem)
         .filter(WatchlistItem.stock_name == stock_name)

@@ -115,8 +115,8 @@ def _extract_json(text: str) -> Optional[dict]:
     return None
 
 
-def normalize_provider(provider: Optional[str], default: str = "claude") -> AnalysisProvider:
-    p = (provider or default or "claude").lower().strip()
+def normalize_provider(provider: Optional[str], default: str = "gemini") -> AnalysisProvider:
+    p = (provider or default or "gemini").lower().strip()
     if p not in ANALYSIS_PROVIDERS:
         raise ValueError(f"지원하지 않는 analysis_provider: {p} (claude|openai|gemini)")
     return p  # type: ignore[return-value]
@@ -187,7 +187,7 @@ class AIAnalyzer:
         gemini_extract_model: str = "gemini-3.1-flash-lite",
         gemini_prompt_cache: bool = True,
         gemini_cache_ttl: str = "3600s",
-        default_provider: str = "claude",
+        default_provider: str = "gemini",
         ai_fallback: bool = False,
         on_log: Optional[Callable[[dict], None]] = None,
     ):
@@ -484,6 +484,7 @@ class AIAnalyzer:
 
         portfolio = self._get_portfolio()
         title = self._get_youtube_title(url) or ""
+        published_at = self._get_youtube_published_at(url)
 
         transcript = self._get_youtube_transcript(url)
         if transcript:
@@ -523,6 +524,7 @@ class AIAnalyzer:
             analysis=analysis,
             portfolio=portfolio,
             source_document=document,
+            published_at=published_at,
         )
 
     def analyze_url(self, url: str, analysis_provider: Optional[str] = None) -> Optional[IntelContent]:
@@ -634,6 +636,31 @@ class AIAnalyzer:
         except Exception:
             return None
 
+    def _get_youtube_published_at(self, url: str) -> Optional[datetime]:
+        """YouTube 영상 게시일 (HTML datePublished 파싱)."""
+        try:
+            vid = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
+            if not vid:
+                return None
+            video_id = vid.group(1)
+            resp = httpx.get(
+                f"https://www.youtube.com/watch?v={video_id}",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=8,
+                follow_redirects=True,
+            )
+            for pattern in [
+                r'"datePublished"\s*:\s*"(\d{4}-\d{2}-\d{2})',
+                r'<meta itemprop="datePublished" content="(\d{4}-\d{2}-\d{2})',
+                r'"publishDate"\s*:\s*"(\d{4}-\d{2}-\d{2})',
+            ]:
+                m = re.search(pattern, resp.text)
+                if m:
+                    return datetime.strptime(m.group(1), "%Y-%m-%d")
+        except Exception as e:
+            self._log("warn", f"⚠️ YouTube 게시일 파싱 실패: {str(e)[:80]}")
+        return None
+
     def _fetch_article(self, url: str) -> Optional[str]:
         self._log("info", "🌐 기사 다운로드...")
         try:
@@ -663,6 +690,7 @@ class AIAnalyzer:
         source_title: str = "",
         channel_name: str = "",
         source_document: str = "",
+        published_at: Optional[datetime] = None,
     ) -> IntelContent:
         macro = analysis.get("macro_analysis") or {}
         sectors = analysis.get("sector_analysis") or []
@@ -672,6 +700,7 @@ class AIAnalyzer:
             source_url=source_url,
             source_title=source_title or analysis.get("summary", "")[:100],
             channel_name=channel_name,
+            published_at=published_at,
             source_document=source_document[:50000] if source_document else None,
             summary=analysis.get("summary", ""),
             key_points=json.dumps(analysis.get("key_points", []), ensure_ascii=False),
@@ -701,6 +730,8 @@ class AIAnalyzer:
         return content
 
     def _save_stock_issues(self, content: IntelContent, analysis: dict, portfolio: list[dict]):
+        from core.issue_event_date import resolve_issue_event_date
+
         issues_from_ai = analysis.get("stock_issues", [])
         self._log("info", f"🗂️ 보유 종목 매핑 ({len(issues_from_ai)}개)")
 
@@ -717,12 +748,18 @@ class AIAnalyzer:
             db_stock = db_stocks.get(symbol) or db_stocks.get(name_map.get(name, ""))
             if not db_stock:
                 continue
+            summary = issue.get("summary", analysis.get("summary", "")[:200])
+            ev_date, ev_src = resolve_issue_event_date(
+                content, summary, content.source_title or ""
+            )
             self.db.add(
                 StockIssue(
                     stock_id=db_stock.id,
                     content_id=content.id,
-                    issue_summary=issue.get("summary", analysis.get("summary", "")[:200]),
+                    issue_summary=summary,
                     sentiment=issue.get("sentiment", analysis.get("sentiment", "NEUTRAL")),
+                    event_date=ev_date,
+                    match_source=ev_src,
                 )
             )
             saved_symbols.add(db_stock.symbol)
@@ -733,12 +770,18 @@ class AIAnalyzer:
             if stock.symbol in saved_symbols:
                 continue
             if any(stock.symbol.upper() in str(m).upper() or stock.name in str(m) for m in mentioned):
+                summary = analysis.get("summary", "")[:200]
+                ev_date, ev_src = resolve_issue_event_date(
+                    content, summary, content.source_title or ""
+                )
                 self.db.add(
                     StockIssue(
                         stock_id=stock.id,
                         content_id=content.id,
-                        issue_summary=analysis.get("summary", "")[:200],
+                        issue_summary=summary,
                         sentiment=analysis.get("sentiment", "NEUTRAL"),
+                        event_date=ev_date,
+                        match_source=ev_src,
                     )
                 )
                 self._log("info", f"🔗 {stock.name} (fallback)")

@@ -54,12 +54,18 @@ class PortfolioManager:
             ).first()
 
             if existing:
-                # 기존 종목 업데이트
+                if (existing.position_source or "kis") == "manual":
+                    if item.current_price:
+                        existing.current_price = item.current_price
+                    existing.last_synced_at = datetime.utcnow()
+                    existing.updated_at = datetime.utcnow()
+                    updated += 1
+                    continue
                 existing.qty = item.qty
                 existing.avg_price = item.avg_price
                 existing.purchase_amount = item.purchase_amount
                 existing.current_price = item.current_price
-                existing.profit_rate = item.profit_rate
+                existing.position_source = "kis"
                 existing.last_synced_at = datetime.utcnow()
                 existing.updated_at = datetime.utcnow()
                 updated += 1
@@ -74,7 +80,7 @@ class PortfolioManager:
                     avg_price=item.avg_price,
                     purchase_amount=item.purchase_amount,
                     current_price=item.current_price,
-                    profit_rate=item.profit_rate,
+                    position_source="kis",
                     last_synced_at=datetime.utcnow(),
                 )
                 self.db.add(new_stock)
@@ -86,8 +92,11 @@ class PortfolioManager:
         active_stocks = self.db.query(Stock).filter(Stock.is_active == True).all()
         for stock in active_stocks:
             if stock.symbol not in synced_symbols:
+                if (stock.position_source or "kis") == "manual":
+                    continue
                 stock.is_active = False
                 stock.qty = 0
+                stock.purchase_amount = 0
                 removed += 1
                 logger.info(f"📤 종목 비활성화 (매도 감지): {stock.name} ({stock.symbol})")
 
