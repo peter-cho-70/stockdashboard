@@ -144,6 +144,16 @@ GET  /api/intel/stocks/{symbol}/shared-signals
 GET  /api/intel/stocks/{symbol}/related?date=YYYY-MM-DD
 GET  /api/intel/recommendations?sector=자동차
 POST /api/intel/signals/backfill
+GET  /api/intel/signal-accuracy          # Signal 적중률 (Phase 1)
+POST /api/intel/signal-outcomes/evaluate # 사후 검증 수동 실행
+GET  /api/intel/lead-lag                 # Lead-Lag 집계 (Phase 2)
+POST /api/intel/lead-lag/compute         # Lead-Lag 배치 실행
+GET  /api/intel/calendar?from=&to=       # 캘린더 허브 (월/주 메타)
+GET  /api/intel/calendar/day?date=       # 일 뷰 타임라인
+GET  /api/intel/digest?from=&to=         # 일일 digest 목록
+GET  /api/intel/digest/{date}            # digest 본문
+POST /api/intel/digest/generate          # 단일일 AI 요약 생성
+POST /api/intel/digest/backfill          # 기간 백필
 ```
 
 ### Phase 2.6 — 관심 종목 (Watchlist) ✅
@@ -173,13 +183,13 @@ DELETE /api/watchlist/{id}
 실제 보유 종목·금액을 숨기고 **샘플 포트폴리오**만 보여줍니다. 차트·AI Signal·buy-score는 **같은 종목코드**로 분석된 데이터를 그대로 사용합니다.
 
 1. `backend/data/demo_portfolio.json` — 약 10종목, `qty`·`avg_price` 수정
-2. API 서버: `DEMO_MODE=true`
-3. 프론트(Vercel): `NEXT_PUBLIC_DEMO_MODE=true` (상단 배너)
-4. 백엔드 재시작
+2. API `.env`: `DEMO_PIN=원하는숫자` (설정 화면 토글용)
+3. **설정 → 데모 모드**에서 PIN 입력 후 켜기/끄기 (재시작 불필요)
+4. 또는 초기값만 env: `DEMO_MODE=true` (DB에 저장 전까지)
 
 자세한 설명: `backend/data/README.md`
 
-> 개인용은 `DEMO_MODE=false` + 로컬/Render 영구 DB. 공개 URL만 데모를 켜세요.
+> 개인용은 데모 끄기 + 로컬/Render 영구 DB. 공개 URL만 데모를 켜세요.
 
 ---
 

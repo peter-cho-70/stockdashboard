@@ -8,6 +8,12 @@ api/routes_signals.py
   GET  /api/intel/stocks/{symbol}/shared-signals     — 종목 공유 신호 (차트)
   GET  /api/intel/stocks/{symbol}/related            — 날짜별 연관 분석
   POST /api/intel/signals/backfill                   — 기존 분석 백필
+  GET  /api/intel/signal-accuracy                    — Signal 적중률 집계
+  POST /api/intel/signal-outcomes/evaluate           — 사후 검증 수동 실행
+  GET  /api/intel/lead-lag                         — Lead-Lag 집계
+  POST /api/intel/lead-lag/compute                   — Lead-Lag 배치 실행
+  GET  /api/intel/calendar                         — 캘린더 허브 (기간 메타)
+  GET  /api/intel/calendar/day                     — 일 뷰 상세
 """
 import json
 from collections import defaultdict
@@ -329,6 +335,133 @@ def backfill_signals(db: Session = Depends(get_db)):
     """기존 IntelContent 전체 백필 (1회성)"""
     result = backfill_all_signals(db)
     return {"ok": True, "result": result}
+
+
+@signals_router.get("/intel/signal-accuracy")
+def get_signal_accuracy_api(db: Session = Depends(get_db)):
+    """Signal → N일 후 주가 방향 적중률 (과거 데이터 기반)."""
+    from core.signal_tracker import get_signal_accuracy
+
+    return get_signal_accuracy(db)
+
+
+@signals_router.post("/intel/signal-outcomes/evaluate")
+def run_signal_outcome_evaluation(db: Session = Depends(get_db)):
+    """성숙한 Signal에 대해 사후 검증 배치 실행 (스케줄러와 동일)."""
+    from core.signal_tracker import evaluate_signal_outcomes, get_signal_accuracy
+
+    stats = evaluate_signal_outcomes(db)
+    return {"ok": True, "evaluation": stats, "accuracy": get_signal_accuracy(db)}
+
+
+@signals_router.get("/intel/lead-lag")
+def get_lead_lag_api(
+    sector: Optional[str] = Query(None),
+    symbol: Optional[str] = Query(None),
+    aligned_only: bool = Query(True),
+    window_days: int = Query(15, ge=3, le=30),
+    db: Session = Depends(get_db),
+):
+    """PriceMoveCause × Signal 선행 일수 집계."""
+    from core.lead_lag import get_lead_lag_summary
+
+    return get_lead_lag_summary(
+        db,
+        sector=sector,
+        symbol=symbol,
+        aligned_only=aligned_only,
+        window_days=window_days,
+    )
+
+
+@signals_router.post("/intel/lead-lag/compute")
+def compute_lead_lag_api(
+    window_days: int = Query(15, ge=3, le=30),
+    db: Session = Depends(get_db),
+):
+    """Lead-Lag 매칭 배치 실행 (스케줄러와 동일)."""
+    from core.lead_lag import compute_lead_lag, get_lead_lag_summary
+
+    stats = compute_lead_lag(db, window_days=window_days)
+    return {
+        "ok": True,
+        "computation": stats,
+        "summary": get_lead_lag_summary(db, window_days=window_days),
+    }
+
+
+def _parse_kinds_param(kinds: Optional[str]) -> Optional[set[str]]:
+    if not kinds or not kinds.strip():
+        return None
+    return {k.strip() for k in kinds.split(",") if k.strip()}
+
+
+@signals_router.get("/intel/calendar")
+def get_intel_calendar(
+    from_date: str = Query(..., alias="from", description="YYYY-MM-DD"),
+    to_date: str = Query(..., alias="to", description="YYYY-MM-DD"),
+    date_mode: str = Query("event", description="event | analyzed"),
+    kinds: Optional[str] = Query(None, description="macro,sector,stock,..."),
+    portfolio_only: bool = Query(False),
+    watchlist_only: bool = Query(False),
+    include_events: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """통합 캘린더 — 일별 메타(건수·감성). include_events=true 시 events 포함."""
+    if date_mode not in ("event", "analyzed"):
+        raise HTTPException(status_code=400, detail="date_mode는 event 또는 analyzed")
+    from core.intel_calendar import build_calendar_response
+
+    return build_calendar_response(
+        db,
+        from_date,
+        to_date,
+        date_mode=date_mode,
+        kinds=_parse_kinds_param(kinds),
+        portfolio_only=portfolio_only,
+        watchlist_only=watchlist_only,
+        include_events=include_events,
+    )
+
+
+@signals_router.post("/intel/calendar/economic/sync")
+def sync_economic_calendar_endpoint(
+    from_date: str = Query(..., alias="from", description="YYYY-MM-DD"),
+    to_date: str = Query(..., alias="to", description="YYYY-MM-DD"),
+    force: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """주요 경제 일정 검색·추출 후 DB 반영."""
+    from core.economic_calendar import sync_economic_calendar
+
+    try:
+        return sync_economic_calendar(db, from_date, to_date, force=force)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:500]) from e
+
+
+@signals_router.get("/intel/calendar/day")
+def get_intel_calendar_day(
+    date: str = Query(..., description="YYYY-MM-DD"),
+    date_mode: str = Query("event"),
+    kinds: Optional[str] = Query(None),
+    portfolio_only: bool = Query(False),
+    watchlist_only: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """일 뷰 — 당일 이벤트 타임라인 + 요약."""
+    if date_mode not in ("event", "analyzed"):
+        raise HTTPException(status_code=400, detail="date_mode는 event 또는 analyzed")
+    from core.intel_calendar import build_calendar_day_response
+
+    return build_calendar_day_response(
+        db,
+        date,
+        date_mode=date_mode,
+        kinds=_parse_kinds_param(kinds),
+        portfolio_only=portfolio_only,
+        watchlist_only=watchlist_only,
+    )
 
 
 @signals_router.get("/intel/stocks/{symbol}/buy-score")

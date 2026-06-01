@@ -39,16 +39,22 @@ def run_intel_analysis(
     analysis_provider: Optional[str],
     force_reanalyze: bool = False,
     skip_if_cached: bool = True,
+    market_impact: bool = True,
+    detailed_extract: bool = False,
+    domain_id: int | None = None,
     on_log: LogCallback,
 ) -> tuple[Any, list]:
     """동기 분석 실행 (워커 스레드에서 호출)."""
     db = SessionLocal()
     try:
+        is_youtube = bool(
+            url and ("youtube.com" in url or "youtu.be" in url)
+        )
         cached = try_cached_intel(
             db,
             url,
             skip_if_cached=skip_if_cached,
-            force_reanalyze=force_reanalyze,
+            force_reanalyze=force_reanalyze or (detailed_extract and is_youtube),
             on_log=on_log,
         )
         if cached:
@@ -56,13 +62,30 @@ def run_intel_analysis(
 
         analyzer = create_analyzer(db, on_log=on_log)
         if url:
-            is_youtube = "youtube.com" in url or "youtu.be" in url
             if is_youtube:
-                content = analyzer.analyze_youtube(url, channel_name, analysis_provider)
+                content = analyzer.analyze_youtube(
+                    url,
+                    channel_name,
+                    analysis_provider,
+                    market_impact=market_impact,
+                    detailed_extract=detailed_extract,
+                    domain_id=domain_id,
+                )
             else:
-                content = analyzer.analyze_url(url, analysis_provider)
+                content = analyzer.analyze_url(
+                    url,
+                    analysis_provider,
+                    market_impact=market_impact,
+                    domain_id=domain_id,
+                )
         else:
-            content = analyzer.analyze_text(text or "", title, analysis_provider)
+            content = analyzer.analyze_text(
+                text or "",
+                title,
+                analysis_provider,
+                market_impact=market_impact,
+                domain_id=domain_id,
+            )
         return content, analyzer.logs
     finally:
         db.close()
@@ -75,6 +98,9 @@ def run_youtube_analysis(
     analysis_provider: Optional[str],
     force_reanalyze: bool = False,
     skip_if_cached: bool = True,
+    market_impact: bool = True,
+    detailed_extract: bool = False,
+    domain_id: int | None = None,
     on_log: LogCallback,
 ) -> tuple[Any, list]:
     db = SessionLocal()
@@ -83,14 +109,21 @@ def run_youtube_analysis(
             db,
             url,
             skip_if_cached=skip_if_cached,
-            force_reanalyze=force_reanalyze,
+            force_reanalyze=force_reanalyze or detailed_extract,
             on_log=on_log,
         )
         if cached:
             return cached
 
         analyzer = create_analyzer(db, on_log=on_log)
-        content = analyzer.analyze_youtube(url, channel_name, analysis_provider)
+        content = analyzer.analyze_youtube(
+            url,
+            channel_name,
+            analysis_provider,
+            market_impact=market_impact,
+            detailed_extract=detailed_extract,
+            domain_id=domain_id,
+        )
         return content, analyzer.logs
     finally:
         db.close()

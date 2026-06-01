@@ -77,11 +77,36 @@ async def job_us_market_close():
         db.close()
 
 
+async def job_us_morning_report():
+    """[08:05 KST] 미국 증시 아침 리포트 생성 (전일 마감 반영)"""
+    logger.info("⏰ [스케줄] 미국 증시 아침 리포트 생성 (08:05)")
+    db = SessionLocal()
+    try:
+        from core.us_market_report import generate_us_morning_report
+
+        report = generate_us_morning_report(db)
+        logger.info("✅ 미국 아침 리포트: %s status=%s", report.get("report_date"), report.get("status"))
+    except Exception as e:
+        logger.error("❌ 미국 아침 리포트 생성 실패: %s", e)
+    finally:
+        db.close()
+
+
 async def job_pre_domestic_open():
-    """[08:50 KST] 전일 Signal 브리핑 로그"""
+    """[08:50 KST] 전일 Signal 브리핑 로그 + 리포트 백업 생성"""
     logger.info("⏰ [스케줄] 국내 장 시작 전 준비 (08:50)")
     db = SessionLocal()
     try:
+        from core.us_market_report import _kst_today, generate_us_morning_report, get_report
+
+        today = _kst_today()
+        if not get_report(db, today):
+            try:
+                generate_us_morning_report(db, report_date=today)
+                logger.info("📰 [오전] 미국 리포트 백업 생성 완료")
+            except Exception as e:
+                logger.warning("⚠️ [오전] 미국 리포트 백업 실패: %s", e)
+
         now = datetime.now()
         yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -141,9 +166,102 @@ async def job_health_check():
     logger.info("💚 헬스 체크: %s", datetime.now().strftime("%Y-%m-%d %H:%M"))
 
 
+async def job_compute_lead_lag():
+    """[01:00 KST] PriceMoveCause × Signal Lead-Lag 갱신"""
+    logger.info("⏰ [스케줄] Lead-Lag 분석 시작 (01:00)")
+    db = SessionLocal()
+    try:
+        from core.lead_lag import compute_lead_lag, get_lead_lag_summary
+
+        stats = compute_lead_lag(db)
+        summary = get_lead_lag_summary(db)
+        logger.info(
+            "✅ Lead-Lag: created=%s total=%s insights=%s",
+            stats.get("created", 0),
+            stats.get("total_pairs", 0),
+            len(summary.get("insights") or []),
+        )
+    except Exception as e:
+        logger.error("❌ Lead-Lag 분석 실패: %s", e)
+    finally:
+        db.close()
+
+
+async def job_check_signal_outcomes():
+    """[00:30 KST] N일 지난 Signal의 주가 결과·적중 여부 기록"""
+    logger.info("⏰ [스케줄] Signal 적중률 사후 검증 시작 (00:30)")
+    db = SessionLocal()
+    try:
+        from core.signal_tracker import evaluate_signal_outcomes, get_signal_accuracy
+
+        stats = evaluate_signal_outcomes(db)
+        acc = get_signal_accuracy(db)
+        logger.info(
+            "✅ Signal outcomes: created=%s total=%s sector_hit=%s",
+            stats.get("created", 0),
+            stats.get("total_outcomes", 0),
+            (acc.get("sector") or {}).get("overall_hit_rate"),
+        )
+    except Exception as e:
+        logger.error("❌ Signal 적중률 검증 실패: %s", e)
+    finally:
+        db.close()
+
+
+async def job_sync_economic_calendar():
+    """[06:30 KST] 향후 6주 경제 일정 검색·동기화"""
+    logger.info("⏰ [스케줄] 경제 일정 동기화 (06:30)")
+    db = SessionLocal()
+    try:
+        from core.economic_calendar import sync_economic_calendar
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        end = (datetime.now() + timedelta(days=42)).strftime("%Y-%m-%d")
+        result = sync_economic_calendar(db, today, end, force=False)
+        logger.info("✅ 경제 일정: %s", result)
+    except Exception as e:
+        logger.error("❌ 경제 일정 동기화 실패: %s", e)
+    finally:
+        db.close()
+
+
+async def job_generate_daily_digest():
+    """[00:45 KST] 어제 일일 AI digest 생성"""
+    logger.info("⏰ [스케줄] 일일 digest 생성 시작 (00:45)")
+    db = SessionLocal()
+    try:
+        from core.demo_mode import is_demo_mode
+        from core.intel_digest import generate_yesterday_digest
+
+        if is_demo_mode(db):
+            logger.info("ℹ️ 데모 모드 — digest 스케줄 생략")
+            return
+        row = generate_yesterday_digest(db)
+        if row:
+            logger.info("✅ digest %s status=%s", row.date, row.status)
+    except Exception as e:
+        logger.error("❌ 일일 digest 생성 실패: %s", e)
+    finally:
+        db.close()
+
+
 def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
+    scheduler.add_job(
+        job_sync_economic_calendar,
+        CronTrigger(hour=6, minute=30, timezone="Asia/Seoul"),
+        id="sync_economic_calendar",
+        name="경제 일정 동기화",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_us_morning_report,
+        CronTrigger(hour=8, minute=5, day_of_week="mon-fri", timezone="Asia/Seoul"),
+        id="us_morning_report",
+        name="미국 증시 아침 리포트",
+        replace_existing=True,
+    )
     scheduler.add_job(
         job_pre_domestic_open,
         CronTrigger(hour=8, minute=50, day_of_week="mon-fri", timezone="Asia/Seoul"),
@@ -173,12 +291,37 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
     scheduler.add_job(
+        job_check_signal_outcomes,
+        CronTrigger(hour=0, minute=30, timezone="Asia/Seoul"),
+        id="check_signal_outcomes",
+        name="Signal 적중률 사후 검증",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_generate_daily_digest,
+        CronTrigger(hour=0, minute=45, timezone="Asia/Seoul"),
+        id="generate_daily_digest",
+        name="일일 AI digest 생성",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_compute_lead_lag,
+        CronTrigger(hour=1, minute=0, timezone="Asia/Seoul"),
+        id="compute_lead_lag",
+        name="Signal Lead-Lag 분석",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         job_health_check,
         CronTrigger(minute=0, timezone="Asia/Seoul"),
         id="health_check",
         name="시스템 헬스 체크",
         replace_existing=True,
     )
+
+    from scheduler.knowledge_jobs import register_knowledge_jobs
+
+    register_knowledge_jobs(scheduler)
 
     logger.info("✅ 스케줄러 작업 등록 완료")
     for job in scheduler.get_jobs():

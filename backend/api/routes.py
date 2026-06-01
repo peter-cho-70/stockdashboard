@@ -42,6 +42,11 @@ from core.demo_mode import (
     build_demo_stocks,
     build_demo_history,
     demo_info,
+    get_demo_mode_status,
+    set_demo_mode_db,
+    verify_demo_pin,
+    ensure_demo_anchor_stocks,
+    load_demo_config,
 )
 
 settings = get_settings()
@@ -61,10 +66,36 @@ def health_check():
 
 
 @router.get("/demo/info")
-def get_demo_info():
-    if not is_demo_mode():
+def get_demo_info(db: Session = Depends(get_db)):
+    if not is_demo_mode(db):
         return {"demo_mode": False}
     return demo_info()
+
+
+class DemoModeUpdate(BaseModel):
+    enabled: bool
+    pin: str
+
+
+@router.get("/settings/demo-mode")
+def get_demo_mode_setting(db: Session = Depends(get_db)):
+    """데모 모드 상태 (PIN 불필요)."""
+    return get_demo_mode_status(db)
+
+
+@router.patch("/settings/demo-mode")
+def update_demo_mode_setting(body: DemoModeUpdate, db: Session = Depends(get_db)):
+    """PIN 확인 후 데모 모드 전환 (재시작 불필요)."""
+    verify_demo_pin(body.pin)
+    set_demo_mode_db(db, body.enabled)
+    if body.enabled:
+        load_demo_config(force_reload=True)
+        ensure_demo_anchor_stocks(db)
+    status = get_demo_mode_status(db)
+    return {
+        **status,
+        "message": "데모 모드가 적용되었습니다. 페이지를 새로고침하세요.",
+    }
 
 
 # ─────────────────────────────────────────────
@@ -705,6 +736,9 @@ class AnalyzeRequest(BaseModel):
     channel_name: Optional[str] = None  # 유튜브 채널명 (선택)
     analysis_provider: Optional[str] = None  # claude | openai | gemini
     force_reanalyze: bool = False       # true면 캐시 무시하고 AI 재호출
+    market_impact: bool = False         # True=주가 반영, False=지식(기본)
+    detailed_extract: bool = False      # YouTube: 약 3배 상세 추출
+    domain_id: Optional[int] = None     # 지식 분석 시 분야 ID
 
 
 class ReanalyzeRequest(BaseModel):
@@ -729,16 +763,19 @@ def analyze_content(body: AnalyzeRequest, db: Session = Depends(get_db)):
     is_youtube = body.url and ("youtube.com" in body.url or "youtu.be" in body.url)
     if is_youtube and not settings.gemini_api_key:
         raise HTTPException(status_code=400, detail="YouTube 분석에 GEMINI_API_KEY가 필요합니다.")
-    try:
-        ensure_analysis_available(settings, body.analysis_provider)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    if not body.market_impact and not settings.gemini_api_key:
+        raise HTTPException(status_code=400, detail="지식 분석(요약 추출)에 GEMINI_API_KEY가 필요합니다.")
+    if body.market_impact:
+        try:
+            ensure_analysis_available(settings, body.analysis_provider)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     cached = try_cached_intel(
         db,
         body.url,
         skip_if_cached=settings.ai_skip_if_cached,
-        force_reanalyze=body.force_reanalyze,
+        force_reanalyze=body.force_reanalyze or (body.detailed_extract and bool(is_youtube)),
     )
     if cached:
         content, logs = cached
@@ -750,11 +787,29 @@ def analyze_content(body: AnalyzeRequest, db: Session = Depends(get_db)):
     try:
         if body.url:
             if is_youtube:
-                content = analyzer.analyze_youtube(body.url, body.channel_name or "", provider)
+                content = analyzer.analyze_youtube(
+                    body.url,
+                    body.channel_name or "",
+                    provider,
+                    market_impact=body.market_impact,
+                    detailed_extract=body.detailed_extract,
+                    domain_id=body.domain_id if not body.market_impact else None,
+                )
             else:
-                content = analyzer.analyze_url(body.url, provider)
+                content = analyzer.analyze_url(
+                    body.url,
+                    provider,
+                    market_impact=body.market_impact,
+                    domain_id=body.domain_id if not body.market_impact else None,
+                )
         else:
-            content = analyzer.analyze_text(body.text, body.title or "", provider)
+            content = analyzer.analyze_text(
+                body.text,
+                body.title or "",
+                provider,
+                market_impact=body.market_impact,
+                domain_id=body.domain_id if not body.market_impact else None,
+            )
     except ProviderQuotaError as e:
         handle_provider_runtime_error(e)
     except RuntimeError as e:
@@ -778,10 +833,13 @@ async def analyze_content_stream(body: AnalyzeRequest):
     is_youtube = body.url and ("youtube.com" in body.url or "youtu.be" in body.url)
     if is_youtube and not settings.gemini_api_key:
         raise HTTPException(status_code=400, detail="YouTube 분석에 GEMINI_API_KEY가 필요합니다.")
-    try:
-        ensure_analysis_available(settings, body.analysis_provider)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    if not body.market_impact and not settings.gemini_api_key:
+        raise HTTPException(status_code=400, detail="지식 분석(요약 추출)에 GEMINI_API_KEY가 필요합니다.")
+    if body.market_impact:
+        try:
+            ensure_analysis_available(settings, body.analysis_provider)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     return await stream_analysis(
         lambda on_log: run_intel_analysis(
@@ -792,6 +850,9 @@ async def analyze_content_stream(body: AnalyzeRequest):
             analysis_provider=body.analysis_provider,
             force_reanalyze=body.force_reanalyze,
             skip_if_cached=settings.ai_skip_if_cached,
+            market_impact=body.market_impact,
+            detailed_extract=body.detailed_extract,
+            domain_id=body.domain_id if not body.market_impact else None,
             on_log=on_log,
         )
     )
@@ -878,6 +939,29 @@ def get_intel_content(content_id: int, db: Session = Depends(get_db)):
     if not c:
         raise HTTPException(status_code=404, detail="콘텐츠 없음")
     return serialize_intel(c, db)
+
+
+class IntelContentScopeBody(BaseModel):
+    scope: str  # knowledge | market
+
+
+@router.patch("/intel/contents/{content_id}/scope")
+def patch_intel_content_scope(
+    content_id: int,
+    body: IntelContentScopeBody,
+    db: Session = Depends(get_db),
+):
+    """지식 ↔ 주가 반영 전환. knowledge 시 Signal·이슈 삭제."""
+    from core.content_scope import SCOPE_KNOWLEDGE, SCOPE_MARKET, set_content_scope
+
+    scope = (body.scope or "").strip().lower()
+    if scope not in (SCOPE_KNOWLEDGE, SCOPE_MARKET):
+        raise HTTPException(status_code=400, detail="scope는 knowledge 또는 market")
+    try:
+        content = set_content_scope(db, content_id, scope)  # type: ignore[arg-type]
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"ok": True, "content": serialize_intel(content, db)}
 
 
 @router.get("/intel/by-url")

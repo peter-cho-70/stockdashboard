@@ -16,8 +16,11 @@ from config.settings import get_settings
 from api.routes import router
 from api.routes_gains import gains_router
 from api.routes_youtube import youtube_router
+from api.routes_knowledge import knowledge_router
 from api.routes_signals import signals_router
 from api.routes_watchlist import watchlist_router
+from api.routes_digest import digest_router
+from api.routes_market import market_router
 from scheduler.jobs import create_scheduler
 
 # 로깅 설정
@@ -94,6 +97,9 @@ app.include_router(gains_router, prefix="/api")
 app.include_router(youtube_router, prefix="/api")
 app.include_router(signals_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
+app.include_router(digest_router, prefix="/api")
+app.include_router(knowledge_router, prefix="/api")
+app.include_router(market_router, prefix="/api")
 
 
 @app.get("/")

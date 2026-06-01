@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { KeyRound, Bell, Server, CheckCircle2, XCircle, Loader2, Eye } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, settingsApi, type DemoModeStatus } from "@/lib/api";
 
 function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -28,6 +28,48 @@ function Field({ label, description, children }: { label: string; description?: 
 
 export default function SettingsPage() {
   const [apiStatus, setApiStatus] = useState<"idle" | "checking" | "ok" | "error">("idle");
+  const [demoStatus, setDemoStatus] = useState<DemoModeStatus | null>(null);
+  const [demoLoading, setDemoLoading] = useState(true);
+  const [demoEnabled, setDemoEnabled] = useState(false);
+  const [demoPin, setDemoPin] = useState("");
+  const [demoSaving, setDemoSaving] = useState(false);
+  const [demoError, setDemoError] = useState<string | null>(null);
+
+  const loadDemoStatus = useCallback(async () => {
+    setDemoLoading(true);
+    setDemoError(null);
+    try {
+      const s = await settingsApi.getDemoMode();
+      setDemoStatus(s);
+      setDemoEnabled(s.demo_mode);
+    } catch {
+      setDemoError("데모 모드 상태를 불러오지 못했습니다.");
+    } finally {
+      setDemoLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadDemoStatus();
+  }, [loadDemoStatus]);
+
+  async function applyDemoMode() {
+    if (!demoPin.trim()) {
+      setDemoError("PIN을 입력하세요.");
+      return;
+    }
+    setDemoSaving(true);
+    setDemoError(null);
+    try {
+      await settingsApi.setDemoMode(demoEnabled, demoPin.trim());
+      setDemoPin("");
+      window.location.reload();
+    } catch (e) {
+      setDemoError(e instanceof Error ? e.message : "적용에 실패했습니다.");
+    } finally {
+      setDemoSaving(false);
+    }
+  }
 
   async function checkApi() {
     setApiStatus("checking");
@@ -80,12 +122,70 @@ export default function SettingsPage() {
           실제 보유를 숨기고 <code className="text-xs">backend/data/demo_portfolio.json</code> 의 샘플 종목·수량만
           표시합니다. 차트·AI 분석은 동일 종목코드 데이터를 사용합니다.
         </p>
+        {demoLoading ? (
+          <p className="flex items-center gap-2 text-sm text-neutral-500">
+            <Loader2 size={14} className="animate-spin" /> 상태 불러오는 중…
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
+                  데모 모드 {demoStatus?.demo_mode ? "켜짐" : "꺼짐"}
+                </p>
+                <p className="text-xs text-neutral-500">
+                  적용 출처: {demoStatus?.source === "database" ? "설정 저장값" : "환경 변수 DEMO_MODE"}
+                  {demoStatus?.env_default && demoStatus?.source === "env" ? " (true)" : ""}
+                </p>
+              </div>
+              <label className="relative inline-flex cursor-pointer items-center">
+                <input
+                  type="checkbox"
+                  className="peer sr-only"
+                  checked={demoEnabled}
+                  onChange={(e) => setDemoEnabled(e.target.checked)}
+                  disabled={demoSaving || !demoStatus?.pin_configured}
+                />
+                <span className="h-6 w-11 rounded-full bg-neutral-300 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all peer-checked:bg-amber-500 peer-checked:after:translate-x-full peer-disabled:opacity-40 dark:bg-neutral-600" />
+              </label>
+            </div>
+            {!demoStatus?.pin_configured && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                서버 <code className="rounded bg-amber-100/80 px-1 dark:bg-amber-900/40">DEMO_PIN</code> 이 설정되어야
+                토글할 수 있습니다. (<code className="text-[11px]">backend/.env</code>)
+              </div>
+            )}
+            <Field label="PIN" description="DEMO_PIN과 동일한 값 (서버 .env에만 저장)">
+              <input
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                value={demoPin}
+                onChange={(e) => setDemoPin(e.target.value)}
+                disabled={demoSaving || !demoStatus?.pin_configured}
+                placeholder="••••"
+                className="w-full max-w-xs rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2 text-sm text-neutral-800 dark:text-neutral-200 disabled:opacity-50"
+              />
+            </Field>
+            <button
+              type="button"
+              onClick={applyDemoMode}
+              disabled={demoSaving || !demoStatus?.pin_configured}
+              className="flex items-center gap-2 rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
+            >
+              {demoSaving ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+              적용 (페이지 새로고침)
+            </button>
+            {demoError && (
+              <p className="text-sm text-red-600 dark:text-red-400">{demoError}</p>
+            )}
+          </div>
+        )}
         <div className="rounded-md bg-[var(--surface-elevated)] p-3 font-mono text-xs text-neutral-600 dark:text-neutral-400 space-y-1">
-          <p># API (Render / Vercel 백엔드)</p>
-          <p className="text-neutral-800 dark:text-neutral-200">DEMO_MODE=true</p>
-          <p># 프론트 (Vercel)</p>
-          <p className="text-neutral-800 dark:text-neutral-200">NEXT_PUBLIC_DEMO_MODE=true</p>
-          <p className="text-amber-700 dark:text-amber-400"># JSON 수정 후 서버 재시작</p>
+          <p># API .env</p>
+          <p className="text-neutral-800 dark:text-neutral-200">DEMO_PIN=1234</p>
+          <p className="text-neutral-800 dark:text-neutral-200">DEMO_MODE=false</p>
+          <p className="text-amber-700 dark:text-amber-400"># demo_portfolio.json 수정 후 서버 재시작</p>
         </div>
       </Section>
 
@@ -169,7 +269,11 @@ export default function SettingsPage() {
       <Section title="자동 갱신 스케줄 (KST)" icon={<Server size={15} />}>
         <div className="space-y-2 text-sm">
           {[
-            { time: "평일 08:50", desc: "국내 장 시작 전 — 미국 전일 종가 확인" },
+            { time: "평일 08:05", desc: "미국 증시 아침 리포트 자동 생성" },
+            { time: "0·6·12·18시 30분", desc: "지식 허브 — 분야별 뉴스 RSS 수집" },
+            { time: "매일 08:00", desc: "지식 허브 — 오늘의 리마인드 카드" },
+            { time: "일요일 20:00", desc: "지식 허브 — 주간 다이제스트 생성" },
+            { time: "평일 08:50", desc: "국내 장 시작 전 — 리포트 백업·Signal 점검" },
             { time: "평일 15:35", desc: "국내 장 마감 — 종가 동기화 + 5% 알림 체크" },
             { time: "평일 23:35", desc: "미국 장 오픈 확인" },
             { time: "화~토 07:05", desc: "미국 장 마감 — 미국 종가 동기화" },

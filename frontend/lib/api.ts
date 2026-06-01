@@ -173,6 +173,11 @@ export const api = {
       `/intel/contents${sourceType ? `?source_type=${sourceType}` : ""}`
     ),
   getIntelContent: (id: number) => fetchApi<IntelContent>(`/intel/contents/${id}`),
+  setIntelContentScope: (id: number, scope: "knowledge" | "market") =>
+    fetchApi<{ ok: boolean; content: IntelContent }>(`/intel/contents/${id}/scope`, {
+      method: "PATCH",
+      body: JSON.stringify({ scope }),
+    }),
   getStockIssues: (symbol: string) =>
     fetchApi<StockIssues>(`/intel/stocks/${symbol}/issues`),
   getMoveCauses: (symbol: string, fromDate?: string, toDate?: string) => {
@@ -190,6 +195,23 @@ export const api = {
 
   // ── 헬스 ──────────────────────────────────────
   health: () => fetchApi<{ status: string; demo_mode?: boolean }>("/health"),
+};
+
+export interface DemoModeStatus {
+  demo_mode: boolean;
+  source: "database" | "env";
+  env_default: boolean;
+  pin_configured: boolean;
+  message?: string;
+}
+
+export const settingsApi = {
+  getDemoMode: () => fetchApi<DemoModeStatus>("/settings/demo-mode"),
+  setDemoMode: (enabled: boolean, pin: string) =>
+    fetchApi<DemoModeStatus>("/settings/demo-mode", {
+      method: "PATCH",
+      body: JSON.stringify({ enabled, pin }),
+    }),
 };
 
 export interface StockChartBar {
@@ -292,6 +314,7 @@ export interface AnalysisResult {
   macro_analysis: MacroAnalysis;
   sector_analysis: SectorAnalysisItem[];
   source_document?: string | null;
+  content_scope?: "knowledge" | "market" | string;
   logs: AnalysisLog[];
 }
 
@@ -312,6 +335,7 @@ export interface IntelContent {
   source_document?: string | null;
   sentiment: string | null;
   analyzed_at: string | null;
+  content_scope?: "knowledge" | "market" | string;
 }
 
 export interface ChartBar {
@@ -495,6 +519,54 @@ export interface RelatedAnalysisItem {
   impact?: string | null;
 }
 
+export interface SignalAccuracyBucket {
+  hit_rate: number | null;
+  sample_count: number;
+  avg_magnitude?: number | null;
+  insufficient_data?: boolean;
+}
+
+export interface SignalAccuracyBlock {
+  overall_hit_rate: number | null;
+  sample_count: number;
+  avg_magnitude?: number | null;
+  by_check_days: Record<string, SignalAccuracyBucket>;
+  by_sector?: Record<string, SignalAccuracyBucket>;
+  by_topic?: Record<string, SignalAccuracyBucket>;
+  best_check_days?: number;
+  insufficient_data?: boolean;
+}
+
+export interface LeadLagBucket {
+  sample_count: number;
+  avg_lead_days: number | null;
+  median_lead_days: number | null;
+  pct_signal_leads: number | null;
+  insufficient_data?: boolean;
+}
+
+export interface LeadLagSummary {
+  window_days: number;
+  total_pairs: number;
+  aligned_only: boolean;
+  by_type: Record<string, LeadLagBucket>;
+  by_sector: Record<string, Record<string, LeadLagBucket>>;
+  by_macro_topic: Record<string, LeadLagBucket>;
+  insights: string[];
+  min_sample: number;
+  disclaimer: string;
+}
+
+export interface SignalAccuracyResponse {
+  sector: SignalAccuracyBlock;
+  macro: SignalAccuracyBlock;
+  stock: SignalAccuracyBlock;
+  best_signal_window_days: number | null;
+  total_outcomes: number;
+  disclaimer: string;
+  min_sample_for_rate: number;
+}
+
 export const signalApi = {
   getDaily: (days = 7) =>
     fetchApi<{ days: number; since: string; briefings: DailyBriefing[] }>(`/intel/daily?days=${days}`),
@@ -511,10 +583,221 @@ export const signalApi = {
       `/intel/stocks/${symbol}/related?date=${encodeURIComponent(date)}&window_days=${windowDays}`,
     ),
   backfill: () => fetchApi<{ ok: boolean; result: Record<string, number> }>("/intel/signals/backfill", { method: "POST" }),
+  getSignalAccuracy: () => fetchApi<SignalAccuracyResponse>("/intel/signal-accuracy"),
+  evaluateSignalOutcomes: () =>
+    fetchApi<{ ok: boolean; evaluation: Record<string, number>; accuracy: SignalAccuracyResponse }>(
+      "/intel/signal-outcomes/evaluate",
+      { method: "POST" },
+    ),
+  getLeadLag: (params?: { sector?: string; symbol?: string; aligned_only?: boolean; window_days?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.sector) q.set("sector", params.sector);
+    if (params?.symbol) q.set("symbol", params.symbol);
+    if (params?.aligned_only === false) q.set("aligned_only", "false");
+    if (params?.window_days) q.set("window_days", String(params.window_days));
+    const qs = q.toString();
+    return fetchApi<LeadLagSummary>(`/intel/lead-lag${qs ? `?${qs}` : ""}`);
+  },
+  computeLeadLag: (windowDays = 15) =>
+    fetchApi<{ ok: boolean; computation: Record<string, number>; summary: LeadLagSummary }>(
+      `/intel/lead-lag/compute?window_days=${windowDays}`,
+      { method: "POST" },
+    ),
   getRecommendations: (days = 30, sector?: string) =>
     fetchApi<{ days: number; sector: string | null; total: number; recommendations: StockRecommendation[] }>(
       `/intel/recommendations?days=${days}${sector ? `&sector=${encodeURIComponent(sector)}` : ""}`,
     ),
+};
+
+// ── 목표가 · 미국 리포트 ─────────────────────────────────
+export interface PriceTarget {
+  id: number;
+  symbol: string;
+  source: string;
+  analyst: string | null;
+  target_price: number;
+  rating: string | null;
+  report_date: string | null;
+  currency: string;
+  is_consensus: boolean;
+  source_url: string | null;
+  source_title: string | null;
+  notes: string | null;
+  fetched_at: string | null;
+}
+
+export interface PriceTargetSearchArticle {
+  title: string;
+  url: string;
+  published?: string | null;
+  snippet?: string | null;
+  used_in_target?: boolean;
+}
+
+export interface UsMarketQuote {
+  name: string;
+  ticker?: string;
+  category?: string;
+  unit?: "index" | "fx" | "yield" | "price" | "stock";
+  close?: number;
+  change_pct?: number;
+  change?: number;
+  date?: string;
+  error?: string;
+}
+
+export type UsMarketInterpretationTopic =
+  | "us_indices"
+  | "commodity"
+  | "fx"
+  | "treasury"
+  | "us_stocks";
+
+export interface UsMarketInterpretation {
+  summary?: string;
+  bullets?: string[];
+  source_indexes?: number[];
+}
+
+export interface UsMarketArticle {
+  index: number;
+  topic: UsMarketInterpretationTopic;
+  title: string;
+  url: string;
+  published?: string | null;
+  snippet?: string | null;
+}
+
+export interface UsMarketSnapshot {
+  us_indices: UsMarketQuote[];
+  commodity: UsMarketQuote[];
+  fx: UsMarketQuote[];
+  treasury: UsMarketQuote[];
+  us_stocks: UsMarketQuote[];
+  interpretations: Partial<Record<UsMarketInterpretationTopic, UsMarketInterpretation>>;
+  articles: UsMarketArticle[];
+}
+
+export interface UsMarketReport {
+  id: number;
+  report_date: string;
+  session_date: string | null;
+  snapshot?: UsMarketSnapshot;
+  indices: UsMarketQuote[];
+  interpretations?: Partial<Record<UsMarketInterpretationTopic, UsMarketInterpretation>>;
+  articles?: UsMarketArticle[];
+  highlights: string[];
+  body_markdown: string | null;
+  status: string;
+  error_message: string | null;
+  model: string | null;
+  generated_at: string | null;
+}
+
+const EMPTY_US_SNAPSHOT = (): UsMarketSnapshot => ({
+  us_indices: [],
+  commodity: [],
+  fx: [],
+  treasury: [],
+  us_stocks: [],
+  interpretations: {},
+  articles: [],
+});
+
+export function normalizeUsSnapshot(report: UsMarketReport): UsMarketSnapshot {
+  const interpretations =
+    report.interpretations ?? report.snapshot?.interpretations ?? {};
+  const articles = report.articles ?? report.snapshot?.articles ?? [];
+
+  if (report.snapshot) {
+    return {
+      ...EMPTY_US_SNAPSHOT(),
+      ...report.snapshot,
+      us_stocks: report.snapshot.us_stocks ?? [],
+      interpretations,
+      articles,
+    };
+  }
+  const snap = EMPTY_US_SNAPSHOT();
+  snap.interpretations = interpretations;
+  snap.articles = articles;
+  for (const item of report.indices ?? []) {
+    const cat = item.category ?? "us_index";
+    if (cat === "commodity") snap.commodity.push(item);
+    else if (cat === "fx") snap.fx.push(item);
+    else if (cat === "treasury") snap.treasury.push(item);
+    else if (cat === "us_stock") snap.us_stocks.push(item);
+    else snap.us_indices.push(item);
+  }
+  return snap;
+}
+
+const ANALYST_TARGET_COLORS = ["#8b5cf6", "#f59e0b", "#14b8a6", "#ec4899", "#6366f1"];
+
+export function analystTargetColor(index: number, isConsensus?: boolean): string {
+  if (isConsensus) return "#9333ea";
+  return ANALYST_TARGET_COLORS[index % ANALYST_TARGET_COLORS.length];
+}
+
+export const marketApi = {
+  getPriceTargets: (symbol: string) =>
+    fetchApi<{ symbol: string; targets: PriceTarget[] }>(
+      `/stocks/${encodeURIComponent(symbol)}/price-targets`,
+    ),
+
+  fetchPriceTargets: (symbol: string) =>
+    fetchApi<{
+      symbol: string;
+      name: string;
+      fetched_count: number;
+      disclaimer: string;
+      message?: string;
+      search_articles: PriceTargetSearchArticle[];
+      targets: PriceTarget[];
+    }>(`/stocks/${encodeURIComponent(symbol)}/price-targets/fetch`, { method: "POST" }),
+
+  addPriceTarget: (
+    symbol: string,
+    body: {
+      source: string;
+      target_price: number;
+      analyst?: string;
+      rating?: string;
+      report_date?: string;
+      is_consensus?: boolean;
+    },
+  ) =>
+    fetchApi<PriceTarget>(`/stocks/${encodeURIComponent(symbol)}/price-targets`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  deletePriceTarget: (symbol: string, targetId: number) =>
+    fetchApi<{ ok: boolean }>(
+      `/stocks/${encodeURIComponent(symbol)}/price-targets/${targetId}`,
+      { method: "DELETE" },
+    ),
+
+  getUsReport: (date?: string) =>
+    fetchApi<{ report: UsMarketReport | null }>(
+      date
+        ? `/reports/us/daily?date=${encodeURIComponent(date)}`
+        : "/reports/us/daily?days=7",
+    ),
+
+  listUsReports: (days = 7) =>
+    fetchApi<{ reports: UsMarketReport[] }>(`/reports/us/daily?days=${days}`),
+
+  generateUsReport: (opts?: { date?: string; force?: boolean }) => {
+    const q = new URLSearchParams();
+    if (opts?.date) q.set("date", opts.date);
+    if (opts?.force) q.set("force", "true");
+    const qs = q.toString();
+    return fetchApi<{ report: UsMarketReport }>(
+      `/reports/us/daily/generate${qs ? `?${qs}` : ""}`,
+      { method: "POST" },
+    );
+  },
 };
 
 // ── 관심 종목 (Watchlist) ───────────────────────────────

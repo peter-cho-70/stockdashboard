@@ -6,24 +6,91 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, timedelta
+import secrets
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from config.database import Stock
+from config.database import Stock, AppConfig, SessionLocal
 from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
 _DEMO_JSON = Path(__file__).resolve().parent.parent / "data" / "demo_portfolio.json"
+_DEMO_MODE_KEY = "demo_mode"
 _cache: Optional[dict] = None
 
 
-def is_demo_mode() -> bool:
-    return get_settings().demo_mode
+def _env_demo_default() -> bool:
+    return bool(get_settings().demo_mode)
+
+
+def _read_demo_mode_db(db: Session) -> Optional[bool]:
+    row = db.query(AppConfig).filter(AppConfig.key == _DEMO_MODE_KEY).first()
+    if not row or row.value is None:
+        return None
+    return str(row.value).strip().lower() in ("true", "1", "yes")
+
+
+def set_demo_mode_db(db: Session, enabled: bool) -> None:
+    val = "true" if enabled else "false"
+    row = db.query(AppConfig).filter(AppConfig.key == _DEMO_MODE_KEY).first()
+    if row:
+        row.value = val
+        row.updated_at = datetime.utcnow()
+    else:
+        db.add(AppConfig(key=_DEMO_MODE_KEY, value=val))
+    db.commit()
+
+
+def is_demo_pin_configured() -> bool:
+    return bool((get_settings().demo_pin or "").strip())
+
+
+def verify_demo_pin(pin: str) -> None:
+    expected = (get_settings().demo_pin or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="DEMO_PIN이 서버 .env에 설정되지 않았습니다.",
+        )
+    provided = (pin or "").strip()
+    if len(provided) != len(expected) or not secrets.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(status_code=403, detail="PIN 번호가 올바르지 않습니다.")
+
+
+def is_demo_mode(db: Optional[Session] = None) -> bool:
+    """DB app_config 우선, 없으면 환경 변수 DEMO_MODE."""
+    own_session = False
+    if db is None:
+        db = SessionLocal()
+        own_session = True
+    try:
+        stored = _read_demo_mode_db(db)
+        if stored is not None:
+            return stored
+    except Exception as e:
+        logger.debug("demo_mode db read: %s", e)
+    finally:
+        if own_session:
+            db.close()
+    return _env_demo_default()
+
+
+def get_demo_mode_status(db: Session) -> dict[str, Any]:
+    stored = _read_demo_mode_db(db)
+    active = is_demo_mode(db)
+    return {
+        "demo_mode": active,
+        "source": "database" if stored is not None else "env",
+        "env_default": _env_demo_default(),
+        "pin_configured": is_demo_pin_configured(),
+    }
 
 
 def demo_write_blocked() -> None:
@@ -84,8 +151,16 @@ def _holding_to_stock_dict(db: Session, h: dict) -> dict:
     profit = value - purchase
     profit_rate = (profit / purchase * 100) if purchase > 0 else 0.0
 
+    stock_row = db.query(Stock).filter(Stock.symbol == sym).first()
+    if stock_row:
+        stock_id = stock_row.id
+    elif sym.isdigit():
+        stock_id = int(sym)
+    else:
+        stock_id = abs(hash(sym)) % 1_000_000_000
+
     return {
-        "id": 0,
+        "id": stock_id,
         "symbol": sym,
         "name": h.get("name") or sym,
         "market": h.get("market") or "KRX",
@@ -174,7 +249,7 @@ def build_demo_history(days: int, summary: dict) -> list[dict]:
 
 def ensure_demo_anchor_stocks(db: Session) -> None:
     """차트·buy-score API용 Stock 행 확보 (qty는 덮어쓰지 않음)."""
-    if not is_demo_mode():
+    if not is_demo_mode(db):
         return
     cfg = load_demo_config()
     for h in cfg.get("holdings") or []:

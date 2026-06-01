@@ -19,6 +19,7 @@ export interface IntelDetailData {
   macro_analysis?: MacroAnalysis;
   sector_analysis?: SectorAnalysisItem[];
   source_document?: string | null;
+  content_scope?: "knowledge" | "market" | string;
 }
 
 type DetailTab = "analysis" | "document" | "source";
@@ -89,6 +90,7 @@ function DocumentBlock({ text, emptyLabel }: { text?: string | null; emptyLabel:
 }
 
 export function IntelDetailPanel({ data, compact = false }: { data: IntelDetailData; compact?: boolean }) {
+  const isKnowledge = data.content_scope === "knowledge";
   const isYoutube = data.source_type === "YOUTUBE";
   const isTextOrNews = data.source_type === "TEXT" || data.source_type === "NEWS";
 
@@ -126,6 +128,11 @@ export function IntelDetailPanel({ data, compact = false }: { data: IntelDetailD
 
       {tab === "analysis" && (
         <div className="space-y-3">
+          {isKnowledge && (
+            <p className="rounded-md border border-violet-200 bg-violet-50 px-2.5 py-2 text-[10px] text-violet-800 dark:border-violet-800 dark:bg-violet-900/15 dark:text-violet-300">
+              📚 지식 콘텐츠 — 요약·문서만 저장되며 매크로·시그널·캘린더 주가 이벤트에는 포함되지 않습니다.
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
               s === "POSITIVE" ? "text-emerald-700 dark:text-emerald-400" :
@@ -161,7 +168,7 @@ export function IntelDetailPanel({ data, compact = false }: { data: IntelDetailD
             </div>
           )}
 
-          {(data.stock_issues?.length ?? 0) > 0 && (
+          {!isKnowledge && (data.stock_issues?.length ?? 0) > 0 && (
             <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/15 p-2.5">
               <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 mb-1.5">
                 📌 내 보유 종목 ({data.stock_issues!.length}개)
@@ -180,7 +187,7 @@ export function IntelDetailPanel({ data, compact = false }: { data: IntelDetailD
             </div>
           )}
 
-          <MacroSectorBlock macro={data.macro_analysis} sectors={data.sector_analysis} />
+          {!isKnowledge && <MacroSectorBlock macro={data.macro_analysis} sectors={data.sector_analysis} />}
 
           {((data.keywords?.length ?? 0) > 0 || (data.mentioned_stocks?.length ?? 0) > 0 || (data.mentioned_sectors?.length ?? 0) > 0) && (
             <div className="flex flex-wrap gap-1">

@@ -9,15 +9,11 @@ export function DemoBanner() {
   const [title, setTitle] = useState("데모 포트폴리오");
 
   useEffect(() => {
-    const envOn =
-      process.env.NEXT_PUBLIC_DEMO_MODE === "true" ||
-      process.env.NEXT_PUBLIC_DEMO_MODE === "1";
-    if (envOn) setDemo(true);
-
     api
       .health()
       .then((h) => {
         if (h.demo_mode) setDemo(true);
+        else setDemo(false);
       })
       .catch(() => {});
 

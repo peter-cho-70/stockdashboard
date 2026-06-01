@@ -26,6 +26,7 @@ import {
 } from "recharts";
 import { api, type PortfolioSummary, type Alert, type PortfolioSnapshot } from "@/lib/api";
 import { ClientOnly } from "@/components/client-only";
+import { UsMarketReportCard } from "@/components/us-market-report-card";
 
 const CHART_PERIODS = [
   { days: 7, label: "7일" },
@@ -37,6 +38,20 @@ const CHART_PERIODS = [
 
 function chartPeriodLabel(days: number) {
   return CHART_PERIODS.find((p) => p.days === days)?.label ?? `${days}일`;
+}
+
+/** KST 08:30~22:59 → 대시보드 하단, 23:00~08:29 → 상단 */
+function isUsReportAtBottomKST(now = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  }).formatToParts(now);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  const totalMinutes = hour * 60 + minute;
+  return totalMinutes >= 8 * 60 + 30 && totalMinutes < 23 * 60;
 }
 
 function fmt(n: number) {
@@ -109,6 +124,14 @@ export default function DashboardPage() {
   const [refreshMsg, setRefreshMsg] = useState("");
   const [chartDays, setChartDays] = useState(30);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [usReportAtBottom, setUsReportAtBottom] = useState(() => isUsReportAtBottomKST());
+
+  useEffect(() => {
+    const tick = () => setUsReportAtBottom(isUsReportAtBottomKST());
+    tick();
+    const id = window.setInterval(tick, 60_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const loadHistory = useCallback(async (days: number) => {
     setHistoryLoading(true);
@@ -185,6 +208,8 @@ export default function DashboardPage() {
     평가금액: Math.round(h.total_value / 10000),
   }));
 
+  const usMarketReport = <UsMarketReportCard />;
+
   return (
     <div className="space-y-6">
       {/* 헤더 */}
@@ -231,6 +256,8 @@ export default function DashboardPage() {
           로 서버를 시작해 주세요.
         </div>
       )}
+
+      {!usReportAtBottom && usMarketReport}
 
       {/* 알림 배지 */}
       {unreadCount > 0 && (
@@ -459,6 +486,8 @@ export default function DashboardPage() {
           </p>
         </div>
       )}
+
+      {usReportAtBottom && usMarketReport}
     </div>
   );
 }

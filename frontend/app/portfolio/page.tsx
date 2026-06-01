@@ -162,14 +162,14 @@ export default function PortfolioPage() {
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingSymbol, setEditingSymbol] = useState<string | null>(null);
   const [editMemo, setEditMemo] = useState("");
   const [editSector, setEditSector] = useState("");
   const [filter, setFilter] = useState<"ALL" | "KRX" | "US">("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("eval_value");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const sortHydratedRef = useRef(false);
-  const [menuOpenId, setMenuOpenId] = useState<number | null>(null);
+  const [menuOpenSymbol, setMenuOpenSymbol] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(null);
 
   // add form
@@ -211,11 +211,11 @@ export default function PortfolioPage() {
   }, [load]);
 
   useEffect(() => {
-    if (!menuOpenId) return;
-    const close = () => setMenuOpenId(null);
+    if (!menuOpenSymbol) return;
+    const close = () => setMenuOpenSymbol(null);
     window.addEventListener("click", close);
     return () => window.removeEventListener("click", close);
-  }, [menuOpenId]);
+  }, [menuOpenSymbol]);
 
   function openTradeModal(type: "buy" | "sell", stock: StockItem) {
     setTradeQty("");
@@ -223,7 +223,7 @@ export default function PortfolioPage() {
     setTradeDate(todayStr());
     setTradeMemo("");
     setModal({ type, stock });
-    setMenuOpenId(null);
+    setMenuOpenSymbol(null);
   }
 
   function openAdjustModal(stock: StockItem) {
@@ -231,7 +231,7 @@ export default function PortfolioPage() {
     setAdjAvg(String(stock.avg_price));
     setAdjName(stock.name);
     setModal({ type: "adjust", stock });
-    setMenuOpenId(null);
+    setMenuOpenSymbol(null);
   }
 
   async function handleSync() {
@@ -254,7 +254,7 @@ export default function PortfolioPage() {
         s.symbol === symbol ? { ...s, memo: editMemo, sector: editSector || s.sector } : s,
       ),
     );
-    setEditingId(null);
+    setEditingSymbol(null);
   }
 
   async function submitAdd(e: React.FormEvent) {
@@ -544,13 +544,13 @@ export default function PortfolioPage() {
               <tbody className="divide-y divide-[var(--border-subtle)]">
                 {sorted.map((stock) => (
                   <tr
-                    key={stock.id}
+                    key={stock.symbol}
                     onClick={() => {
-                      if (editingId !== stock.id && menuOpenId !== stock.id)
+                      if (editingSymbol !== stock.symbol && menuOpenSymbol !== stock.symbol)
                         router.push(`/chart?symbol=${stock.symbol}`);
                     }}
                     className={`transition-colors ${
-                      editingId === stock.id
+                      editingSymbol === stock.symbol
                         ? "bg-[var(--surface-elevated)]"
                         : "cursor-pointer hover:bg-[var(--surface-elevated)]"
                     }`}
@@ -607,7 +607,7 @@ export default function PortfolioPage() {
                       <RateCell rate={stock.profit_rate} />
                     </td>
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      {editingId === stock.id ? (
+                      {editingSymbol === stock.symbol ? (
                         <select
                           value={editSector}
                           onChange={(e) => setEditSector(e.target.value)}
@@ -625,7 +625,7 @@ export default function PortfolioPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 max-w-[180px]" onClick={(e) => e.stopPropagation()}>
-                      {editingId === stock.id ? (
+                      {editingSymbol === stock.symbol ? (
                         <textarea
                           value={editMemo}
                           onChange={(e) => setEditMemo(e.target.value)}
@@ -638,7 +638,7 @@ export default function PortfolioPage() {
                     </td>
                     <td className="px-4 py-3 text-center relative" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-center gap-0.5">
-                        {editingId === stock.id ? (
+                        {editingSymbol === stock.symbol ? (
                           <>
                             <button
                               type="button"
@@ -649,7 +649,7 @@ export default function PortfolioPage() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => setEditingId(null)}
+                              onClick={() => setEditingSymbol(null)}
                               className="rounded p-1 text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
                             >
                               <X size={14} />
@@ -660,7 +660,7 @@ export default function PortfolioPage() {
                             <button
                               type="button"
                               onClick={() => {
-                                setEditingId(stock.id);
+                                setEditingSymbol(stock.symbol);
                                 setEditMemo(stock.memo || "");
                                 setEditSector(stock.sector || "");
                               }}
@@ -673,7 +673,9 @@ export default function PortfolioPage() {
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setMenuOpenId(menuOpenId === stock.id ? null : stock.id);
+                                setMenuOpenSymbol(
+                                  menuOpenSymbol === stock.symbol ? null : stock.symbol,
+                                );
                               }}
                               className="rounded p-1 text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
                             >
@@ -682,7 +684,7 @@ export default function PortfolioPage() {
                           </>
                         )}
                       </div>
-                      {menuOpenId === stock.id && (
+                      {menuOpenSymbol === stock.symbol && (
                         <div
                           className="absolute right-2 top-full z-20 mt-1 min-w-[120px] rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] py-1 text-xs shadow-lg"
                           onClick={(e) => e.stopPropagation()}
@@ -713,7 +715,7 @@ export default function PortfolioPage() {
                             className="block w-full px-3 py-2 text-left hover:bg-[var(--surface-elevated)] text-red-600 dark:text-red-400"
                             onClick={() => {
                               setModal({ type: "delete", stock });
-                              setMenuOpenId(null);
+                              setMenuOpenSymbol(null);
                             }}
                           >
                             보유 제외

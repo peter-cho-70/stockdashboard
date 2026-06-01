@@ -35,8 +35,30 @@ import {
   Trash2,
   Plus,
   Star,
+  Target,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
-import { api, signalApi, scoreApi, watchlistApi, type StockItem, type StockIssueTimeline, type AnalysisLog, type MoveCause, type StockSignal, type SharedSignalsResponse, type RelatedAnalysisItem, type BuyScoreResult, type ChartDateMemoItem, type WatchlistItem } from "@/lib/api";
+import {
+  api,
+  signalApi,
+  scoreApi,
+  watchlistApi,
+  marketApi,
+  analystTargetColor,
+  type StockItem,
+  type StockIssueTimeline,
+  type AnalysisLog,
+  type MoveCause,
+  type StockSignal,
+  type SharedSignalsResponse,
+  type RelatedAnalysisItem,
+  type BuyScoreResult,
+  type ChartDateMemoItem,
+  type WatchlistItem,
+  type PriceTarget,
+  type PriceTargetSearchArticle,
+} from "@/lib/api";
 import { streamAnalyze, AnalyzeStreamError } from "@/lib/analyzeStream";
 import {
   analyzeChart,
@@ -155,6 +177,33 @@ interface ChartMemoMarker {
   body: string;
 }
 
+/** 차트에 표시할 목표가: 최근 1개월 + 동일 가격은 최신 1건만 */
+const CHART_TARGET_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function targetEffectiveDate(t: PriceTarget): number {
+  const raw = t.report_date || t.fetched_at;
+  if (!raw) return Date.now();
+  const ts = new Date(raw.includes("T") ? raw : `${raw}T12:00:00`).getTime();
+  return Number.isNaN(ts) ? Date.now() : ts;
+}
+
+function isTargetShownOnChart(t: PriceTarget): boolean {
+  return Date.now() - targetEffectiveDate(t) <= CHART_TARGET_MAX_AGE_MS;
+}
+
+function pickTargetsForChart(targets: PriceTarget[]): PriceTarget[] {
+  const byPrice = new Map<number, PriceTarget>();
+  for (const t of targets) {
+    if (!isTargetShownOnChart(t)) continue;
+    const priceKey = Math.round(t.target_price);
+    const prev = byPrice.get(priceKey);
+    if (!prev || targetEffectiveDate(t) > targetEffectiveDate(prev)) {
+      byPrice.set(priceKey, t);
+    }
+  }
+  return Array.from(byPrice.values()).sort((a, b) => b.target_price - a.target_price);
+}
+
 interface PriceChartProps {
   plotData: EnrichedChartBar[];
   chartData: ChartData;
@@ -173,6 +222,9 @@ interface PriceChartProps {
   height?: number;
   signalMarkers?: { date: string; sentiment: string | null; summary: string | null }[];
   targetBuyPrice?: number | null;
+  analystTargets?: { id: string; price: number; label: string; color: string; isConsensus?: boolean }[];
+  /** true면 목표가까지 Y축 확장 (기본은 주가 구간만) */
+  includeTargetsInYDomain?: boolean;
 }
 
 function CrossDot(props: {
@@ -212,6 +264,8 @@ function PriceChart({
   height = 320,
   signalMarkers = [],
   targetBuyPrice = null,
+  analystTargets = [],
+  includeTargetsInYDomain = false,
 }: PriceChartProps) {
   const annotations =
     analysisMode && analysis
@@ -232,6 +286,27 @@ function PriceChart({
     analysisMode &&
     annotationLayers.volume &&
     activeSignalId === "volume";
+
+  const yAxisDomain = useMemo(() => {
+    const vals: number[] = [];
+    for (const d of plotData) {
+      if (d.close > 0) vals.push(d.close);
+      if (d.high > 0) vals.push(d.high);
+      if (d.low > 0) vals.push(d.low);
+    }
+    if (chartData.avg_price > 0) vals.push(chartData.avg_price);
+    if (targetBuyPrice != null && targetBuyPrice > 0) vals.push(targetBuyPrice);
+    if (includeTargetsInYDomain) {
+      for (const t of analystTargets) {
+        if (t.price > 0) vals.push(t.price);
+      }
+    }
+    if (vals.length === 0) return undefined;
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const pad = Math.max((max - min) * 0.06, max * 0.01);
+    return [Math.floor(min - pad), Math.ceil(max + pad)] as [number, number];
+  }, [plotData, chartData.avg_price, targetBuyPrice, analystTargets, includeTargetsInYDomain]);
 
   return (
     <>
@@ -255,7 +330,7 @@ function PriceChart({
               tickFormatter={(v) => v.slice(5)}
             />
             <YAxis
-              domain={["auto", "auto"]}
+              domain={yAxisDomain ?? ["auto", "auto"]}
               tick={{ fontSize: 11, fill: "var(--foreground)" }}
               tickFormatter={(v) => v.toLocaleString("ko-KR")}
               tickLine={false}
@@ -289,8 +364,15 @@ function PriceChart({
               <ReferenceLine
                 y={chartData.avg_price}
                 stroke="#ef4444"
-                strokeDasharray="4 2"
-                label={{ value: "평균단가", position: "insideTopRight", fontSize: 10, fill: "#ef4444" }}
+                strokeWidth={3}
+                strokeDasharray="8 4"
+                label={{
+                  value: "평균단가",
+                  position: "insideTopRight",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  fill: "#ef4444",
+                }}
               />
             )}
 
@@ -302,6 +384,22 @@ function PriceChart({
                 label={{ value: "매수 희망가", position: "insideTopLeft", fontSize: 10, fill: "#0ea5e9" }}
               />
             )}
+
+            {analystTargets.map((t) => (
+              <ReferenceLine
+                key={t.id}
+                y={t.price}
+                stroke={t.color}
+                strokeWidth={t.isConsensus ? 2 : 1}
+                strokeDasharray={t.isConsensus ? "8 4" : "5 3"}
+                label={{
+                  value: t.label,
+                  position: "insideBottomRight",
+                  fontSize: 9,
+                  fill: t.color,
+                }}
+              />
+            ))}
 
             {analysisMode &&
               annotations
@@ -1047,8 +1145,90 @@ function ChartContent() {
   const [memoDate, setMemoDate] = useState("");
   const [memoBody, setMemoBody] = useState("");
   const [memoSaving, setMemoSaving] = useState(false);
+  const [priceTargets, setPriceTargets] = useState<PriceTarget[]>([]);
+  const [targetsLoading, setTargetsLoading] = useState(false);
+  const [targetsFetching, setTargetsFetching] = useState(false);
+  const [showAnalystTargets, setShowAnalystTargets] = useState(true);
+  const [targetDisclaimer, setTargetDisclaimer] = useState<string | null>(null);
+  const [targetSearchArticles, setTargetSearchArticles] = useState<PriceTargetSearchArticle[]>([]);
+  const [chartExpanded, setChartExpanded] = useState(false);
 
   const fetchPeriod = analysisMode ? "6M" : period;
+
+  const loadPriceTargets = useCallback(async () => {
+    if (!selectedSymbol) {
+      setPriceTargets([]);
+      return;
+    }
+    setTargetsLoading(true);
+    try {
+      const res = await marketApi.getPriceTargets(selectedSymbol);
+      setPriceTargets(res.targets);
+    } catch {
+      setPriceTargets([]);
+    } finally {
+      setTargetsLoading(false);
+    }
+  }, [selectedSymbol]);
+
+  useEffect(() => {
+    loadPriceTargets();
+    setTargetDisclaimer(null);
+    setTargetSearchArticles([]);
+  }, [loadPriceTargets]);
+
+  const chartPriceTargets = useMemo(
+    () => pickTargetsForChart(priceTargets),
+    [priceTargets],
+  );
+
+  const analystTargetLines = useMemo(() => {
+    if (!showAnalystTargets) return [];
+    let idx = 0;
+    return chartPriceTargets.map((t) => {
+      const color = analystTargetColor(idx, t.is_consensus);
+      if (!t.is_consensus) idx += 1;
+      const label = t.is_consensus
+        ? `컨센서스 ${t.target_price.toLocaleString("ko-KR")}`
+        : `${t.source} ${t.target_price.toLocaleString("ko-KR")}`;
+      return {
+        id: `analyst-target-${t.id}`,
+        price: t.target_price,
+        label,
+        color,
+        isConsensus: t.is_consensus,
+      };
+    });
+  }, [chartPriceTargets, showAnalystTargets]);
+
+  useEffect(() => {
+    if (!chartExpanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setChartExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [chartExpanded]);
+
+  const baseChartHeight = analysisMode ? 280 : 320;
+  const expandedChartHeight = analysisMode ? 480 : 560;
+  const showTargetsOnExpanded =
+    showAnalystTargets && chartPriceTargets.length > 0;
+
+  async function handleFetchPriceTargets() {
+    if (!selectedSymbol) return;
+    setTargetsFetching(true);
+    try {
+      const res = await marketApi.fetchPriceTargets(selectedSymbol);
+      setPriceTargets(res.targets);
+      setTargetDisclaimer(res.message ?? res.disclaimer);
+      setTargetSearchArticles(res.search_articles ?? []);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "목표가 검색 실패");
+    } finally {
+      setTargetsFetching(false);
+    }
+  }
 
   const loadDateMemos = useCallback(async () => {
     if (!selectedSymbol) {
@@ -1746,6 +1926,42 @@ function ChartContent() {
             <div className="flex gap-2 text-xs flex-wrap">
               <button
                 type="button"
+                onClick={() => setChartExpanded(true)}
+                disabled={!chartData || displayPlotData.length === 0}
+                className="flex items-center gap-1 rounded-full px-2.5 py-1 font-medium border border-[var(--border-subtle)] text-neutral-600 dark:text-neutral-300 hover:bg-[var(--surface-elevated)] disabled:opacity-50"
+                title="목표가 포함 넓은 Y축으로 자세히 보기"
+              >
+                <Maximize2 size={12} />
+                차트 확장
+              </button>
+              <button
+                type="button"
+                onClick={handleFetchPriceTargets}
+                disabled={!selectedSymbol || targetsFetching}
+                className="flex items-center gap-1 rounded-full px-2.5 py-1 font-medium border border-violet-300 text-violet-700 bg-violet-50 dark:border-violet-800 dark:text-violet-300 dark:bg-violet-950/40 disabled:opacity-50"
+              >
+                {targetsFetching ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <Target size={12} />
+                )}
+                목표가 검색
+              </button>
+              {priceTargets.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAnalystTargets((v) => !v)}
+                  className={`flex items-center gap-1 rounded-full px-2.5 py-1 font-medium border ${
+                    showAnalystTargets
+                      ? "border-purple-600 bg-purple-600 text-white"
+                      : "border-[var(--border-subtle)] text-neutral-400"
+                  }`}
+                >
+                  목표가 {chartPriceTargets.length}/{priceTargets.length}
+                </button>
+              )}
+              <button
+                type="button"
                 onClick={() => setShowPriceEvents((v) => !v)}
                 className={`flex items-center gap-1 rounded-full px-2.5 py-1 font-medium transition-colors border ${
                   showPriceEvents
@@ -1822,16 +2038,140 @@ function ChartContent() {
                 dateMemosByDate={dateMemosByDate}
                 memoMarkers={memoMarkers}
                 activeMemoId={activeMemoId}
-                height={analysisMode ? 280 : 320}
+                height={baseChartHeight}
                 signalMarkers={stockSignals.map((s) => ({
                   date: s.event_date ?? "",
                   sentiment: s.sentiment,
                   summary: s.summary,
                 }))}
                 targetBuyPrice={selectedWatchlist?.target_buy_price ?? null}
+                analystTargets={analystTargetLines}
+                includeTargetsInYDomain={false}
               />
             </div>
           ) : null}
+
+          {selectedSymbol && (priceTargets.length > 0 || targetDisclaimer || targetSearchArticles.length > 0 || targetsLoading) && (
+            <div className="border-t border-[var(--border-subtle)] px-4 py-3 text-xs space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-neutral-600 dark:text-neutral-400">
+                  증권사·애널리스트 목표가
+                </span>
+                {targetsLoading && <Loader2 size={12} className="animate-spin text-neutral-400" />}
+              </div>
+              {targetDisclaimer && (
+                <p className="text-[10px] text-amber-600 dark:text-amber-400">{targetDisclaimer}</p>
+              )}
+
+              {priceTargets.length > 0 && (
+                <ul className="space-y-2">
+                  {priceTargets.map((t, i) => {
+                    const onChart = chartPriceTargets.some((c) => c.id === t.id);
+                    const stale = !isTargetShownOnChart(t);
+                    const dupHidden =
+                      !stale &&
+                      !onChart &&
+                      chartPriceTargets.some(
+                        (c) => Math.round(c.target_price) === Math.round(t.target_price),
+                      );
+                    return (
+                    <li
+                      key={t.id}
+                      className={`rounded-lg border px-3 py-2 flex flex-wrap items-start justify-between gap-2 ${
+                        onChart
+                          ? "border-[var(--border-subtle)]"
+                          : "border-dashed border-neutral-300 dark:border-neutral-700 opacity-75"
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className="h-2 w-2 rounded-full shrink-0"
+                            style={{ backgroundColor: analystTargetColor(i, t.is_consensus) }}
+                          />
+                          <span className="font-medium text-neutral-800 dark:text-neutral-200">
+                            {t.is_consensus ? "컨센서스" : t.source}
+                            {" "}
+                            {t.target_price.toLocaleString("ko-KR")}원
+                            {t.rating ? ` · ${t.rating}` : ""}
+                          </span>
+                          {t.report_date && (
+                            <span className="text-[10px] text-neutral-400">{t.report_date}</span>
+                          )}
+                          {stale && (
+                            <span className="text-[9px] text-neutral-400">차트 제외 · 1개월 초과</span>
+                          )}
+                          {dupHidden && (
+                            <span className="text-[9px] text-neutral-400">차트 제외 · 동일가 중복</span>
+                          )}
+                        </div>
+                        {t.source_url && (
+                          <a
+                            href={t.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 inline-flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 hover:underline line-clamp-2"
+                          >
+                            <ExternalLink size={11} className="shrink-0" />
+                            {t.source_title || "출처 기사 보기"}
+                          </a>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="text-neutral-400 hover:text-red-500 shrink-0"
+                        onClick={async () => {
+                          await marketApi.deletePriceTarget(selectedSymbol, t.id);
+                          loadPriceTargets();
+                        }}
+                      >
+                        ×
+                      </button>
+                    </li>
+                    );
+                  })}
+                </ul>
+              )}
+
+              {targetSearchArticles.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-medium text-neutral-500">
+                    검색된 기사 ({targetSearchArticles.length}건) — 클릭해 원문 확인
+                  </p>
+                  <ul className="max-h-40 overflow-y-auto space-y-1.5 rounded-md bg-[var(--surface-elevated)] p-2">
+                    {targetSearchArticles.map((a, idx) => (
+                      <li key={`${a.url}-${idx}`}>
+                        <a
+                          href={a.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`block rounded px-2 py-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
+                            a.used_in_target
+                              ? "border-l-2 border-violet-500 pl-2"
+                              : ""
+                          }`}
+                        >
+                          <span className="font-medium text-[11px] text-blue-600 dark:text-blue-400 line-clamp-2">
+                            {a.title}
+                          </span>
+                          {a.snippet && (
+                            <span className="text-[10px] text-neutral-500 line-clamp-1 block mt-0.5">
+                              {a.snippet}
+                            </span>
+                          )}
+                          {a.used_in_target && (
+                            <span className="text-[9px] text-violet-600 dark:text-violet-400">
+                              ✓ 목표가 추출에 사용됨
+                            </span>
+                          )}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {analysisMode && analysisResult && chartData && (
@@ -2124,6 +2464,69 @@ function ChartContent() {
           })}
         </div>
       </div>
+
+      {chartExpanded && chartData && displayPlotData.length > 0 && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/55 p-2 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label="확대 차트"
+          onClick={() => setChartExpanded(false)}
+        >
+          <div
+            className="w-full max-w-6xl max-h-[94vh] overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
+              <div>
+                <h3 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
+                  {chartData.name} — 확대 차트
+                </h3>
+                <p className="text-[11px] text-neutral-500 mt-0.5">
+                  {showTargetsOnExpanded
+                    ? "주가 + 목표가·희망가 전체 구간"
+                    : "주가 구간 중심 (목표가 표시 시 전체 구간 포함)"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setChartExpanded(false)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--surface-elevated)]"
+              >
+                <Minimize2 size={14} />
+                닫기
+              </button>
+            </div>
+            <div className="p-4">
+              <PriceChart
+                plotData={displayPlotData}
+                chartData={chartData}
+                showMA={showMA}
+                analysisMode={analysisMode}
+                analysis={analysisResult ?? undefined}
+                annotationLayers={annotationLayers}
+                activeSignalId={activeSignalId}
+                eventAnnotations={priceEventData.annotations}
+                showEvents={showPriceEvents}
+                activeEventId={activeEventId}
+                eventByDate={priceEventData.eventByDate}
+                dateMemosByDate={dateMemosByDate}
+                memoMarkers={memoMarkers}
+                activeMemoId={activeMemoId}
+                height={expandedChartHeight}
+                signalMarkers={stockSignals.map((s) => ({
+                  date: s.event_date ?? "",
+                  sentiment: s.sentiment,
+                  summary: s.summary,
+                }))}
+                targetBuyPrice={selectedWatchlist?.target_buy_price ?? null}
+                analystTargets={analystTargetLines}
+                includeTargetsInYDomain={showTargetsOnExpanded}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

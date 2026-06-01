@@ -58,6 +58,7 @@ class Settings(BaseSettings):
 
     # ── 데모 모드 (공개 시연 — demo_portfolio.json, 실보유 미노출) ──
     demo_mode: bool = Field(False, env="DEMO_MODE")
+    demo_pin: str = Field("", env="DEMO_PIN")  # 설정 화면 토글용 PIN (평문, .env만)
 
     # ── 알림 설정 ─────────────────────────────────
     alert_threshold: float = Field(5.0, env="ALERT_THRESHOLD")

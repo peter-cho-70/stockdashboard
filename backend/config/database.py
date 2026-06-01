@@ -146,6 +146,68 @@ class AlertHistory(Base):
 
 
 # ─────────────────────────────────────────────
+# 지식 허브 — 관심 분야
+# ─────────────────────────────────────────────
+class KnowledgeDomain(Base):
+    __tablename__ = "knowledge_domains"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), nullable=False)
+    slug = Column(String(50), unique=True, nullable=False, index=True)
+    emoji = Column(String(10), nullable=True)
+    color = Column(String(20), nullable=True)
+    description = Column(Text, nullable=True)
+    keywords = Column(Text, default="[]")
+    sort_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class KnowledgeNewsItem(Base):
+    __tablename__ = "knowledge_news_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    domain_id = Column(Integer, ForeignKey("knowledge_domains.id"), nullable=False, index=True)
+    title = Column(String(300), nullable=False)
+    url = Column(String(500), nullable=False, unique=True)
+    source_name = Column(String(100), nullable=True)
+    published_at = Column(DateTime, nullable=True, index=True)
+    summary = Column(Text, nullable=True)
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+
+
+class KnowledgeRemindLog(Base):
+    __tablename__ = "knowledge_remind_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    content_id = Column(Integer, ForeignKey("intel_contents.id"), nullable=False, index=True)
+    remind_date = Column(String(10), nullable=False, index=True)
+    user_action = Column(String(20), nullable=True)
+    next_remind = Column(String(10), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class KnowledgeDigest(Base):
+    __tablename__ = "knowledge_digests"
+    __table_args__ = (
+        UniqueConstraint("domain_id", "period_start", "period_end", name="uq_knowledge_digest_period"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    domain_id = Column(Integer, ForeignKey("knowledge_domains.id"), nullable=False, index=True)
+    period_start = Column(String(10), nullable=False)
+    period_end = Column(String(10), nullable=False)
+    title = Column(String(300), nullable=True)
+    body_markdown = Column(Text, nullable=True)
+    highlights_json = Column(Text, nullable=True)
+    status = Column(String(20), default="ready")
+    model = Column(String(80), nullable=True)
+    generated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
 # 인텔리전스 콘텐츠 (Phase 2)
 # ─────────────────────────────────────────────
 class IntelContent(Base):
@@ -168,6 +230,10 @@ class IntelContent(Base):
     macro_analysis = Column(Text, nullable=True)      # JSON: 매크로 분석 (GPT)
     sector_analysis = Column(Text, nullable=True)     # JSON: 섹터별 분석 (GPT)
     sentiment = Column(String(20), nullable=True)     # POSITIVE / NEUTRAL / NEGATIVE
+    content_scope = Column(String(20), default="market", index=True)  # knowledge | market
+    domain_id = Column(Integer, ForeignKey("knowledge_domains.id"), nullable=True, index=True)
+    is_bookmarked = Column(Boolean, default=False)
+    is_read = Column(Boolean, default=False)
 
     analyzed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -233,6 +299,8 @@ class YouTubeChannel(Base):
     channel_name = Column(String(100), nullable=False)
     channel_url = Column(String(300), nullable=False)
     is_active = Column(Boolean, default=True)
+    default_market_impact = Column(Boolean, default=False)  # False=지식 채널, True=주가 반영
+    domain_id = Column(Integer, ForeignKey("knowledge_domains.id"), nullable=True, index=True)
     last_checked_at = Column(DateTime, nullable=True)
     last_videos_page_token = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -357,8 +425,143 @@ class StockSignal(Base):
 
 
 # ─────────────────────────────────────────────
+# Signal 사후 검증 (적중률 추적)
+# ─────────────────────────────────────────────
+class SignalOutcome(Base):
+    __tablename__ = "signal_outcomes"
+    __table_args__ = (
+        UniqueConstraint(
+            "signal_type", "signal_id", "symbol", "check_days",
+            name="uq_signal_outcome",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    signal_type = Column(String(20), nullable=False, index=True)   # macro | sector | stock
+    signal_id = Column(Integer, nullable=False, index=True)
+    symbol = Column(String(30), nullable=False, index=True)        # 종목코드 또는 __sector_avg__:섹터
+    signal_date = Column(String(10), nullable=False, index=True)
+    signal_sentiment = Column(String(20), nullable=True)
+
+    check_days = Column(Integer, nullable=False)
+    check_date = Column(String(10), nullable=False)
+    actual_change = Column(Float, nullable=True)                   # 등락률(%)
+    hit = Column(Boolean, nullable=True)                           # None = NEUTRAL 등 스킵
+    hit_magnitude = Column(Float, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
+# 일일 AI 정리 문서 (Daily Digest)
+# ─────────────────────────────────────────────
+class IntelDailyDigest(Base):
+    __tablename__ = "intel_daily_digests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(String(10), unique=True, nullable=False, index=True)  # YYYY-MM-DD
+    title = Column(String(300), nullable=True)
+    body_markdown = Column(Text, nullable=True)
+    stats_json = Column(Text, nullable=True)
+    source_content_ids = Column(Text, nullable=True)
+    source_signal_ids = Column(Text, nullable=True)
+    portfolio_highlight = Column(Text, nullable=True)
+    generated_at = Column(DateTime, nullable=True)
+    model = Column(String(80), nullable=True)
+    status = Column(String(20), default="pending")  # pending | ready | failed
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
+# Signal ↔ 주가 급변 Lead-Lag (선행 일수)
+# ─────────────────────────────────────────────
+class SignalLeadLag(Base):
+    __tablename__ = "signal_lead_lag"
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol", "move_date", "signal_type", "signal_id",
+            name="uq_signal_lead_lag",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    move_date = Column(String(10), nullable=False, index=True)
+    move_pct = Column(Float, nullable=True)
+    move_direction = Column(String(10), nullable=True)            # up / down
+    signal_type = Column(String(20), nullable=False, index=True)   # macro | sector | stock
+    signal_id = Column(Integer, nullable=False, index=True)
+    signal_date = Column(String(10), nullable=False, index=True)
+    signal_sentiment = Column(String(20), nullable=True)
+    lead_days = Column(Integer, nullable=False)                    # move_date - signal_date
+    sector = Column(String(50), nullable=True, index=True)
+    macro_topic = Column(String(50), nullable=True)              # macro일 때 topic
+    sentiment_aligned = Column(Boolean, default=True)            # Signal 감성 vs 급변 방향 일치
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
 # 관심 종목 (지켜보기 — 모의투자 아님)
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# 증권사·애널리스트 목표가 (차트 오버레이)
+# ─────────────────────────────────────────────
+class StockPriceTarget(Base):
+    __tablename__ = "stock_price_targets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=True, index=True)
+    source = Column(String(100), nullable=False)       # 증권사명
+    analyst = Column(String(80), nullable=True)
+    target_price = Column(Float, nullable=False)
+    rating = Column(String(30), nullable=True)         # 매수 / 중립 / 매도 등
+    report_date = Column(String(10), nullable=True)    # YYYY-MM-DD
+    currency = Column(String(10), default="KRW")
+    is_consensus = Column(Boolean, default=False)
+    source_url = Column(String(500), nullable=True)
+    source_title = Column(String(300), nullable=True)
+    notes = Column(Text, nullable=True)
+    fetched_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+# ─────────────────────────────────────────────
+# 미국 증시 아침 리포트
+# ─────────────────────────────────────────────
+class UsMarketReport(Base):
+    __tablename__ = "us_market_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    report_date = Column(String(10), unique=True, nullable=False, index=True)  # KST 기준 리포트 날짜
+    session_date = Column(String(10), nullable=True)   # 미국 장 마감일 (전일)
+    indices_json = Column(Text, nullable=True)
+    highlights_json = Column(Text, nullable=True)
+    body_markdown = Column(Text, nullable=True)
+    status = Column(String(20), default="pending")     # pending | ready | failed
+    error_message = Column(Text, nullable=True)
+    model = Column(String(80), nullable=True)
+    generated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class EconomicCalendarEvent(Base):
+    """검색·AI 추출 기반 주요 경제 일정 (캘린더 전용)"""
+    __tablename__ = "economic_calendar_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_date = Column(String(10), nullable=False, index=True)
+    title = Column(String(400), nullable=False)
+    region = Column(String(20), default="GLOBAL")
+    category = Column(String(80), nullable=True)
+    summary = Column(Text, nullable=True)
+    importance = Column(String(10), default="medium")
+    source_url = Column(String(800), nullable=True)
+    source_title = Column(String(400), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class WatchlistItem(Base):
     __tablename__ = "watchlist"
 
@@ -478,6 +681,100 @@ def _migrate_youtube_channel_columns():
             pass
 
 
+def _migrate_content_scope_columns():
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        try:
+            conn.execute(
+                text("ALTER TABLE intel_contents ADD COLUMN content_scope VARCHAR(20) DEFAULT 'market'")
+            )
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(text("UPDATE intel_contents SET content_scope='market' WHERE content_scope IS NULL"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(
+                text("ALTER TABLE youtube_channels ADD COLUMN default_market_impact BOOLEAN DEFAULT 0")
+            )
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(
+                text(
+                    "UPDATE youtube_channels SET default_market_impact=0 "
+                    "WHERE default_market_impact IS NULL"
+                )
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+
+def _migrate_knowledge_hub():
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        for ddl in (
+            "ALTER TABLE intel_contents ADD COLUMN domain_id INTEGER",
+            "ALTER TABLE intel_contents ADD COLUMN is_bookmarked BOOLEAN DEFAULT 0",
+            "ALTER TABLE intel_contents ADD COLUMN is_read BOOLEAN DEFAULT 0",
+            "ALTER TABLE youtube_channels ADD COLUMN domain_id INTEGER",
+        ):
+            try:
+                conn.execute(text(ddl))
+                conn.commit()
+            except Exception:
+                pass
+
+        try:
+            conn.execute(
+                text(
+                    "INSERT INTO knowledge_domains (name, slug, emoji, sort_order, is_active, keywords) "
+                    "SELECT '미분류', 'uncategorized', '📁', 999, 1, '[]' "
+                    "WHERE NOT EXISTS (SELECT 1 FROM knowledge_domains WHERE slug='uncategorized')"
+                )
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+        try:
+            conn.execute(
+                text(
+                    """
+                    UPDATE intel_contents
+                    SET domain_id = (SELECT id FROM knowledge_domains WHERE slug='uncategorized' LIMIT 1)
+                    WHERE content_scope = 'knowledge'
+                      AND (domain_id IS NULL OR domain_id = 0)
+                    """
+                )
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+
+def _migrate_price_target_columns():
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        for col, typ in (
+            ("source_url", "VARCHAR(500)"),
+            ("source_title", "VARCHAR(300)"),
+        ):
+            try:
+                conn.execute(text(f"ALTER TABLE stock_price_targets ADD COLUMN {col} {typ}"))
+                conn.commit()
+            except Exception:
+                pass
+
+
 def init_db():
     """테이블 생성"""
     Base.metadata.create_all(bind=engine)
@@ -486,6 +783,9 @@ def init_db():
     _migrate_stock_issue_columns()
     _migrate_youtube_channel_columns()
     _migrate_watchlist_columns()
+    _migrate_content_scope_columns()
+    _migrate_knowledge_hub()
+    _migrate_price_target_columns()
     print("✅ 데이터베이스 초기화 완료")
 
 

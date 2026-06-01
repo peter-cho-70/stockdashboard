@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import Link from "next/link";
 import {
   Video, Newspaper, FileText, Send, Loader2,
   TrendingUp, TrendingDown, Minus,
@@ -16,6 +17,8 @@ import {
 } from "@/components/watchlist-register-modal";
 import { streamAnalyze, AnalyzeStreamError } from "@/lib/analyzeStream";
 import { IntelDetailPanel, type IntelDetailData } from "@/components/intel-detail-panel";
+import { IntelCalendarHub } from "@/components/intelligence/intel-calendar-hub";
+import { knowledgeApi, type KnowledgeDomain } from "@/lib/knowledgeApi";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
@@ -27,6 +30,7 @@ const SOURCE_TABS = [
 ] as const;
 
 const PAGE_TABS = [
+  { id: "calendar", label: "캘린더" },
   { id: "analyze",  label: "분석 요청" },
   { id: "channels", label: "채널 구독" },
   { id: "history",  label: "분석 이력" },
@@ -37,7 +41,15 @@ const PAGE_TABS = [
 ] as const;
 
 // ─── 타입 ────────────────────────────────────────
-interface YTChannel { id: number; channel_id: string; channel_name: string; channel_url: string; last_checked_at: string | null; }
+interface YTChannel {
+  id: number;
+  channel_id: string;
+  channel_name: string;
+  channel_url: string;
+  default_market_impact: boolean;
+  domain_id: number | null;
+  last_checked_at: string | null;
+}
 interface YTVideo   { video_id: string; title: string; description: string; published_at: string; thumbnail: string; url: string; already_analyzed: boolean; }
 interface VideoAnalysis extends IntelDetailData {
   logs?: AnalysisLog[];
@@ -240,10 +252,32 @@ function SourceIcon({ type }: { type: string }) {
   return <FileText size={14} className="text-neutral-500" />;
 }
 
-function ContentCard({ content }: { content: IntelContent }) {
+function ScopeBadge({ scope }: { scope?: string | null }) {
+  const isKnowledge = scope === "knowledge";
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+        isKnowledge
+          ? "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300"
+          : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+      }`}
+    >
+      {isKnowledge ? "📚 지식" : "📈 주가 반영"}
+    </span>
+  );
+}
+
+function ContentCard({
+  content,
+  onScopeChange,
+}: {
+  content: IntelContent;
+  onScopeChange?: (updated: IntelContent) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [detail, setDetail] = useState<IntelContent | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [scopeBusy, setScopeBusy] = useState(false);
 
   async function toggleExpand() {
     const next = !expanded;
@@ -262,6 +296,23 @@ function ContentCard({ content }: { content: IntelContent }) {
   }
 
   const display = detail ?? content;
+  const scope = display.content_scope || "market";
+
+  async function changeScope(next: "knowledge" | "market") {
+    if (!content.id) return;
+    const label = next === "knowledge" ? "주가 반영에서 제외" : "주가 반영 적용";
+    if (!confirm(`${label}할까요?`)) return;
+    setScopeBusy(true);
+    try {
+      const r = await api.setIntelContentScope(content.id, next);
+      setDetail(r.content);
+      onScopeChange?.(r.content);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "변경 실패");
+    } finally {
+      setScopeBusy(false);
+    }
+  }
 
   return (
     <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4 hover:border-neutral-300 dark:hover:border-neutral-600 transition-colors">
@@ -270,6 +321,7 @@ function ContentCard({ content }: { content: IntelContent }) {
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
             {content.channel_name && <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">{content.channel_name}</span>}
+            <ScopeBadge scope={scope} />
             <SentimentBadge sentiment={content.sentiment} />
             {content.analyzed_at && <span className="text-xs text-neutral-400 ml-auto">{new Date(content.analyzed_at).toLocaleDateString("ko-KR")}</span>}
           </div>
@@ -277,7 +329,7 @@ function ContentCard({ content }: { content: IntelContent }) {
           {content.summary && !expanded && (
             <p className="text-sm text-neutral-600 dark:text-neutral-400 line-clamp-2">{content.summary}</p>
           )}
-          {!expanded && (
+          {!expanded && scope !== "knowledge" && (
             <div className="flex flex-wrap gap-1.5">
               {content.mentioned_sectors?.map((s) => (
                 <span key={s} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-400">{s}</span>
@@ -296,7 +348,26 @@ function ContentCard({ content }: { content: IntelContent }) {
               <IntelDetailPanel data={{ ...display, source_type: display.source_type, source_url: display.source_url }} />
             )
           )}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            {scope === "market" ? (
+              <button
+                type="button"
+                disabled={scopeBusy}
+                onClick={() => changeScope("knowledge")}
+                className="text-xs text-violet-600 hover:underline disabled:opacity-50"
+              >
+                주가 반영 제외
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={scopeBusy}
+                onClick={() => changeScope("market")}
+                className="text-xs text-emerald-600 hover:underline disabled:opacity-50"
+              >
+                주가 반영 적용
+              </button>
+            )}
             {content.source_url && (
               <a href={content.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-500 hover:underline">
                 원문 링크 <ExternalLink size={10} />
@@ -336,6 +407,11 @@ function ChannelPanel({
   const [bulkMsg, setBulkMsg]       = useState("");
   const [channelAnalyzeLogs, setChannelAnalyzeLogs] = useState<AnalysisLog[]>([]);
   const [channelAnalyzeError, setChannelAnalyzeError] = useState("");
+  const [marketImpactOnAdd, setMarketImpactOnAdd] = useState(false);
+  const [domainIdOnAdd, setDomainIdOnAdd] = useState<number | null>(null);
+  const [knowledgeDomains, setKnowledgeDomains] = useState<KnowledgeDomain[]>([]);
+  const [videoMarketImpact, setVideoMarketImpact] = useState<Record<string, boolean>>({});
+  const [detailedExtract, setDetailedExtract] = useState(false);
 
   // 영상별 분석 결과 & 펼침 상태
   const [analysisMap, setAnalysisMap] = useState<Record<string, VideoAnalysis>>({});
@@ -350,14 +426,63 @@ function ChannelPanel({
 
   useEffect(() => { loadChannels(); }, [loadChannels]);
 
+  useEffect(() => {
+    knowledgeApi.getDomains().then((list) => {
+      const visible = list.filter((d) => d.slug !== "uncategorized");
+      setKnowledgeDomains(visible);
+      if (visible[0] && domainIdOnAdd == null) setDomainIdOnAdd(visible[0].id);
+    }).catch(() => {});
+  }, [domainIdOnAdd]);
+
   async function addChannel() {
     if (!handle.trim()) return;
-    setAdding(true); setError("");
+    setAdding(true); setError(""); setBulkMsg("");
     try {
-      await fetchJson<YTChannel>("/youtube/channels", {
+      const r = await fetchJson<
+        YTChannel & {
+          reactivated?: boolean;
+          knowledge_conversion?: { matched: number; converted: number; already_knowledge: number };
+          knowledge_hub?: {
+            domain_id: number;
+            domain: { id: number; name: string; slug: string; emoji?: string };
+            domain_created: boolean;
+            hub_url: string;
+          };
+        }
+      >("/youtube/channels", {
         method: "POST",
-        body: JSON.stringify({ handle: handle.trim(), custom_name: customName.trim() || null }),
+        body: JSON.stringify({
+          handle: handle.trim(),
+          custom_name: customName.trim() || null,
+          default_market_impact: marketImpactOnAdd,
+          domain_id: marketImpactOnAdd ? undefined : domainIdOnAdd ?? undefined,
+        }),
       });
+      if (!marketImpactOnAdd && r.knowledge_hub) {
+        const hub = r.knowledge_hub;
+        let msg = hub.domain_created
+          ? `지식 허브에 「${hub.domain.name}」 분야가 자동 생성되었습니다.`
+          : `지식 허브 「${hub.domain.name}」 분야에 연결되었습니다.`;
+        if (r.reactivated) {
+          const kc = r.knowledge_conversion;
+          msg = "채널을 다시 등록했습니다. " + msg;
+          if (kc && kc.converted > 0) {
+            msg += ` 기존 분석 ${kc.converted}건을 지식으로 전환했습니다.`;
+          }
+        }
+        msg += ` → ${hub.hub_url}`;
+        setBulkMsg(msg);
+        knowledgeApi.getDomains().then((list) => {
+          setKnowledgeDomains(list.filter((d) => d.slug !== "uncategorized"));
+        }).catch(() => {});
+      } else if (r.reactivated) {
+        const kc = r.knowledge_conversion;
+        let msg = "채널을 다시 등록했습니다. 등록 폼 설정이 적용되었습니다.";
+        if (!marketImpactOnAdd && kc && kc.converted > 0) {
+          msg += ` 기존 분석 ${kc.converted}건을 지식(주가 미반영)으로 전환했습니다.`;
+        }
+        setBulkMsg(msg);
+      }
       setHandle(""); setCustomName("");
       await loadChannels();
     } catch (e: unknown) {
@@ -481,6 +606,11 @@ function ChannelPanel({
   }
 
   // 분석 완료된 영상 결과를 펼치거나 분석되지 않은 영상을 분석 시작
+  function videoMarketFlag(videoId: string): boolean {
+    if (videoId in videoMarketImpact) return videoMarketImpact[videoId];
+    return selectedCh?.default_market_impact ?? false;
+  }
+
   async function toggleOrAnalyze(v: YTVideo, channelName: string) {
     if (v.already_analyzed) {
       // 이미 분석됨 → 결과 토글
@@ -503,7 +633,15 @@ function ChannelPanel({
       try {
         const r = await streamAnalyze<VideoAnalysis>(
           "/youtube/analyze/stream",
-          { url: v.url, channel_name: channelName, analysis_provider: analysisProvider },
+          {
+            url: v.url,
+            channel_name: channelName,
+            channel_db_id: selectedCh?.id,
+            analysis_provider: analysisProvider,
+            market_impact: videoMarketFlag(v.video_id),
+            detailed_extract: detailedExtract,
+            domain_id: videoMarketFlag(v.video_id) ? undefined : (selectedCh?.domain_id ?? domainIdOnAdd ?? undefined),
+          },
           (log) => setChannelAnalyzeLogs((prev) => [...prev, log]),
         );
         setVideos((prev) => prev.map((x) => x.video_id === v.video_id ? { ...x, already_analyzed: true } : x));
@@ -561,6 +699,34 @@ function ChannelPanel({
               {adding ? "추가 중..." : "추가"}
             </button>
           </div>
+          <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={marketImpactOnAdd}
+              onChange={(e) => setMarketImpactOnAdd(e.target.checked)}
+              className="rounded border-neutral-300"
+            />
+            <span>
+              <span className="font-medium text-emerald-700 dark:text-emerald-400">주가 반영</span>
+              {" "}채널 — 체크 시 영상 분석이 매크로·시그널에 반영됩니다 (미체크 시 📚 지식만 저장)
+            </span>
+          </label>
+          {!marketImpactOnAdd && knowledgeDomains.length > 0 && (
+            <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400">
+              <span className="shrink-0">관심 분야</span>
+              <select
+                value={domainIdOnAdd ?? ""}
+                onChange={(e) => setDomainIdOnAdd(Number(e.target.value))}
+                className="flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1.5 text-xs"
+              >
+                {knowledgeDomains.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.emoji} {d.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {error && (
             <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
               <AlertCircle size={13} /> {error}
@@ -586,6 +752,11 @@ function ChannelPanel({
                 <div className="flex items-center gap-2 min-w-0">
                   <Tv size={16} className="shrink-0 text-red-500" />
                   <span className="font-medium text-sm text-neutral-800 dark:text-neutral-200 truncate">{ch.channel_name}</span>
+                  {ch.default_market_impact ? (
+                    <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">주가</span>
+                  ) : (
+                    <span className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-400">지식</span>
+                  )}
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); removeChannel(ch.id); }}
@@ -647,6 +818,21 @@ function ChannelPanel({
             </div>
           </div>
 
+          <div className="border-b border-[var(--border-subtle)] px-4 py-2.5 flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={detailedExtract}
+                onChange={(e) => setDetailedExtract(e.target.checked)}
+                className="rounded border-neutral-300"
+              />
+              <span>
+                <span className="font-medium text-neutral-800 dark:text-neutral-200">상세 추출</span>
+                {" "}(기본 대비 약 3배 · Gemini · 시간·토큰 더 사용)
+              </span>
+            </label>
+          </div>
+
           {bulkMsg && (
             <div className="border-b border-[var(--border-subtle)] bg-emerald-50 dark:bg-emerald-900/15 px-4 py-2 text-xs text-emerald-700 dark:text-emerald-400">
               ✅ {bulkMsg}
@@ -695,8 +881,26 @@ function ChannelPanel({
                           {new Date(v.published_at).toLocaleDateString("ko-KR")}
                         </p>
                       </div>
-                      {/* 분석 버튼 */}
-                      <div className="shrink-0">
+                      <div className="shrink-0 flex flex-col items-end gap-1.5">
+                        {!v.already_analyzed && (
+                          <label
+                            className="flex items-center gap-1 text-[10px] text-neutral-500 cursor-pointer select-none"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={videoMarketFlag(v.video_id)}
+                              onChange={(e) =>
+                                setVideoMarketImpact((prev) => ({
+                                  ...prev,
+                                  [v.video_id]: e.target.checked,
+                                }))
+                              }
+                              className="rounded border-neutral-300"
+                            />
+                            주가 반영
+                          </label>
+                        )}
                         {v.already_analyzed ? (
                           <button
                             onClick={() => toggleOrAnalyze(v, selectedCh.channel_name)}
@@ -723,7 +927,7 @@ function ChannelPanel({
                     {isAnalyzing && (
                       <div className="mt-2 flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/50 dark:border-blue-800 dark:bg-blue-900/10 px-3 py-2.5 text-xs text-blue-600 dark:text-blue-400">
                         <Loader2 size={13} className="animate-spin shrink-0" />
-                        Gemini→GPT 분석 중... (1~3분)
+                        {detailedExtract ? "상세 추출·분석 중... (3~5분)" : "Gemini→AI 분석 중... (1~3분)"}
                       </div>
                     )}
                     {isExpanded && analysis && <InlineAnalysisPanel analysis={analysis} />}
@@ -758,20 +962,57 @@ function AnalyzePanel({
   const [inputTitle,   setInputTitle]   = useState("");
   const [inputChannel, setInputChannel] = useState("");
   const [inputMode,    setInputMode]    = useState<"url" | "text">("text");
+  const [analyzeScope, setAnalyzeScope] = useState<"knowledge" | "market">("knowledge");
+  const [knowledgeDomains, setKnowledgeDomains] = useState<KnowledgeDomain[]>([]);
+  const [selectedDomainId, setSelectedDomainId] = useState<number | null>(null);
+  const [detailedExtract, setDetailedExtract] = useState(false);
   const [analyzing,    setAnalyzing]    = useState(false);
   const [lastResult,   setLastResult]   = useState<AnalysisResult | null>(null);
   const [lastLogs,     setLastLogs]     = useState<AnalysisLog[]>([]);
   const [error,        setError]        = useState("");
 
+  useEffect(() => {
+    if (analyzeScope !== "knowledge") return;
+    knowledgeApi
+      .getDomains()
+      .then((list) => {
+        const visible = list.filter((d) => d.slug !== "uncategorized");
+        setKnowledgeDomains(visible);
+        if (visible[0] && selectedDomainId == null) setSelectedDomainId(visible[0].id);
+      })
+      .catch(() => {});
+  }, [analyzeScope, selectedDomainId]);
+
   async function handleAnalyze() {
     if (inputMode === "url" && !inputUrl.trim()) return;
     if (inputMode === "text" && !inputText.trim()) return;
+    if (analyzeScope === "knowledge" && !selectedDomainId) {
+      setError("지식 분석에는 관심 분야를 선택하세요. /knowledge 에서 분야를 추가할 수 있습니다.");
+      return;
+    }
     setAnalyzing(true); setError(""); setLastResult(null); setLastLogs([]);
     try {
+      const marketImpact = analyzeScope === "market";
+      const isYoutubeUrl =
+        inputMode === "url" &&
+        /youtube\.com|youtu\.be/i.test(inputUrl.trim());
       const payload =
         inputMode === "url"
-          ? { url: inputUrl.trim(), channel_name: inputChannel.trim() || undefined, analysis_provider: analysisProvider }
-          : { text: inputText.trim(), title: inputTitle.trim() || undefined, analysis_provider: analysisProvider };
+          ? {
+              url: inputUrl.trim(),
+              channel_name: inputChannel.trim() || undefined,
+              analysis_provider: marketImpact ? analysisProvider : undefined,
+              market_impact: marketImpact,
+              ...(isYoutubeUrl ? { detailed_extract: detailedExtract } : {}),
+              ...(marketImpact ? {} : { domain_id: selectedDomainId }),
+            }
+          : {
+              text: inputText.trim(),
+              title: inputTitle.trim() || undefined,
+              analysis_provider: marketImpact ? analysisProvider : undefined,
+              market_impact: marketImpact,
+              ...(marketImpact ? {} : { domain_id: selectedDomainId }),
+            };
 
       const result = await streamAnalyze<AnalysisResult>(
         "/intel/analyze/stream",
@@ -792,18 +1033,70 @@ function AnalyzePanel({
 
   return (
     <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] overflow-hidden">
-      <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-4 py-3">
         <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">새 분석 요청</h2>
-        <div className="flex gap-1 rounded-md border border-[var(--border-subtle)] p-0.5">
-          {(["text", "url"] as const).map((m) => (
-            <button key={m} onClick={() => setInputMode(m)}
-              className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${inputMode === m ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900" : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"}`}>
-              {m === "text" ? "텍스트" : "URL"}
-            </button>
-          ))}
+        <div className="flex flex-wrap gap-2">
+          <div className="flex gap-1 rounded-md border border-[var(--border-subtle)] p-0.5">
+            {(
+              [
+                { id: "knowledge" as const, label: "📚 지식" },
+                { id: "market" as const, label: "📈 주가 반영" },
+              ] as const
+            ).map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => setAnalyzeScope(s.id)}
+                className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                  analyzeScope === s.id
+                    ? s.id === "market"
+                      ? "bg-emerald-700 text-white dark:bg-emerald-600"
+                      : "bg-violet-700 text-white dark:bg-violet-600"
+                    : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1 rounded-md border border-[var(--border-subtle)] p-0.5">
+            {(["text", "url"] as const).map((m) => (
+              <button key={m} type="button" onClick={() => setInputMode(m)}
+                className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${inputMode === m ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900" : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"}`}>
+                {m === "text" ? "텍스트" : "URL"}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       <div className="p-4 space-y-3">
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+          {analyzeScope === "market"
+            ? "매크로·섹터·시그널·시장 캘린더에 반영됩니다."
+            : "요약·핵심 포인트만 저장합니다. 시장 Signal·캘린더에는 포함되지 않습니다. (Gemini 요약)"}
+        </p>
+        {analyzeScope === "knowledge" && (
+          <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400">
+            <span className="shrink-0 font-medium">관심 분야</span>
+            {knowledgeDomains.length === 0 ? (
+              <Link href="/knowledge/settings/domains" className="text-violet-600 hover:underline">
+                분야를 먼저 추가하세요 →
+              </Link>
+            ) : (
+              <select
+                value={selectedDomainId ?? ""}
+                onChange={(e) => setSelectedDomainId(Number(e.target.value))}
+                className="flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1.5"
+              >
+                {knowledgeDomains.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.emoji} {d.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
+        )}
         {inputMode === "url" ? (
           <>
             <input type="url" value={inputUrl} onChange={(e) => setInputUrl(e.target.value)}
@@ -812,6 +1105,20 @@ function AnalyzePanel({
             <input type="text" value={inputChannel} onChange={(e) => setInputChannel(e.target.value)}
               placeholder="채널명 (선택 · YouTube일 때)"
               className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-3 py-2 text-sm placeholder:text-neutral-400 focus:outline-none" />
+            {/youtube\.com|youtu\.be/i.test(inputUrl.trim()) && (
+              <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={detailedExtract}
+                  onChange={(e) => setDetailedExtract(e.target.checked)}
+                  className="rounded border-neutral-300"
+                />
+                <span>
+                  <span className="font-medium text-neutral-800 dark:text-neutral-200">YouTube 상세 추출</span>
+                  {" "}— 문서·요약을 기본 대비 약 3배 길게 (Gemini, 분석 시간 증가)
+                </span>
+              </label>
+            )}
           </>
         ) : (
           <>
@@ -831,7 +1138,17 @@ function AnalyzePanel({
         <button onClick={handleAnalyze} disabled={analyzing}
           className="flex items-center gap-2 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900">
           {analyzing ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-          {analyzing ? "분석 중 (Gemini→AI)..." : "AI 분석 시작"}
+          {analyzing
+            ? analyzeScope === "market"
+              ? detailedExtract
+                ? "상세 추출·분석 중..."
+                : "분석 중 (Gemini→AI)..."
+              : detailedExtract
+                ? "상세 추출·지식 요약 중..."
+                : "분석 중 (지식 요약)..."
+            : analyzeScope === "market"
+              ? "주가 반영 분석 시작"
+              : "지식 분석 시작"}
         </button>
         {(analyzing || lastLogs.length > 0) && (
           <AnalysisLogPanel logs={lastLogs} analyzing={analyzing} />
@@ -841,9 +1158,10 @@ function AnalyzePanel({
       {lastResult && (
         <div className="border-t border-[var(--border-subtle)] bg-[var(--surface-elevated)] p-4 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">✅ 분석 완료</span>
-              <SentimentBadge sentiment={lastResult.sentiment} />
+              <ScopeBadge scope={lastResult.content_scope || (analyzeScope === "market" ? "market" : "knowledge")} />
+              {analyzeScope === "market" && <SentimentBadge sentiment={lastResult.sentiment} />}
             </div>
             <button
               type="button"
@@ -1237,7 +1555,7 @@ function RemindPanel() {
 
 // ─── 메인 페이지 ──────────────────────────────────
 export default function IntelligencePage() {
-  const [pageTab,        setPageTab]      = useState<"analyze" | "channels" | "history" | "briefing" | "macro" | "sectors" | "remind">("analyze");
+  const [pageTab,        setPageTab]      = useState<"calendar" | "analyze" | "channels" | "history" | "briefing" | "macro" | "sectors" | "remind">("calendar");
   const [contents,       setContents]     = useState<IntelContent[]>([]);
   const [sourceFilter,   setSourceFilter] = useState<"ALL" | "YOUTUBE" | "NEWS" | "TEXT">("ALL");
   const [loading,        setLoading]      = useState(true);
@@ -1283,8 +1601,8 @@ export default function IntelligencePage() {
     <div className="space-y-6">
       {/* 헤더 */}
       <div>
-        <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">AI 인텔리전스 허브</h1>
-        <p className="mt-0.5 text-xs text-neutral-400">텍스트 분석 기본 · GPT 구조화 분석 (YouTube/URL은 Gemini 추출)</p>
+        <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">AI 분석</h1>
+        <p className="mt-0.5 text-xs text-neutral-400">캘린더·경제 일정·이슈·Signal을 날짜별로 보고 분석 도구를 실행합니다</p>
       </div>
 
       <AnalysisProviderSelect value={analysisProvider} onChange={setAnalysisProvider} />
@@ -1300,6 +1618,8 @@ export default function IntelligencePage() {
       </div>
 
       {/* 탭 콘텐츠 */}
+      {pageTab === "calendar" && <IntelCalendarHub />}
+
       {pageTab === "analyze" && (
         <AnalyzePanel
           onDone={() => loadContents()}
@@ -1354,7 +1674,12 @@ export default function IntelligencePage() {
                   id={`intel-item-${c.id}`}
                   className={`rounded-xl transition-all duration-700 ${highlightId === c.id ? "ring-2 ring-blue-400 ring-offset-2 dark:ring-offset-neutral-900" : ""}`}
                 >
-                  <ContentCard content={c} />
+                  <ContentCard
+                    content={c}
+                    onScopeChange={(updated) =>
+                      setContents((prev) => prev.map((x) => (x.id === updated.id ? { ...x, ...updated } : x)))
+                    }
+                  />
                 </div>
               ))}
             </div>
