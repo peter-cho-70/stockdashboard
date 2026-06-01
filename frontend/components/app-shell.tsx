@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { DemoBanner } from "@/components/demo-banner";
 import { TrendingUp } from "lucide-react";
 
 const menuGroups = [
@@ -81,6 +82,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </header>
+      <DemoBanner />
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
         {children}
       </main>

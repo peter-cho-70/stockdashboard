@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from config.database import Stock, WatchlistItem
 from core.sector_peers import normalize_sector
 from core.stock_resolver import resolve_symbol
+from core.watchlist_detail import resolve_name_from_symbol
 
 
 def resolve_symbol_by_name(name: str, db: Optional[Session] = None) -> Optional[str]:
@@ -63,7 +64,12 @@ def add_to_watchlist(
     source_id: Optional[int] = None,
     memo: Optional[str] = None,
 ) -> WatchlistItem:
-    sym = symbol or resolve_symbol_by_name(stock_name, db)
+    sym = (symbol or "").strip() or None
+    sym = sym or resolve_symbol_by_name(stock_name, db)
+    if sym:
+        official = resolve_name_from_symbol(sym)
+        if official:
+            stock_name = official
     existing = (
         db.query(WatchlistItem)
         .filter(WatchlistItem.stock_name == stock_name)
@@ -99,6 +105,14 @@ def add_to_watchlist(
 
 
 def serialize_watchlist_item(item: WatchlistItem, stock: Optional[Stock] = None) -> dict:
+    current = stock.current_price if stock and stock.current_price else None
+    target = item.target_buy_price
+    target_hit = False
+    target_gap_pct: Optional[float] = None
+    if target and target > 0 and current and current > 0:
+        target_gap_pct = round((current - target) / target * 100, 2)
+        target_hit = current <= target
+
     return {
         "id": item.id,
         "symbol": item.symbol,
@@ -107,7 +121,10 @@ def serialize_watchlist_item(item: WatchlistItem, stock: Optional[Stock] = None)
         "source_type": item.source_type,
         "source_id": item.source_id,
         "memo": item.memo,
-        "current_price": stock.current_price if stock else None,
+        "target_buy_price": target,
+        "target_hit": target_hit,
+        "target_gap_pct": target_gap_pct,
+        "current_price": current,
         "change_rate": stock.change_rate if stock else None,
         "created_at": item.created_at.isoformat() if item.created_at else None,
     }

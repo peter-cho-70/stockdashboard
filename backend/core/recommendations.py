@@ -113,5 +113,13 @@ def get_stock_recommendations(
             symbol=sym,
         )
 
-    results = sorted(agg.values(), key=lambda x: (-x["mention_count"], x.get("latest_date") or ""))
-    return results[:limit]
+    results = sorted(
+        agg.values(),
+        key=lambda x: (x.get("latest_date") or "", x["mention_count"]),
+        reverse=True,
+    )
+    out = results[:limit]
+    for row in out:
+        if not row.get("symbol"):
+            row["symbol"] = resolve_symbol(row["stock_name"], db)
+    return out

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { KeyRound, Bell, Server, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { KeyRound, Bell, Server, CheckCircle2, XCircle, Loader2, Eye } from "lucide-react";
 import { api } from "@/lib/api";
 
 function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
@@ -72,6 +72,20 @@ export default function SettingsPage() {
           <p># 백엔드 서버 시작</p>
           <p className="text-neutral-800 dark:text-neutral-200">cd stockdashboard/backend</p>
           <p className="text-neutral-800 dark:text-neutral-200">python main.py</p>
+        </div>
+      </Section>
+
+      <Section title="데모 모드 (공개 시연)" icon={<Eye size={15} />}>
+        <p className="text-sm text-neutral-600 dark:text-neutral-400">
+          실제 보유를 숨기고 <code className="text-xs">backend/data/demo_portfolio.json</code> 의 샘플 종목·수량만
+          표시합니다. 차트·AI 분석은 동일 종목코드 데이터를 사용합니다.
+        </p>
+        <div className="rounded-md bg-[var(--surface-elevated)] p-3 font-mono text-xs text-neutral-600 dark:text-neutral-400 space-y-1">
+          <p># API (Render / Vercel 백엔드)</p>
+          <p className="text-neutral-800 dark:text-neutral-200">DEMO_MODE=true</p>
+          <p># 프론트 (Vercel)</p>
+          <p className="text-neutral-800 dark:text-neutral-200">NEXT_PUBLIC_DEMO_MODE=true</p>
+          <p className="text-amber-700 dark:text-amber-400"># JSON 수정 후 서버 재시작</p>
         </div>
       </Section>
 

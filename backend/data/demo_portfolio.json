@@ -1,0 +1,106 @@
+{
+  "title": "데모 포트폴리오 (샘플)",
+  "description": "공개·시연용 — 실제 보유와 무관합니다. 종목·수량·평단을 수정한 뒤 서버를 재시작하세요.",
+  "holdings": [
+    {
+      "symbol": "005930",
+      "name": "삼성전자",
+      "market": "KRX",
+      "sector": "반도체",
+      "currency": "KRW",
+      "qty": 120,
+      "avg_price": 68000,
+      "current_price": 0
+    },
+    {
+      "symbol": "000660",
+      "name": "SK하이닉스",
+      "market": "KRX",
+      "sector": "반도체",
+      "currency": "KRW",
+      "qty": 25,
+      "avg_price": 175000,
+      "current_price": 0
+    },
+    {
+      "symbol": "373220",
+      "name": "LG에너지솔루션",
+      "market": "KRX",
+      "sector": "2차전지",
+      "currency": "KRW",
+      "qty": 15,
+      "avg_price": 380000,
+      "current_price": 0
+    },
+    {
+      "symbol": "005380",
+      "name": "현대차",
+      "market": "KRX",
+      "sector": "자동차",
+      "currency": "KRW",
+      "qty": 40,
+      "avg_price": 210000,
+      "current_price": 0
+    },
+    {
+      "symbol": "035420",
+      "name": "NAVER",
+      "market": "KRX",
+      "sector": "AI·빅테크",
+      "currency": "KRW",
+      "qty": 30,
+      "avg_price": 195000,
+      "current_price": 0
+    },
+    {
+      "symbol": "068270",
+      "name": "셀트리온",
+      "market": "KRX",
+      "sector": "바이오",
+      "currency": "KRW",
+      "qty": 20,
+      "avg_price": 165000,
+      "current_price": 0
+    },
+    {
+      "symbol": "105560",
+      "name": "KB금융",
+      "market": "KRX",
+      "sector": "금융",
+      "currency": "KRW",
+      "qty": 80,
+      "avg_price": 62000,
+      "current_price": 0
+    },
+    {
+      "symbol": "005490",
+      "name": "POSCO홀딩스",
+      "market": "KRX",
+      "sector": "철강",
+      "currency": "KRW",
+      "qty": 35,
+      "avg_price": 280000,
+      "current_price": 0
+    },
+    {
+      "symbol": "012450",
+      "name": "한화에어로스페이스",
+      "market": "KRX",
+      "sector": "방산",
+      "currency": "KRW",
+      "qty": 8,
+      "avg_price": 850000,
+      "current_price": 0
+    },
+    {
+      "symbol": "259960",
+      "name": "크래프톤",
+      "market": "KRX",
+      "sector": "게임",
+      "currency": "KRW",
+      "qty": 12,
+      "avg_price": 220000,
+      "current_price": 0
+    }
+  ]
+}

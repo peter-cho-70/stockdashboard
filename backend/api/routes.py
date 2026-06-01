@@ -12,7 +12,7 @@ from datetime import datetime
 
 from config.database import (
     get_db, Stock, AlertHistory, IntelContent, StockIssue, PortfolioSnapshot,
-    RealizedGain, PortfolioTrade,
+    RealizedGain, PortfolioTrade, ChartDateMemo,
 )
 from core.portfolio_positions import (
     serialize_stock,
@@ -35,6 +35,14 @@ from core.ai_analyzer import (
 from core.analysis_stream import run_intel_analysis, stream_analysis, run_explain_move
 from core.move_explainer import explain_and_save, get_move_causes_for_stock, serialize_move_cause
 from core.price_updater import update_prices_from_krx, save_daily_snapshot
+from core.demo_mode import (
+    is_demo_mode,
+    demo_write_blocked,
+    build_demo_summary,
+    build_demo_stocks,
+    build_demo_history,
+    demo_info,
+)
 
 settings = get_settings()
 router = APIRouter()
@@ -45,7 +53,18 @@ router = APIRouter()
 # ─────────────────────────────────────────────
 @router.get("/health")
 def health_check():
-    return {"status": "ok", "service": "StockMind API"}
+    return {
+        "status": "ok",
+        "service": "StockMind API",
+        "demo_mode": is_demo_mode(),
+    }
+
+
+@router.get("/demo/info")
+def get_demo_info():
+    if not is_demo_mode():
+        return {"demo_mode": False}
+    return demo_info()
 
 
 # ─────────────────────────────────────────────
@@ -66,6 +85,7 @@ class StockCreate(BaseModel):
 @router.post("/portfolio/stocks")
 def add_stock(body: StockCreate, db: Session = Depends(get_db)):
     """종목 단건 수동 등록 (KIS API 없이 직접 입력)"""
+    demo_write_blocked()
     symbol = body.symbol.strip()
     existing = db.query(Stock).filter(Stock.symbol == symbol).first()
     purchase_amount = body.qty * body.avg_price
@@ -109,6 +129,7 @@ def add_stock(body: StockCreate, db: Session = Depends(get_db)):
 @router.post("/portfolio/stocks/bulk")
 def bulk_add_stocks(body: List[StockCreate], db: Session = Depends(get_db)):
     """종목 일괄 등록"""
+    demo_write_blocked()
     results = []
     for item in body:
         existing = db.query(Stock).filter(Stock.symbol == item.symbol).first()
@@ -151,6 +172,7 @@ def bulk_add_stocks(body: List[StockCreate], db: Session = Depends(get_db)):
 @router.delete("/portfolio/stocks/{symbol}")
 def delete_stock(symbol: str, db: Session = Depends(get_db)):
     """종목 보유 제외 (soft delete)"""
+    demo_write_blocked()
     stock = get_stock_by_symbol(db, symbol)
     if not stock:
         raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
@@ -173,6 +195,7 @@ class PositionUpdate(BaseModel):
 @router.patch("/portfolio/stocks/{symbol}")
 def update_stock_position(symbol: str, body: PositionUpdate, db: Session = Depends(get_db)):
     """잔고 수동 수정 (수량·평단 등)"""
+    demo_write_blocked()
     stock = get_stock_by_symbol(db, symbol)
     if not stock:
         raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
@@ -210,6 +233,7 @@ class TradeCreate(BaseModel):
 @router.post("/portfolio/stocks/{symbol}/trades")
 def create_stock_trade(symbol: str, body: TradeCreate, db: Session = Depends(get_db)):
     """매수·매도 체결 반영"""
+    demo_write_blocked()
     stock = get_stock_by_symbol(db, symbol)
     if not stock:
         raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
@@ -368,12 +392,115 @@ def get_stock_chart(
         raise HTTPException(status_code=500, detail=f"차트 데이터 조회 실패: {e}")
 
 
+class ChartDateMemoBody(BaseModel):
+    event_date: str
+    body: str
+
+
+class ChartDateMemoUpdate(BaseModel):
+    body: str
+
+
+def _memo_dict(m: ChartDateMemo) -> dict:
+    return {
+        "id": m.id,
+        "symbol": m.symbol,
+        "event_date": m.event_date,
+        "body": m.body,
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+        "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+    }
+
+
+@router.get("/portfolio/stocks/{symbol}/chart-memos")
+def list_chart_memos(symbol: str, db: Session = Depends(get_db)):
+    """종목 차트 날짜 메모 목록"""
+    stock = get_stock_by_symbol(db, symbol)
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+    memos = (
+        db.query(ChartDateMemo)
+        .filter(ChartDateMemo.symbol == symbol)
+        .order_by(ChartDateMemo.event_date.desc())
+        .all()
+    )
+    return [_memo_dict(m) for m in memos]
+
+
+@router.post("/portfolio/stocks/{symbol}/chart-memos")
+def create_chart_memo(symbol: str, body: ChartDateMemoBody, db: Session = Depends(get_db)):
+    """차트 날짜 메모 추가 (같은 날짜는 덮어쓰기)"""
+    stock = get_stock_by_symbol(db, symbol)
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+    text = (body.body or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="메모 내용을 입력해 주세요.")
+    event_date = body.event_date.strip()
+    if len(event_date) != 10:
+        raise HTTPException(status_code=400, detail="날짜는 YYYY-MM-DD 형식이어야 합니다.")
+
+    existing = (
+        db.query(ChartDateMemo)
+        .filter(ChartDateMemo.symbol == symbol, ChartDateMemo.event_date == event_date)
+        .first()
+    )
+    if existing:
+        existing.body = text
+        existing.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return {"message": "메모 수정됨", "memo": _memo_dict(existing)}
+
+    memo = ChartDateMemo(symbol=symbol, event_date=event_date, body=text)
+    db.add(memo)
+    db.commit()
+    db.refresh(memo)
+    return {"message": "메모 추가됨", "memo": _memo_dict(memo)}
+
+
+@router.delete("/portfolio/chart-memos/{memo_id}")
+def delete_chart_memo(memo_id: int, db: Session = Depends(get_db)):
+    memo = db.query(ChartDateMemo).filter(ChartDateMemo.id == memo_id).first()
+    if not memo:
+        raise HTTPException(status_code=404, detail="메모 없음")
+    db.delete(memo)
+    db.commit()
+    return {"message": "삭제 완료"}
+
+
 # ─────────────────────────────────────────────
 # KRX 시세 갱신 (pykrx — KIS API 불필요)
 # ─────────────────────────────────────────────
 @router.post("/portfolio/refresh-prices")
 def refresh_prices_krx(db: Session = Depends(get_db)):
     """pykrx로 국내 종목 현재가 갱신 (KIS API 없이 사용 가능)"""
+    if is_demo_mode():
+        from core.demo_mode import demo_symbol_set
+
+        symbols = demo_symbol_set()
+        updated = 0
+        for sym in symbols:
+            stock = db.query(Stock).filter(Stock.symbol == sym).first()
+            if not stock:
+                continue
+            try:
+                from pykrx import stock as krx
+                from datetime import date as _date
+
+                today = _date.today().strftime("%Y%m%d")
+                df = krx.get_market_ohlcv_by_date(today, today, sym)
+                if df is not None and not df.empty:
+                    stock.current_price = float(df.iloc[-1]["종가"])
+                    updated += 1
+            except Exception:
+                pass
+        db.commit()
+        return {
+            "message": f"데모 종목 시세 갱신: {updated}개",
+            "updated": updated,
+            "alerts": [],
+        }
     try:
         result = update_prices_from_krx(db, alert_threshold=settings.alert_threshold)
         save_daily_snapshot(db)
@@ -391,7 +518,11 @@ def refresh_prices_krx(db: Session = Depends(get_db)):
 # ─────────────────────────────────────────────
 @router.get("/portfolio/history")
 def get_portfolio_history(days: int = 30, db: Session = Depends(get_db)):
-    """일별 포트폴리오 수익률 이력 (차트용)"""
+    """일별 포트폴리오 수익률 이력 (차트용, 최대 400일)"""
+    days = max(1, min(days, 400))
+    if is_demo_mode():
+        summary = build_demo_summary(db)
+        return build_demo_history(days, summary)
     snapshots = (
         db.query(PortfolioSnapshot)
         .order_by(PortfolioSnapshot.date.desc())
@@ -415,6 +546,8 @@ def get_portfolio_history(days: int = 30, db: Session = Depends(get_db)):
 @router.get("/portfolio/summary")
 def get_portfolio_summary(db: Session = Depends(get_db)):
     """포트폴리오 요약 (총 평가금액, 수익률, 상위/하위 종목)"""
+    if is_demo_mode():
+        return build_demo_summary(db)
     stocks = db.query(Stock).filter(Stock.is_active == True).all()
     if not stocks:
         return {
@@ -459,6 +592,8 @@ def get_portfolio_summary(db: Session = Depends(get_db)):
 @router.get("/portfolio/stocks")
 def get_stocks(db: Session = Depends(get_db)):
     """보유 종목 전체 목록 (qty > 0)"""
+    if is_demo_mode():
+        return build_demo_stocks(db)
     stocks = db.query(Stock).filter(Stock.is_active == True, Stock.qty > 0).all()
     return [serialize_stock(s) for s in stocks]
 
@@ -466,6 +601,7 @@ def get_stocks(db: Session = Depends(get_db)):
 @router.post("/portfolio/sync")
 async def sync_portfolio(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """KIS API 잔고 동기화 (백그라운드 실행)"""
+    demo_write_blocked()
     def run_sync():
         try:
             kis = create_kis_client_from_settings()
@@ -482,6 +618,7 @@ async def sync_portfolio(background_tasks: BackgroundTasks, db: Session = Depend
 @router.post("/portfolio/sync/now")
 def sync_portfolio_now(db: Session = Depends(get_db)):
     """KIS API 잔고 동기화 (즉시 실행, 결과 반환)"""
+    demo_write_blocked()
     try:
         kis = create_kis_client_from_settings()
         manager = PortfolioManager(db, kis)
@@ -502,6 +639,7 @@ class MemoUpdate(BaseModel):
 @router.patch("/portfolio/stocks/{symbol}/memo")
 def update_stock_memo(symbol: str, body: MemoUpdate, db: Session = Depends(get_db)):
     """종목 메모 및 섹터 업데이트"""
+    demo_write_blocked()
     stock = db.query(Stock).filter(Stock.symbol == symbol).first()
     if not stock:
         raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")

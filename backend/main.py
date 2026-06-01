@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config.database import init_db
+from core.demo_mode import ensure_demo_anchor_stocks, is_demo_mode
 from config.settings import get_settings
 from api.routes import router
 from api.routes_gains import gains_router
@@ -37,6 +38,15 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 StockMind 시작 중... (serverless=%s)", SERVERLESS)
 
     init_db()
+    if is_demo_mode():
+        from config.database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            ensure_demo_anchor_stocks(db)
+            logger.info("✅ 데모 모드 — anchor 종목 준비 완료")
+        finally:
+            db.close()
 
     scheduler = None
     if not SERVERLESS:

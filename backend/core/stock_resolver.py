@@ -5,6 +5,7 @@ core/stock_resolver.py
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 from typing import Optional
 
@@ -28,6 +29,9 @@ _NAME_ALIASES: dict[str, str] = {
     "카뱅": "카카오뱅크",
     "posco": "POSCO홀딩스",
     "posco홀딩스": "POSCO홀딩스",
+    "삼전": "삼성전자",
+    "하이닉": "SK하이닉스",
+    "하이닉스": "SK하이닉스",
 }
 
 _STATIC_MAP: dict[str, str] = {
@@ -59,6 +63,45 @@ _STATIC_MAP: dict[str, str] = {
 _cache: dict[str, Optional[str]] = {}
 _krx_ticker_map: dict[str, str] = {}
 _krx_loaded = False
+
+
+def _normalize_stock_name(name: str) -> str:
+    """괄호·(주) 등 제거 후 비교용 이름."""
+    s = (name or "").strip()
+    s = re.sub(r"\([^)]*\)", "", s)
+    s = re.sub(r"（[^）]*）", "", s)
+    s = re.sub(r"㈜|주식회사|\(주\)|\(유\)", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s+", "", s)
+    return s.strip()
+
+
+def _krx_fuzzy_match(query: str) -> Optional[str]:
+    """KRX 전체 목록에서 부분 일치 (정확·포함·단일 후보)."""
+    q = _normalize_stock_name(query)
+    if len(q) < 2:
+        return None
+    _load_krx_tickers()
+    ql = q.lower()
+
+    for k, v in _krx_ticker_map.items():
+        if k.lower() == ql:
+            return v
+
+    contains = [(k, v) for k, v in _krx_ticker_map.items() if ql in k.lower()]
+    if len(contains) == 1:
+        return contains[0][1]
+    if contains:
+        contains.sort(key=lambda x: len(x[0]))
+        return contains[0][1]
+
+    reverse = [(k, v) for k, v in _krx_ticker_map.items() if k.lower().startswith(ql)]
+    if len(reverse) == 1:
+        return reverse[0][1]
+    if reverse:
+        reverse.sort(key=lambda x: len(x[0]))
+        return reverse[0][1]
+
+    return None
 
 
 def _load_krx_tickers() -> None:
@@ -97,34 +140,43 @@ def resolve_symbol(name: str, db: Optional[Session] = None) -> Optional[str]:
     if lower in _cache:
         return _cache[lower]
 
-    canonical = _NAME_ALIASES.get(lower, raw)
+    variants: list[str] = []
+    for v in (raw, _normalize_stock_name(raw)):
+        if v and v not in variants:
+            variants.append(v)
+        canon = _NAME_ALIASES.get(v.lower(), v)
+        if canon not in variants:
+            variants.append(canon)
+        norm = _normalize_stock_name(canon)
+        if norm and norm not in variants:
+            variants.append(norm)
 
-    for key, sym in _STATIC_MAP.items():
-        if key == lower or key == canonical.lower():
+    for candidate in variants:
+        cl = candidate.lower()
+        for key, sym in _STATIC_MAP.items():
+            if key == cl:
+                _cache[lower] = sym
+                return sym
+
+        if db:
+            stock = db.query(Stock).filter(Stock.name == candidate).first()
+            if not stock and len(candidate) >= 4:
+                stock = db.query(Stock).filter(Stock.name.contains(candidate[:4])).first()
+            if stock and stock.symbol:
+                _cache[lower] = stock.symbol
+                return stock.symbol
+
+        _load_krx_tickers()
+        if candidate in _krx_ticker_map:
+            sym = _krx_ticker_map[candidate]
             _cache[lower] = sym
             return sym
 
-    if db:
-        stock = db.query(Stock).filter(Stock.name == canonical).first()
-        if not stock and len(canonical) >= 4:
-            stock = db.query(Stock).filter(Stock.name.contains(canonical[:4])).first()
-        if stock:
-            _cache[lower] = stock.symbol
-            return stock.symbol
-
-    _load_krx_tickers()
-    if canonical in _krx_ticker_map:
-        sym = _krx_ticker_map[canonical]
-        _cache[lower] = sym
-        return sym
-
-    if len(canonical) >= 3:
-        prefix = canonical[:3]
-        for k, v in _krx_ticker_map.items():
-            if k.startswith(prefix):
-                _cache[lower] = v
-                logger.info("partial match '%s' -> '%s'(%s)", raw, k, v)
-                return v
+        sym = _krx_fuzzy_match(candidate)
+        if sym:
+            _cache[lower] = sym
+            logger.info("fuzzy match '%s' -> %s", raw, sym)
+            return sym
 
     _cache[lower] = None
     return None

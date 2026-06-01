@@ -12,6 +12,7 @@ api/routes_signals.py
 import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -23,6 +24,7 @@ from config.database import (
 )
 from core.signal_extractor import backfill_all_signals
 from core.signal_related import find_related_analysis, get_shared_signals_for_stock
+from core.demo_mode import is_demo_mode, build_demo_stocks
 
 signals_router = APIRouter()
 
@@ -235,22 +237,30 @@ def get_portfolio_reminders(
     """내 보유 종목에 대한 최근 신호 — 홈 화면 리마인드용"""
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    portfolio_stocks = db.query(Stock).filter(Stock.is_active == True).all()
-    if not portfolio_stocks:
-        return {"days": days, "reminders": []}
+    if is_demo_mode():
+        demo_list = build_demo_stocks(db)
+        symbol_set = {s["symbol"] for s in demo_list}
+        if not symbol_set:
+            return {"days": days, "reminders": []}
+        stock_map = {s["symbol"]: SimpleNamespace(**s) for s in demo_list}
+    else:
+        portfolio_stocks = db.query(Stock).filter(Stock.is_active == True).all()
+        if not portfolio_stocks:
+            return {"days": days, "reminders": []}
+        symbol_set = {s.symbol for s in portfolio_stocks}
+        stock_map = {s.symbol: s for s in portfolio_stocks}
 
-    symbol_set = {s.symbol for s in portfolio_stocks}
-    stock_map = {s.symbol: s for s in portfolio_stocks}
-
-    signals = (
-        db.query(StockSignal)
-        .filter(StockSignal.is_portfolio == True, StockSignal.event_date >= since)
-        .order_by(StockSignal.event_date.desc())
-        .all()
-    )
+    q = db.query(StockSignal).filter(StockSignal.event_date >= since)
+    if is_demo_mode():
+        q = q.filter(StockSignal.symbol.in_(symbol_set))
+    else:
+        q = q.filter(StockSignal.is_portfolio == True)
+    signals = q.order_by(StockSignal.event_date.desc()).all()
 
     by_symbol: dict[str, dict] = {}
     for sig in signals:
+        if is_demo_mode() and sig.symbol and sig.symbol not in symbol_set:
+            continue
         sym = sig.symbol or sig.stock_name
         if sym not in by_symbol:
             stock = stock_map.get(sym)

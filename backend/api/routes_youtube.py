@@ -88,11 +88,49 @@ def get_channel_videos(
     channel_db_id: int,
     max_results: int = 10,
     force_refresh: bool = Query(False),
+    page_token: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     ch = db.query(YouTubeChannel).filter(YouTubeChannel.id == channel_db_id).first()
     if not ch:
         raise HTTPException(status_code=404, detail="채널 없음")
+
+    max_results = max(1, min(max_results, 10))
+    analyzed_urls = _analyzed_url_set(db)
+
+    if page_token:
+        if not settings.youtube_api_key:
+            raise HTTPException(status_code=400, detail="YouTube API 키 미설정")
+        fresh, next_token = fetch_latest_videos(
+            ch.channel_id, settings.youtube_api_key, max_results, page_token=page_token
+        )
+        for v in fresh:
+            v["already_analyzed"] = v["url"] in analyzed_urls
+            existing = (
+                db.query(VideoCache)
+                .filter(VideoCache.channel_id == ch.channel_id, VideoCache.video_id == v["video_id"])
+                .first()
+            )
+            if not existing:
+                db.add(VideoCache(
+                    channel_id=ch.channel_id,
+                    video_id=v["video_id"],
+                    title=v["title"],
+                    description=v.get("description", ""),
+                    published_at=v.get("published_at", ""),
+                    thumbnail=v.get("thumbnail", ""),
+                    url=v["url"],
+                ))
+        ch.last_checked_at = datetime.utcnow()
+        ch.last_videos_page_token = next_token
+        db.commit()
+        return {
+            "channel": _ch_dict(ch),
+            "videos": fresh,
+            "from_cache": False,
+            "next_page_token": next_token,
+            "has_more": bool(next_token),
+        }
 
     cache_valid_after = datetime.utcnow() - timedelta(hours=CACHE_TTL_HOURS)
     cached = (
@@ -105,35 +143,56 @@ def get_channel_videos(
     )
 
     if cached and not force_refresh:
-        analyzed_urls = _analyzed_url_set(db)
         videos = [_vc_dict(v, analyzed_urls) for v in cached]
-        return {"channel": _ch_dict(ch), "videos": videos, "from_cache": True}
+        return {
+            "channel": _ch_dict(ch),
+            "videos": videos,
+            "from_cache": True,
+            "next_page_token": ch.last_videos_page_token,
+            "has_more": bool(ch.last_videos_page_token),
+        }
 
     if not settings.youtube_api_key:
         raise HTTPException(status_code=400, detail="YouTube API 키 미설정")
 
-    fresh = fetch_latest_videos(ch.channel_id, settings.youtube_api_key, max_results)
+    fresh, next_token = fetch_latest_videos(ch.channel_id, settings.youtube_api_key, max_results)
 
-    db.query(VideoCache).filter(VideoCache.channel_id == ch.channel_id).delete()
+    if force_refresh:
+        db.query(VideoCache).filter(VideoCache.channel_id == ch.channel_id).delete()
     for v in fresh:
-        db.add(VideoCache(
-            channel_id=ch.channel_id,
-            video_id=v["video_id"],
-            title=v["title"],
-            description=v.get("description", ""),
-            published_at=v.get("published_at", ""),
-            thumbnail=v.get("thumbnail", ""),
-            url=v["url"],
-        ))
+        existing = (
+            db.query(VideoCache)
+            .filter(VideoCache.channel_id == ch.channel_id, VideoCache.video_id == v["video_id"])
+            .first()
+        )
+        if existing:
+            existing.title = v["title"]
+            existing.cached_at = datetime.utcnow()
+        else:
+            db.add(VideoCache(
+                channel_id=ch.channel_id,
+                video_id=v["video_id"],
+                title=v["title"],
+                description=v.get("description", ""),
+                published_at=v.get("published_at", ""),
+                thumbnail=v.get("thumbnail", ""),
+                url=v["url"],
+            ))
 
     ch.last_checked_at = datetime.utcnow()
+    ch.last_videos_page_token = next_token
     db.commit()
 
-    analyzed_urls = _analyzed_url_set(db)
     for v in fresh:
         v["already_analyzed"] = v["url"] in analyzed_urls
 
-    return {"channel": _ch_dict(ch), "videos": fresh, "from_cache": False}
+    return {
+        "channel": _ch_dict(ch),
+        "videos": fresh,
+        "from_cache": False,
+        "next_page_token": next_token,
+        "has_more": bool(next_token),
+    }
 
 
 def _analyzed_url_set(db: Session) -> set:
@@ -239,7 +298,7 @@ def analyze_latest(
     if not ch:
         raise HTTPException(status_code=404, detail="채널 없음")
 
-    videos = fetch_latest_videos(ch.channel_id, settings.youtube_api_key, max_results)
+    videos, _ = fetch_latest_videos(ch.channel_id, settings.youtube_api_key, max_results)
 
     analyzed_urls = {
         c.source_url

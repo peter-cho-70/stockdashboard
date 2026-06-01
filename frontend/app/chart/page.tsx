@@ -17,6 +17,7 @@ import {
   ReferenceDot,
   Cell,
 } from "recharts";
+import { ClientOnly } from "@/components/client-only";
 import {
   TrendingUp,
   TrendingDown,
@@ -30,8 +31,12 @@ import {
   BarChart3,
   LayoutGrid,
   Sparkles,
+  StickyNote,
+  Trash2,
+  Plus,
+  Star,
 } from "lucide-react";
-import { api, signalApi, scoreApi, watchlistApi, type StockItem, type StockIssueTimeline, type AnalysisLog, type MoveCause, type StockSignal, type SharedSignalsResponse, type RelatedAnalysisItem, type BuyScoreResult } from "@/lib/api";
+import { api, signalApi, scoreApi, watchlistApi, type StockItem, type StockIssueTimeline, type AnalysisLog, type MoveCause, type StockSignal, type SharedSignalsResponse, type RelatedAnalysisItem, type BuyScoreResult, type ChartDateMemoItem, type WatchlistItem } from "@/lib/api";
 import { streamAnalyze, AnalyzeStreamError } from "@/lib/analyzeStream";
 import {
   analyzeChart,
@@ -85,11 +90,13 @@ function ChartTooltip({
   payload,
   label,
   eventByDate,
+  dateMemosByDate,
 }: {
   active?: boolean;
   payload?: { name: string; value: number; color: string }[];
   label?: string;
   eventByDate?: Record<string, SignificantMove>;
+  dateMemosByDate?: Record<string, string>;
 }) {
   if (!active || !payload || payload.length === 0) return null;
 
@@ -128,8 +135,24 @@ function ChartTooltip({
           <p className="mt-1 text-neutral-600 dark:text-neutral-400 leading-snug">{ev.reason}</p>
         </div>
       )}
+      {label && dateMemosByDate?.[label] && (
+        <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 p-2 dark:border-sky-800 dark:bg-sky-900/20">
+          <p className="font-semibold text-sky-700 dark:text-sky-400">📝 날짜 메모</p>
+          <p className="mt-1 text-neutral-600 dark:text-neutral-400 leading-snug whitespace-pre-wrap">
+            {dateMemosByDate[label]}
+          </p>
+        </div>
+      )}
     </div>
   );
+}
+
+interface ChartMemoMarker {
+  id: string;
+  memoId: number;
+  date: string;
+  y: number;
+  body: string;
 }
 
 interface PriceChartProps {
@@ -144,8 +167,12 @@ interface PriceChartProps {
   showEvents?: boolean;
   activeEventId?: string | null;
   eventByDate?: Record<string, SignificantMove>;
+  dateMemosByDate?: Record<string, string>;
+  memoMarkers?: ChartMemoMarker[];
+  activeMemoId?: string | null;
   height?: number;
   signalMarkers?: { date: string; sentiment: string | null; summary: string | null }[];
+  targetBuyPrice?: number | null;
 }
 
 function CrossDot(props: {
@@ -179,8 +206,12 @@ function PriceChart({
   showEvents = true,
   activeEventId = null,
   eventByDate = {},
+  dateMemosByDate = {},
+  memoMarkers = [],
+  activeMemoId = null,
   height = 320,
   signalMarkers = [],
+  targetBuyPrice = null,
 }: PriceChartProps) {
   const annotations =
     analysisMode && analysis
@@ -204,6 +235,11 @@ function PriceChart({
 
   return (
     <>
+      <ClientOnly
+        fallback={
+          <div style={{ height: height + (analysisMode ? 80 : 100) + 48 }} aria-hidden />
+        }
+      >
       <div className="mb-1">
         <p className="text-xs font-medium text-neutral-400 mb-2">
           주가 (원){analysisMode ? " · 최근 1개월" : ""}
@@ -226,7 +262,7 @@ function PriceChart({
               axisLine={false}
               width={72}
             />
-            <Tooltip content={<ChartTooltip eventByDate={eventByDate} />} />
+            <Tooltip content={<ChartTooltip eventByDate={eventByDate} dateMemosByDate={dateMemosByDate} />} />
             <Legend
               wrapperStyle={{ fontSize: "11px" }}
               formatter={(value) => <span className="text-neutral-600 dark:text-neutral-400">{value}</span>}
@@ -255,6 +291,15 @@ function PriceChart({
                 stroke="#ef4444"
                 strokeDasharray="4 2"
                 label={{ value: "평균단가", position: "insideTopRight", fontSize: 10, fill: "#ef4444" }}
+              />
+            )}
+
+            {targetBuyPrice != null && targetBuyPrice > 0 && (
+              <ReferenceLine
+                y={targetBuyPrice}
+                stroke="#0ea5e9"
+                strokeDasharray="6 3"
+                label={{ value: "매수 희망가", position: "insideTopLeft", fontSize: 10, fill: "#0ea5e9" }}
               />
             )}
 
@@ -352,6 +397,26 @@ function PriceChart({
                   />
                 ))}
 
+            {memoMarkers
+              .filter((m) => !activeMemoId || activeMemoId === m.id)
+              .map((m) => (
+                <ReferenceDot
+                  key={m.id}
+                  x={m.date}
+                  y={m.y}
+                  r={activeMemoId === m.id ? 9 : 7}
+                  fill="#0ea5e9"
+                  stroke={activeMemoId === m.id ? "#fbbf24" : "#fff"}
+                  strokeWidth={activeMemoId === m.id ? 3 : 2}
+                  label={{
+                    value: "📝",
+                    position: "top",
+                    fontSize: 10,
+                    fill: "#0ea5e9",
+                  }}
+                />
+              ))}
+
             {signalMarkers.map((m, i) => (
               <ReferenceLine
                 key={`sig-${i}`}
@@ -431,6 +496,7 @@ function PriceChart({
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+      </ClientOnly>
 
       {analysisMode && (
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -815,16 +881,139 @@ function PriceEventsPanel({
   );
 }
 
+function DateMemosPanel({
+  memos,
+  plotDates,
+  activeMemoId,
+  onSelect,
+  memoDate,
+  memoBody,
+  onMemoDateChange,
+  onMemoBodyChange,
+  onSave,
+  onDelete,
+  saving,
+}: {
+  memos: ChartDateMemoItem[];
+  plotDates: Set<string>;
+  activeMemoId: string | null;
+  onSelect: (id: string | null) => void;
+  memoDate: string;
+  memoBody: string;
+  onMemoDateChange: (v: string) => void;
+  onMemoBodyChange: (v: string) => void;
+  onSave: () => void;
+  onDelete: (memoId: number) => void;
+  saving: boolean;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2 items-end">
+        <div>
+          <label className="block text-[10px] text-neutral-400 mb-1">날짜</label>
+          <input
+            type="date"
+            value={memoDate}
+            onChange={(e) => onMemoDateChange(e.target.value)}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1.5 text-xs"
+          />
+        </div>
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-[10px] text-neutral-400 mb-1">메모</label>
+          <input
+            type="text"
+            value={memoBody}
+            onChange={(e) => onMemoBodyChange(e.target.value)}
+            placeholder="해당 날짜에 기록할 내용"
+            className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1.5 text-xs"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving || !memoDate || !memoBody.trim()}
+          className="flex items-center gap-1 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+        >
+          <Plus size={12} />
+          {saving ? "저장 중..." : "날짜에 메모 추가"}
+        </button>
+      </div>
+
+      {memos.length === 0 ? (
+        <p className="text-xs text-neutral-400 py-1">등록된 날짜 메모가 없습니다.</p>
+      ) : (
+        <div className="space-y-2">
+          {memos.map((m) => {
+            const id = `memo-${m.id}`;
+            const active = activeMemoId === id;
+            const inRange = plotDates.has(m.event_date);
+            return (
+              <div
+                key={m.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelect(active ? null : id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelect(active ? null : id);
+                  }
+                }}
+                className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors cursor-pointer ${
+                  active
+                    ? "border-sky-400 bg-sky-50 dark:border-sky-600 dark:bg-sky-900/20"
+                    : "border-[var(--border-subtle)] hover:bg-[var(--surface-elevated)]"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <StickyNote size={12} className="text-sky-500 shrink-0" />
+                      <span className="text-xs font-bold text-sky-700 dark:text-sky-400">
+                        {m.event_date.slice(5)}
+                      </span>
+                      {!inRange && (
+                        <span className="text-[10px] text-neutral-400">(표시 기간 밖)</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-neutral-600 dark:text-neutral-400 leading-relaxed whitespace-pre-wrap">
+                      {m.body}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete(m.id);
+                    }}
+                    className="shrink-0 rounded p-1 text-neutral-300 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20"
+                    title="삭제"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChartContent() {
   const searchParams = useSearchParams();
   const [stocks, setStocks] = useState<StockItem[]>([]);
+  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>("");
-  const [period, setPeriod] = useState<Period>(() => {
-    if (typeof window === "undefined") return "3M";
+  const [period, setPeriod] = useState<Period>("3M");
+
+  useEffect(() => {
     const saved = localStorage.getItem(CHART_PERIOD_STORAGE);
-    if (saved && PERIODS.some((p) => p.id === saved)) return saved as Period;
-    return "3M";
-  });
+    if (saved && PERIODS.some((p) => p.id === saved)) {
+      setPeriod(saved as Period);
+    }
+  }, []);
   const [analysisMode, setAnalysisMode] = useState(false);
   const [chartData, setChartData] = useState<ChartData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -853,8 +1042,30 @@ function ChartContent() {
   );
   const [buyScore, setBuyScore] = useState<BuyScoreResult | null>(null);
   const [buyScoreLoading, setBuyScoreLoading] = useState(false);
+  const [dateMemos, setDateMemos] = useState<ChartDateMemoItem[]>([]);
+  const [activeMemoId, setActiveMemoId] = useState<string | null>(null);
+  const [memoDate, setMemoDate] = useState("");
+  const [memoBody, setMemoBody] = useState("");
+  const [memoSaving, setMemoSaving] = useState(false);
 
   const fetchPeriod = analysisMode ? "6M" : period;
+
+  const loadDateMemos = useCallback(async () => {
+    if (!selectedSymbol) {
+      setDateMemos([]);
+      return;
+    }
+    try {
+      setDateMemos(await api.getChartMemos(selectedSymbol));
+    } catch {
+      setDateMemos([]);
+    }
+  }, [selectedSymbol]);
+
+  useEffect(() => {
+    loadDateMemos();
+    setActiveMemoId(null);
+  }, [loadDateMemos]);
 
   useEffect(() => {
     (async () => {
@@ -864,6 +1075,7 @@ function ChartContent() {
       ]);
       const data = stocksRes.status === "fulfilled" ? stocksRes.value : [];
       const wlItems = wlRes.status === "fulfilled" ? wlRes.value.items : [];
+      setWatchlistItems(wlItems);
 
       const krx = data.filter((s) => s.market === "KRX");
       const watchExtras: StockItem[] = wlItems
@@ -1141,6 +1353,56 @@ function ChartContent() {
 
   const displayPlotData = fullPlotData;
 
+  const plotDateSet = useMemo(
+    () => new Set(displayPlotData.map((d) => d.date)),
+    [displayPlotData],
+  );
+
+  const dateMemosByDate = useMemo(
+    () => Object.fromEntries(dateMemos.map((m) => [m.event_date, m.body])),
+    [dateMemos],
+  );
+
+  const memoMarkers: ChartMemoMarker[] = useMemo(() => {
+    return dateMemos
+      .map((m) => {
+        const bar = displayPlotData.find((d) => d.date === m.event_date);
+        if (!bar) return null;
+        return {
+          id: `memo-${m.id}`,
+          memoId: m.id,
+          date: m.event_date,
+          y: bar.close,
+          body: m.body,
+        };
+      })
+      .filter((x): x is ChartMemoMarker => x != null);
+  }, [dateMemos, displayPlotData]);
+
+  async function saveDateMemo() {
+    if (!selectedSymbol || !memoDate || !memoBody.trim()) return;
+    setMemoSaving(true);
+    try {
+      const res = await api.createChartMemo(selectedSymbol, {
+        event_date: memoDate,
+        body: memoBody.trim(),
+      });
+      setMemoBody("");
+      await loadDateMemos();
+      setActiveMemoId(`memo-${res.memo.id}`);
+      setActiveEventId(null);
+    } finally {
+      setMemoSaving(false);
+    }
+  }
+
+  async function deleteDateMemo(memoId: number) {
+    if (!confirm("이 날짜 메모를 삭제할까요?")) return;
+    await api.deleteChartMemo(memoId);
+    if (activeMemoId === `memo-${memoId}`) setActiveMemoId(null);
+    await loadDateMemos();
+  }
+
   const priceEventData = useMemo(() => {
     if (!chartData?.data?.length) {
       return { moves: [] as SignificantMove[], annotations: [] as ChartAnnotation[], eventByDate: {} as Record<string, SignificantMove> };
@@ -1214,6 +1476,25 @@ function ChartContent() {
 
   const currentStock = stocks.find((s) => s.symbol === selectedSymbol);
 
+  const watchlistSymbolSet = useMemo(
+    () => new Set(watchlistItems.map((w) => w.symbol).filter((s): s is string => !!s)),
+    [watchlistItems],
+  );
+
+  const selectedWatchlist = useMemo(
+    () => watchlistItems.find((w) => w.symbol === selectedSymbol) ?? null,
+    [watchlistItems, selectedSymbol],
+  );
+
+  const stocksForPicker = useMemo(() => {
+    return [...stocks].sort((a, b) => {
+      const aw = watchlistSymbolSet.has(a.symbol) ? 0 : 1;
+      const bw = watchlistSymbolSet.has(b.symbol) ? 0 : 1;
+      if (aw !== bw) return aw - bw;
+      return a.name.localeCompare(b.name, "ko");
+    });
+  }, [stocks, watchlistSymbolSet]);
+
   const displayPrice = chartData?.current_price ?? currentStock?.current_price ?? 0;
   const displayAvg = chartData?.avg_price ?? currentStock?.avg_price ?? 0;
   const displayProfitRate = chartData?.profit_rate ?? currentStock?.profit_rate ?? 0;
@@ -1263,8 +1544,9 @@ function ChartContent() {
             onChange={(e) => selectSymbol(e.target.value)}
             className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-neutral-400"
           >
-            {stocks.map((s) => (
+            {stocksForPicker.map((s) => (
               <option key={s.symbol} value={s.symbol}>
+                {watchlistSymbolSet.has(s.symbol) ? "★ " : ""}
                 {s.name} ({s.symbol})
               </option>
             ))}
@@ -1438,6 +1720,17 @@ function ChartContent() {
               <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
                 {chartData?.name ?? "종목 선택"}
               </h2>
+              {selectedWatchlist && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                  <Star size={10} className="fill-amber-500 text-amber-500" />
+                  관심종목
+                </span>
+              )}
+              {selectedWatchlist?.target_buy_price != null && selectedWatchlist.target_buy_price > 0 && (
+                <span className="text-[10px] text-sky-600 dark:text-sky-400">
+                  희망가 {selectedWatchlist.target_buy_price.toLocaleString("ko-KR")}원
+                </span>
+              )}
               {chartData?.sector && (
                 <span className="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800">
                   {chartData.sector}
@@ -1526,12 +1819,16 @@ function ChartContent() {
                 showEvents={showPriceEvents}
                 activeEventId={activeEventId}
                 eventByDate={priceEventData.eventByDate}
+                dateMemosByDate={dateMemosByDate}
+                memoMarkers={memoMarkers}
+                activeMemoId={activeMemoId}
                 height={analysisMode ? 280 : 320}
                 signalMarkers={stockSignals.map((s) => ({
                   date: s.event_date ?? "",
                   sentiment: s.sentiment,
                   summary: s.summary,
                 }))}
+                targetBuyPrice={selectedWatchlist?.target_buy_price ?? null}
               />
             </div>
           ) : null}
@@ -1547,6 +1844,39 @@ function ChartContent() {
             />
           </div>
         )}
+      </div>
+
+      {/* 날짜 메모 */}
+      <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] overflow-hidden">
+        <div className="border-b border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-4 py-3">
+          <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
+            날짜 메모
+            {dateMemos.length > 0 && (
+              <span className="ml-2 text-xs font-normal text-neutral-400">{dateMemos.length}건</span>
+            )}
+          </h2>
+          <p className="mt-0.5 text-xs text-neutral-400">
+            특정 날짜에 메모를 남기면 차트에 📝 표시 · 급변 구간처럼 클릭해 강조
+          </p>
+        </div>
+        <div className="p-4">
+          <DateMemosPanel
+            memos={dateMemos}
+            plotDates={plotDateSet}
+            activeMemoId={activeMemoId}
+            onSelect={(id) => {
+              setActiveMemoId(id);
+              if (id) setActiveEventId(null);
+            }}
+            memoDate={memoDate}
+            memoBody={memoBody}
+            onMemoDateChange={setMemoDate}
+            onMemoBodyChange={setMemoBody}
+            onSave={saveDateMemo}
+            onDelete={deleteDateMemo}
+            saving={memoSaving}
+          />
+        </div>
       </div>
 
       {/* 급등·급락 구간 (차트 포인트 연동) */}
@@ -1572,7 +1902,10 @@ function ChartContent() {
           <PriceEventsPanel
             moves={priceEventData.moves}
             activeEventId={activeEventId}
-            onSelect={setActiveEventId}
+            onSelect={(id) => {
+              setActiveEventId(id);
+              if (id) setActiveMemoId(null);
+            }}
             explainingDate={explainingDate}
             onExplainMove={handleExplainMove}
             explainProvider={explainProvider}
@@ -1731,30 +2064,64 @@ function ChartContent() {
       </div>
 
       <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
-        <p className="mb-3 text-xs font-medium text-neutral-500 dark:text-neutral-400">보유 종목 빠른 선택</p>
+        <p className="mb-3 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+          보유·관심 종목 빠른 선택
+          <span className="ml-2 inline-flex items-center gap-1 text-amber-700 dark:text-amber-400">
+            <Star size={10} className="fill-amber-500 text-amber-500" />
+            관심
+          </span>
+        </p>
         <div className="flex flex-wrap gap-2">
-          {stocks.map((s) => (
-            <button
-              key={s.symbol}
-              onClick={() => setSelectedSymbol(s.symbol)}
-              className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
-                selectedSymbol === s.symbol
-                  ? "border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900"
-                  : "border-[var(--border-subtle)] text-neutral-600 hover:border-neutral-400 dark:text-neutral-400"
-              }`}
-            >
-              <span className="font-medium">{s.name}</span>
-              <span
-                className={`ml-1.5 text-xs ${
-                  s.profit_rate >= 0
-                    ? "text-emerald-600 dark:text-emerald-400"
-                    : "text-red-500 dark:text-red-400"
+          {stocksForPicker.map((s) => {
+            const isWatch = watchlistSymbolSet.has(s.symbol);
+            const isSelected = selectedSymbol === s.symbol;
+            return (
+              <button
+                key={s.symbol}
+                type="button"
+                onClick={() => selectSymbol(s.symbol)}
+                className={`inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                  isSelected
+                    ? isWatch
+                      ? "border-amber-600 bg-amber-600 text-white dark:border-amber-500 dark:bg-amber-500"
+                      : "border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900"
+                    : isWatch
+                      ? "border-amber-300 bg-amber-50 text-amber-900 hover:border-amber-400 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+                      : "border-[var(--border-subtle)] text-neutral-600 hover:border-neutral-400 dark:text-neutral-400"
                 }`}
               >
-                {s.profit_rate >= 0 ? "+" : ""}{s.profit_rate.toFixed(1)}%
-              </span>
-            </button>
-          ))}
+                {isWatch && (
+                  <Star
+                    size={12}
+                    className={
+                      isSelected
+                        ? "fill-white text-white"
+                        : "fill-amber-500 text-amber-500"
+                    }
+                  />
+                )}
+                <span className="font-medium">{s.name}</span>
+                {s.qty > 0 ? (
+                  <span
+                    className={`text-xs ${
+                      isSelected
+                        ? "text-white/90"
+                        : s.profit_rate >= 0
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-red-500 dark:text-red-400"
+                    }`}
+                  >
+                    {s.profit_rate >= 0 ? "+" : ""}
+                    {s.profit_rate.toFixed(1)}%
+                  </span>
+                ) : isWatch ? (
+                  <span className={`text-xs ${isSelected ? "text-white/80" : "text-amber-700/80 dark:text-amber-300/80"}`}>
+                    관심
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

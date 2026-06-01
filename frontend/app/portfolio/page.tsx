@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   RefreshCw,
@@ -39,11 +39,13 @@ type ModalState =
 
 const SORT_STORAGE_KEY = "stockmind-portfolio-sort";
 
-function loadSort(): { key: SortKey; dir: SortDir } {
-  if (typeof window === "undefined") return { key: "eval_value", dir: "desc" };
+function loadSortFromStorage(): { key: SortKey; dir: SortDir } {
   try {
     const raw = localStorage.getItem(SORT_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { key?: SortKey; dir?: SortDir };
+      if (parsed.key && parsed.dir) return { key: parsed.key, dir: parsed.dir };
+    }
   } catch {
     /* ignore */
   }
@@ -164,8 +166,9 @@ export default function PortfolioPage() {
   const [editMemo, setEditMemo] = useState("");
   const [editSector, setEditSector] = useState("");
   const [filter, setFilter] = useState<"ALL" | "KRX" | "US">("ALL");
-  const [sortKey, setSortKey] = useState<SortKey>(() => loadSort().key);
-  const [sortDir, setSortDir] = useState<SortDir>(() => loadSort().dir);
+  const [sortKey, setSortKey] = useState<SortKey>("eval_value");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const sortHydratedRef = useRef(false);
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null);
   const [modal, setModal] = useState<ModalState>(null);
 
@@ -183,7 +186,7 @@ export default function PortfolioPage() {
   // trade form
   const [tradeQty, setTradeQty] = useState("");
   const [tradePrice, setTradePrice] = useState("");
-  const [tradeDate, setTradeDate] = useState(todayStr());
+  const [tradeDate, setTradeDate] = useState("");
   const [tradeMemo, setTradeMemo] = useState("");
 
   // adjust form
@@ -402,6 +405,14 @@ export default function PortfolioPage() {
   }, [filtered, sortKey, sortDir]);
 
   useEffect(() => {
+    const saved = loadSortFromStorage();
+    setSortKey(saved.key);
+    setSortDir(saved.dir);
+    sortHydratedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!sortHydratedRef.current) return;
     localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({ key: sortKey, dir: sortDir }));
   }, [sortKey, sortDir]);
 

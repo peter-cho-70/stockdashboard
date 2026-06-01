@@ -8,6 +8,7 @@
 ## 📚 상세 문서
 
 - [AI 분석 · 저장 · 차트 연동 가이드](docs/AI-분석-저장-차트연동.md) — 분석 파이프라인, Signal 레이어, 차트 급변 연결
+- [AI 인텔리전스 허브 전면 개편안](docs/AI-인텔리전스-허브-전면개편안.md) — 캘린더 허브, 일일 digest, 정량 대시보드 (설계)
 
 ---
 
@@ -164,6 +165,21 @@ DELETE /api/watchlist/{id}
 - 실전 가이드 기반 **차트 분석 모드** (눌림목·골든크로스 등)
 - 급등·급락 탐지 + AI 이슈·섹터·매크로 마커
 - 주가 급변 **AI 원인 검색** (뉴스 RSS + 신호 재사용)
+
+---
+
+## 🎭 데모 모드 (공개 시연)
+
+실제 보유 종목·금액을 숨기고 **샘플 포트폴리오**만 보여줍니다. 차트·AI Signal·buy-score는 **같은 종목코드**로 분석된 데이터를 그대로 사용합니다.
+
+1. `backend/data/demo_portfolio.json` — 약 10종목, `qty`·`avg_price` 수정
+2. API 서버: `DEMO_MODE=true`
+3. 프론트(Vercel): `NEXT_PUBLIC_DEMO_MODE=true` (상단 배너)
+4. 백엔드 재시작
+
+자세한 설명: `backend/data/README.md`
+
+> 개인용은 `DEMO_MODE=false` + 로컬/Render 영구 DB. 공개 URL만 데모를 켜세요.
 
 ---
 

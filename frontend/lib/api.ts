@@ -91,6 +91,15 @@ export interface PortfolioSnapshot {
   total_value: number;
 }
 
+export interface ChartDateMemoItem {
+  id: number;
+  symbol: string;
+  event_date: string;
+  body: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export const api = {
   getPortfolioSummary: () => fetchApi<PortfolioSummary>("/portfolio/summary"),
   getStocks: () => fetchApi<StockItem[]>("/portfolio/stocks"),
@@ -125,6 +134,15 @@ export const api = {
     fetchApi<{ symbol: string; trades: PortfolioTradeItem[] }>(
       `/portfolio/stocks/${symbol}/trades?limit=${limit}`,
     ),
+  getChartMemos: (symbol: string) =>
+    fetchApi<ChartDateMemoItem[]>(`/portfolio/stocks/${symbol}/chart-memos`),
+  createChartMemo: (symbol: string, body: { event_date: string; body: string }) =>
+    fetchApi<{ message: string; memo: ChartDateMemoItem }>(
+      `/portfolio/stocks/${symbol}/chart-memos`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  deleteChartMemo: (memoId: number) =>
+    fetchApi<{ message: string }>(`/portfolio/chart-memos/${memoId}`, { method: "DELETE" }),
 
   // ── 알림 ──────────────────────────────────────
   getAlerts: (unreadOnly?: boolean) =>
@@ -171,7 +189,7 @@ export const api = {
     fetchApi<StockChartResponse>(`/portfolio/stocks/${symbol}/chart?period=${period}`),
 
   // ── 헬스 ──────────────────────────────────────
-  health: () => fetchApi<{ status: string }>("/health"),
+  health: () => fetchApi<{ status: string; demo_mode?: boolean }>("/health"),
 };
 
 export interface StockChartBar {
@@ -519,9 +537,71 @@ export interface WatchlistItem {
   source_type: string | null;
   source_id: number | null;
   memo: string | null;
+  target_buy_price: number | null;
+  target_hit: boolean;
+  target_gap_pct: number | null;
   current_price: number | null;
   change_rate: number | null;
   created_at: string | null;
+}
+
+export interface WatchlistInsight {
+  item: WatchlistItem;
+  buy_score: BuyScoreResult;
+  issues: {
+    id: number;
+    issue_summary: string;
+    sentiment: string | null;
+    event_date: string | null;
+    source_title: string | null;
+    source_url: string | null;
+    created_at: string | null;
+  }[];
+  ai_summary: string;
+}
+
+export interface WatchlistTimelineItem {
+  date: string;
+  kind: "ai_issue" | "price_move";
+  title: string;
+  summary: string;
+  sentiment: string | null;
+  source_title?: string | null;
+  source_url?: string | null;
+  change_pct?: number;
+  issue_id?: number;
+}
+
+export interface WatchlistDetail {
+  item: WatchlistItem;
+  profile: {
+    symbol: string;
+    name: string;
+    sector: string | null;
+    market: string;
+    intro: string;
+  };
+  chart_summary: {
+    period_days: number;
+    start_date: string | null;
+    end_date: string | null;
+    start_close: number;
+    end_close: number;
+    period_return_pct: number;
+    high: number;
+    low: number;
+    avg_volume: number;
+  };
+  buy_score: BuyScoreResult;
+  timeline: WatchlistTimelineItem[];
+  days: number;
+}
+
+export interface SymbolLookup {
+  symbol: string;
+  stock_name: string;
+  sector: string | null;
+  current_price: number | null;
 }
 
 export interface BuyScoreComponent {
@@ -577,6 +657,22 @@ export const scoreApi = {
 
 export const watchlistApi = {
   getAll: () => fetchApi<{ total: number; items: WatchlistItem[] }>("/watchlist"),
+  lookupName: (name: string) =>
+    fetchApi<SymbolLookup>(
+      `/watchlist/lookup-name?name=${encodeURIComponent(name.trim())}`,
+    ),
+  lookupSymbol: (symbol: string) =>
+    fetchApi<SymbolLookup>(`/watchlist/lookup/${encodeURIComponent(symbol.trim())}`),
+  addBySymbol: (body: {
+    symbol: string;
+    stock_name?: string;
+    target_buy_price?: number;
+    memo?: string;
+  }) =>
+    fetchApi<WatchlistItem>("/watchlist/by-symbol", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   add: (body: {
     stock_name: string;
     symbol?: string;
@@ -584,6 +680,41 @@ export const watchlistApi = {
     source_type?: string;
     source_id?: number;
     memo?: string;
+    target_buy_price?: number;
   }) => fetchApi<WatchlistItem>("/watchlist", { method: "POST", body: JSON.stringify(body) }),
+  update: (id: number, body: { memo?: string; target_buy_price?: number | null; sector?: string }) =>
+    fetchApi<WatchlistItem>(`/watchlist/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  getInsight: (id: number, days = 30) =>
+    fetchApi<WatchlistInsight>(`/watchlist/${id}/insight?days=${days}`),
+  getDetail: (id: number, days = 90) =>
+    fetchApi<WatchlistDetail>(`/watchlist/${id}/detail?days=${days}`),
   remove: (id: number) => fetchApi<{ ok: boolean }>(`/watchlist/${id}`, { method: "DELETE" }),
 };
+
+/** AI 추천 → 지켜보기 (종목코드 자동 조회 후 등록) */
+export async function addRecommendationToWatchlist(
+  rec: StockRecommendation,
+  opts?: { sector?: string; source_type?: string },
+): Promise<WatchlistItem> {
+  let symbol = rec.symbol ?? undefined;
+  let stockName = rec.stock_name;
+  if (!symbol) {
+    const looked = await watchlistApi.lookupName(rec.stock_name);
+    symbol = looked.symbol;
+    stockName = looked.stock_name || stockName;
+  }
+  const src = rec.sources?.[0];
+  if (symbol.length === 6) {
+    return watchlistApi.addBySymbol({
+      symbol,
+      stock_name: stockName,
+    });
+  }
+  return watchlistApi.add({
+    stock_name: stockName,
+    symbol,
+    sector: rec.sector || opts?.sector,
+    source_type: opts?.source_type ?? src?.type ?? "sector",
+    source_id: src?.id,
+  });
+}

@@ -234,7 +234,23 @@ class YouTubeChannel(Base):
     channel_url = Column(String(300), nullable=False)
     is_active = Column(Boolean, default=True)
     last_checked_at = Column(DateTime, nullable=True)
+    last_videos_page_token = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
+# 차트 날짜 메모 (종목별)
+# ─────────────────────────────────────────────
+class ChartDateMemo(Base):
+    __tablename__ = "chart_date_memos"
+    __table_args__ = (UniqueConstraint("symbol", "event_date", name="uq_chart_memo_symbol_date"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    event_date = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 # ─────────────────────────────────────────────
@@ -353,6 +369,7 @@ class WatchlistItem(Base):
     source_type = Column(String(20), nullable=True)   # sector | macro | manual | stock
     source_id = Column(Integer, nullable=True)
     memo = Column(Text, nullable=True)
+    target_buy_price = Column(Float, nullable=True)  # 매수 희망가
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
@@ -437,12 +454,38 @@ def _migrate_stock_issue_columns():
         db.close()
 
 
+def _migrate_watchlist_columns():
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE watchlist ADD COLUMN target_buy_price FLOAT"))
+            conn.commit()
+        except Exception:
+            pass
+
+
+def _migrate_youtube_channel_columns():
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        try:
+            conn.execute(
+                text("ALTER TABLE youtube_channels ADD COLUMN last_videos_page_token VARCHAR(255)")
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+
 def init_db():
     """테이블 생성"""
     Base.metadata.create_all(bind=engine)
     _migrate_intel_columns()
     _migrate_stock_columns()
     _migrate_stock_issue_columns()
+    _migrate_youtube_channel_columns()
+    _migrate_watchlist_columns()
     print("✅ 데이터베이스 초기화 완료")
 
 

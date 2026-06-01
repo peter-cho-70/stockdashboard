@@ -9,7 +9,11 @@ import {
   Tv, ExternalLink, AlertCircle,
   Globe, BarChart2, Bell, CalendarDays, Star,
 } from "lucide-react";
-import { api, signalApi, watchlistApi, type AnalysisResult, type IntelContent, type StockIssueItem, type AnalysisLog, type MacroAnalysis, type SectorAnalysisItem, type AnalysisProvider, type DailyBriefing, type MacroHub, type SectorHub, type PortfolioReminder, type StockRecommendation } from "@/lib/api";
+import { api, signalApi, type AnalysisResult, type IntelContent, type StockIssueItem, type AnalysisLog, type MacroAnalysis, type SectorAnalysisItem, type AnalysisProvider, type DailyBriefing, type MacroHub, type SectorHub, type PortfolioReminder, type StockRecommendation } from "@/lib/api";
+import {
+  WatchlistRegisterModal,
+  type WatchlistRegisterDraft,
+} from "@/components/watchlist-register-modal";
 import { streamAnalyze, AnalyzeStreamError } from "@/lib/analyzeStream";
 import { IntelDetailPanel, type IntelDetailData } from "@/components/intel-detail-panel";
 
@@ -102,10 +106,13 @@ function SentDot({ s }: { s: string }) {
 }
 
 function AnalysisLogPanel({ logs, analyzing }: { logs: AnalysisLog[]; analyzing: boolean }) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    const el = scrollRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
   }, [logs.length, analyzing]);
 
   const levelColor = (l: string) =>
@@ -118,7 +125,15 @@ function AnalysisLogPanel({ logs, analyzing }: { logs: AnalysisLog[]; analyzing:
         {analyzing && <span className="ml-auto flex items-center gap-1 text-[10px] text-amber-400"><Loader2 size={10} className="animate-spin" /> 진행 중</span>}
         {!analyzing && logs.length > 0 && <span className="ml-auto text-[10px] text-emerald-400">완료</span>}
       </div>
-      <div className="p-3 font-mono text-[10px] space-y-0.5 max-h-48 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        onScroll={() => {
+          const el = scrollRef.current;
+          if (!el) return;
+          stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}
+        className="p-3 font-mono text-[10px] space-y-0.5 max-h-48 overflow-y-auto"
+      >
         {analyzing && logs.length === 0 && (
           <div className="text-amber-300 animate-pulse">서버 연결 중...</div>
         )}
@@ -129,7 +144,6 @@ function AnalysisLogPanel({ logs, analyzing }: { logs: AnalysisLog[]; analyzing:
           </div>
         ))}
         {!analyzing && logs.length === 0 && <span className="text-neutral-600">—</span>}
-        <div ref={bottomRef} />
       </div>
     </div>
   );
@@ -326,6 +340,8 @@ function ChannelPanel({
   // 영상별 분석 결과 & 펼침 상태
   const [analysisMap, setAnalysisMap] = useState<Record<string, VideoAnalysis>>({});
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+  const MAX_VIDEOS = 30;
 
   const loadChannels = useCallback(async () => {
     try { setChannels(await fetchJson<YTChannel[]>("/youtube/channels")); }
@@ -353,26 +369,115 @@ function ChannelPanel({
   async function removeChannel(id: number) {
     if (!confirm("채널을 삭제할까요?")) return;
     await fetchJson(`/youtube/channels/${id}`, { method: "DELETE" });
-    if (selectedCh?.id === id) { setSelectedCh(null); setVideos([]); }
+    if (selectedCh?.id === id) {
+      setSelectedCh(null);
+      setVideos([]);
+      setNextPageToken(null);
+    }
     loadChannels();
   }
 
-  async function loadVideos(ch: YTChannel, forceRefresh = false) {
-    setSelectedCh(ch); setLoadingVids(true); setVideos([]);
-    setBulkMsg(""); setAnalysisMap({}); setExpandedIds(new Set());
-    try {
-      const url = `/youtube/channels/${ch.id}/videos?max_results=10${forceRefresh ? "&force_refresh=true" : ""}`;
-      const data = await fetchJson<{ channel: YTChannel; videos: YTVideo[]; from_cache?: boolean }>(url);
-      setVideos(data.videos);
-      if (data.from_cache) setBulkMsg("캐시에서 불러왔습니다 (1시간 유효 · 새로고침으로 갱신)");
-      // 이미 분석된 영상 결과를 백그라운드로 미리 로드
-      data.videos.filter((v) => v.already_analyzed).forEach((v) => {
-        fetchJson<VideoAnalysis>(`/intel/by-url?url=${encodeURIComponent(v.url)}`)
-          .then((r) => setAnalysisMap((prev) => ({ ...prev, [v.video_id]: r })))
-          .catch(() => {/* ignore */});
+  function preloadAnalyzed(vids: YTVideo[], autoExpand: boolean) {
+    const analyzed = vids.filter((v) => v.already_analyzed);
+    if (autoExpand && analyzed.length > 0) {
+      setExpandedIds((prev) => {
+        const next = new Set(prev);
+        analyzed.forEach((v) => next.add(v.video_id));
+        return next;
       });
-    } catch { setVideos([]); }
-    finally { setLoadingVids(false); }
+    }
+    analyzed.forEach((v) => {
+      fetchJson<VideoAnalysis>(`/intel/by-url?url=${encodeURIComponent(v.url)}`)
+        .then((r) =>
+          setAnalysisMap((p) => (p[v.video_id] ? p : { ...p, [v.video_id]: r })),
+        )
+        .catch(() => {/* ignore */});
+    });
+  }
+
+  function mergeVideos(prev: YTVideo[], incoming: YTVideo[]) {
+    const seen = new Set(prev.map((v) => v.video_id));
+    const merged = [...prev];
+    for (const v of incoming) {
+      if (!seen.has(v.video_id)) {
+        seen.add(v.video_id);
+        merged.push(v);
+      }
+    }
+    return merged.slice(0, MAX_VIDEOS);
+  }
+
+  async function loadVideos(ch: YTChannel, opts: { forceRefresh?: boolean; append?: boolean } = {}) {
+    const append = opts.append === true;
+    if (!append) {
+      setSelectedCh(ch);
+      setVideos([]);
+      setNextPageToken(null);
+      setAnalysisMap({});
+      setExpandedIds(new Set());
+    } else {
+      setSelectedCh(ch);
+      if (videos.length >= MAX_VIDEOS) {
+        setBulkMsg(`최대 ${MAX_VIDEOS}개까지 불러올 수 있습니다.`);
+        return;
+      }
+      if (!nextPageToken) {
+        setBulkMsg("더 이상 불러올 이전 영상이 없습니다.");
+        return;
+      }
+    }
+
+    setLoadingVids(true);
+    if (!append) setBulkMsg("");
+    try {
+      const batch = append ? Math.min(10, MAX_VIDEOS - videos.length) : 10;
+      let url = `/youtube/channels/${ch.id}/videos?max_results=${batch}`;
+      if (opts.forceRefresh) url += "&force_refresh=true";
+      if (append && nextPageToken) url += `&page_token=${encodeURIComponent(nextPageToken)}`;
+
+      const data = await fetchJson<{
+        channel: YTChannel;
+        videos: YTVideo[];
+        from_cache?: boolean;
+        next_page_token?: string | null;
+        has_more?: boolean;
+      }>(url);
+
+      setNextPageToken(data.next_page_token ?? null);
+      const merged = append
+        ? mergeVideos(videos, data.videos)
+        : data.videos.slice(0, MAX_VIDEOS);
+      setVideos(merged);
+      preloadAnalyzed(data.videos, true);
+
+      if (!append && data.from_cache) {
+        setBulkMsg("캐시에서 불러왔습니다 · 채널을 다시 누르면 이전 영상 추가 (최대 30개)");
+      } else if (append) {
+        setBulkMsg(`${data.videos.length}개 추가 · 총 ${merged.length}개`);
+      } else if (data.has_more) {
+        setBulkMsg("채널을 한 번 더 누르면 이전 영상 10개를 더 불러옵니다 (최대 30개)");
+      }
+    } catch {
+      if (!append) setVideos([]);
+    } finally {
+      setLoadingVids(false);
+    }
+  }
+
+  function handleChannelClick(ch: YTChannel) {
+    if (selectedCh?.id === ch.id && videos.length > 0) {
+      if (videos.length >= MAX_VIDEOS) {
+        setBulkMsg(`최대 ${MAX_VIDEOS}개까지 불러왔습니다.`);
+        return;
+      }
+      if (nextPageToken) {
+        loadVideos(ch, { append: true });
+      } else {
+        setBulkMsg("더 이상 불러올 이전 영상이 없습니다.");
+      }
+      return;
+    }
+    loadVideos(ch);
   }
 
   // 분석 완료된 영상 결과를 펼치거나 분석되지 않은 영상을 분석 시작
@@ -475,7 +580,7 @@ function ChannelPanel({
             <div
               key={ch.id}
               className={`rounded-lg border bg-[var(--surface)] p-4 cursor-pointer transition-colors hover:border-neutral-400 dark:hover:border-neutral-500 ${selectedCh?.id === ch.id ? "border-blue-400 dark:border-blue-600 bg-blue-50/30 dark:bg-blue-900/10" : "border-[var(--border-subtle)]"}`}
-              onClick={() => loadVideos(ch)}
+              onClick={() => handleChannelClick(ch)}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
@@ -509,12 +614,26 @@ function ChannelPanel({
               <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
                 {selectedCh.channel_name} · 최신 영상
               </h2>
-              <p className="text-xs text-neutral-400 mt-0.5">영상 클릭으로 개별 분석 · 저장된 결과는 AI 재호출 없음</p>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                영상 클릭으로 개별 분석 · 채널 재클릭 또는 더보기로 이전 영상 (최대 30개) · 분석 완료 영상은 결과 자동 표시
+              </p>
             </div>
             <div className="flex gap-2">
-              <button onClick={() => loadVideos(selectedCh, true)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800">
+              <button
+                onClick={() => loadVideos(selectedCh, { forceRefresh: true })}
+                className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+              >
                 <RefreshCw size={12} /> YouTube에서 새로고침
               </button>
+              {nextPageToken && videos.length < MAX_VIDEOS && (
+                <button
+                  onClick={() => loadVideos(selectedCh, { append: true })}
+                  disabled={loadingVids}
+                  className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-50 dark:text-neutral-400 dark:hover:bg-neutral-800"
+                >
+                  이전 영상 더보기 ({videos.length}/{MAX_VIDEOS})
+                </button>
+              )}
               {enableBulkYoutubeAnalyze && (
               <button
                 onClick={() => bulkAnalyze(selectedCh)}
@@ -907,7 +1026,7 @@ function MacroHubPanel() {
 // ─── 섹터 추천 종목 (지켜보기) ─────────────────────
 function SectorRecommendations({ sector, days }: { sector: string; days: number }) {
   const [recs, setRecs] = useState<StockRecommendation[]>([]);
-  const [adding, setAdding] = useState<string | null>(null);
+  const [registerDraft, setRegisterDraft] = useState<WatchlistRegisterDraft | null>(null);
 
   useEffect(() => {
     signalApi.getRecommendations(days, sector).then((r) => setRecs(r.recommendations)).catch(() => setRecs([]));
@@ -916,31 +1035,41 @@ function SectorRecommendations({ sector, days }: { sector: string; days: number 
   if (recs.length === 0) return null;
 
   return (
-    <div className="border-b border-[var(--border-subtle)] bg-amber-50/50 dark:bg-amber-900/10 px-4 py-2">
-      <p className="text-[10px] font-semibold text-amber-800 dark:text-amber-400 mb-1.5">📌 AI 언급 종목</p>
-      <div className="flex flex-wrap gap-1.5">
-        {recs.slice(0, 8).map((rec) => (
-          <button
-            key={rec.stock_name}
-            type="button"
-            disabled={adding === rec.stock_name}
-            onClick={async () => {
-              setAdding(rec.stock_name);
-              try {
-                await watchlistApi.add({ stock_name: rec.stock_name, symbol: rec.symbol ?? undefined, sector, source_type: "sector" });
-              } catch { /* ignore */ }
-              finally { setAdding(null); }
-            }}
-            className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white px-2 py-0.5 text-[10px] text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200"
-            title={rec.latest_summary}
-          >
-            {adding === rec.stock_name ? <Loader2 size={10} className="animate-spin" /> : <Star size={10} />}
-            {rec.stock_name}
-            <SentBadge s={rec.latest_sentiment} />
-          </button>
-        ))}
+    <>
+      <div className="border-b border-[var(--border-subtle)] bg-amber-50/50 dark:bg-amber-900/10 px-4 py-2">
+        <p className="text-[10px] font-semibold text-amber-800 dark:text-amber-400 mb-1.5">📌 AI 언급 종목</p>
+        <div className="flex flex-wrap gap-1.5">
+          {recs.slice(0, 8).map((rec) => (
+            <button
+              key={rec.stock_name}
+              type="button"
+              onClick={() => {
+                const src = rec.sources?.[0];
+                setRegisterDraft({
+                  stock_name: rec.stock_name,
+                  symbol: rec.symbol,
+                  sector,
+                  source_type: src?.type ?? "sector",
+                  source_id: src?.id,
+                });
+              }}
+              className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white px-2 py-0.5 text-[10px] text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200"
+              title={rec.latest_summary}
+            >
+              <Star size={10} />
+              {rec.stock_name}
+              <SentBadge s={rec.latest_sentiment} />
+            </button>
+          ))}
+        </div>
       </div>
-    </div>
+      <WatchlistRegisterModal
+        draft={registerDraft}
+        open={registerDraft !== null}
+        onClose={() => setRegisterDraft(null)}
+        onRegistered={() => setRegisterDraft(null)}
+      />
+    </>
   );
 }
 

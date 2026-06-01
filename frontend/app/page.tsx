@@ -25,6 +25,19 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { api, type PortfolioSummary, type Alert, type PortfolioSnapshot } from "@/lib/api";
+import { ClientOnly } from "@/components/client-only";
+
+const CHART_PERIODS = [
+  { days: 7, label: "7일" },
+  { days: 30, label: "1달" },
+  { days: 90, label: "3달" },
+  { days: 180, label: "6달" },
+  { days: 365, label: "1년" },
+] as const;
+
+function chartPeriodLabel(days: number) {
+  return CHART_PERIODS.find((p) => p.days === days)?.label ?? `${days}일`;
+}
 
 function fmt(n: number) {
   return `${n.toLocaleString("ko-KR")}원`;
@@ -94,17 +107,29 @@ export default function DashboardPage() {
   const [apiStatus, setApiStatus] = useState<"checking" | "ok" | "error">("checking");
   const [lastUpdated, setLastUpdated] = useState("");
   const [refreshMsg, setRefreshMsg] = useState("");
+  const [chartDays, setChartDays] = useState(30);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
-  const loadData = useCallback(async () => {
+  const loadHistory = useCallback(async (days: number) => {
+    setHistoryLoading(true);
     try {
-      const [sum, al, hist] = await Promise.all([
+      const hist = await api.getHistory(days);
+      setHistory(hist);
+    } catch {
+      setHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  const loadCore = useCallback(async () => {
+    try {
+      const [sum, al] = await Promise.all([
         api.getPortfolioSummary(),
         api.getAlerts(true),
-        api.getHistory(30),
       ]);
       setSummary(sum);
       setAlerts(al);
-      setHistory(hist);
       setApiStatus("ok");
       setLastUpdated(new Date().toLocaleTimeString("ko-KR"));
     } catch {
@@ -113,14 +138,20 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    loadCore();
+  }, [loadCore]);
+
+  useEffect(() => {
+    if (apiStatus !== "ok") return;
+    loadHistory(chartDays);
+  }, [chartDays, apiStatus, loadHistory]);
 
   async function handleSync() {
     setSyncing(true);
     try {
       await api.syncNow();
-      await loadData();
+      await loadCore();
+      await loadHistory(chartDays);
     } catch {
       // ignore
     } finally {
@@ -134,7 +165,8 @@ export default function DashboardPage() {
     try {
       const result = await api.refreshPrices();
       setRefreshMsg(result.message);
-      await loadData();
+      await loadCore();
+      await loadHistory(chartDays);
     } catch {
       setRefreshMsg("시세 갱신 실패. 잠시 후 다시 시도해 주세요.");
     } finally {
@@ -144,11 +176,13 @@ export default function DashboardPage() {
 
   const unreadCount = alerts.length;
 
-  // 차트 데이터 포맷
+  const chartLabelFormat = chartDays > 90 ? (d: string) => d.slice(2, 7) : (d: string) => d.slice(5);
+
   const chartData = history.map((h) => ({
-    date: h.date.slice(5),  // MM-DD
+    date: chartLabelFormat(h.date),
+    fullDate: h.date,
     수익률: h.total_profit_rate,
-    평가금액: Math.round(h.total_value / 10000),  // 만원 단위
+    평가금액: Math.round(h.total_value / 10000),
   }));
 
   return (
@@ -258,44 +292,91 @@ export default function DashboardPage() {
       )}
 
       {/* 수익률 차트 */}
-      {chartData.length > 1 && (
+      {apiStatus === "ok" && summary && summary.stock_count > 0 && (
         <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
-          <h2 className="mb-4 text-sm font-semibold text-neutral-700 dark:text-neutral-300">
-            포트폴리오 수익률 추이 (최근 30일)
-          </h2>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 11, fill: "var(--foreground)" }}
-                tickLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: "var(--foreground)" }}
-                tickFormatter={(v) => `${v}%`}
-                tickLine={false}
-                axisLine={false}
-              />
-              <Tooltip
-                formatter={(value) => [`${Number(value).toFixed(2)}%`, "수익률"]}
-                contentStyle={{
-                  background: "var(--surface)",
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: "8px",
-                  fontSize: "12px",
-                }}
-              />
-              <Line
-                type="monotone"
-                dataKey="수익률"
-                stroke="#10b981"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
+              포트폴리오 수익률 추이 (일별 · 최근 {chartPeriodLabel(chartDays)})
+            </h2>
+            <div className="flex rounded-md border border-[var(--border-subtle)] p-0.5">
+              {CHART_PERIODS.map(({ days, label }) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => setChartDays(days)}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                    chartDays === days
+                      ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                      : "text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {historyLoading ? (
+            <div className="flex h-[200px] items-center justify-center text-sm text-neutral-400">
+              차트 불러오는 중...
+            </div>
+          ) : chartData.length === 0 ? (
+            <div className="flex h-[200px] flex-col items-center justify-center gap-1 text-center text-sm text-neutral-400">
+              <BarChart2 size={28} className="text-neutral-300 dark:text-neutral-600" />
+              <p>이 기간에 저장된 일별 데이터가 없습니다.</p>
+              <p className="text-xs">KRX 시세 갱신 또는 KIS 동기화 후 며칠 지나면 표시됩니다.</p>
+            </div>
+          ) : (
+            <ClientOnly
+              fallback={
+                <div className="flex h-[200px] items-center justify-center text-sm text-neutral-400">
+                  차트 불러오는 중...
+                </div>
+              }
+            >
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 11, fill: "var(--foreground)" }}
+                  tickLine={false}
+                  interval={chartData.length > 60 ? Math.floor(chartData.length / 8) : 0}
+                />
+                <YAxis
+                  tick={{ fontSize: 11, fill: "var(--foreground)" }}
+                  tickFormatter={(v) => `${v}%`}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <Tooltip
+                  labelFormatter={(_, payload) => {
+                    const row = payload?.[0]?.payload as { fullDate?: string } | undefined;
+                    return row?.fullDate ?? "";
+                  }}
+                  formatter={(value, name) => {
+                    if (name === "수익률") return [`${Number(value).toFixed(2)}%`, "수익률"];
+                    if (name === "평가금액") return [`${Number(value).toLocaleString("ko-KR")}만원`, "평가금액"];
+                    return [value, name];
+                  }}
+                  contentStyle={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: "8px",
+                    fontSize: "12px",
+                  }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="수익률"
+                  stroke="#10b981"
+                  strokeWidth={2}
+                  dot={chartData.length <= 14}
+                  activeDot={{ r: 4 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+            </ClientOnly>
+          )}
         </div>
       )}
 

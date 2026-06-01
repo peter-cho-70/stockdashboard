@@ -21,6 +21,7 @@ class Settings(BaseSettings):
         "ai_skip_if_cached",
         "enable_bulk_youtube_analyze",
         "gemini_prompt_cache",
+        "demo_mode",
         mode="before",
     )
     @classmethod
@@ -54,6 +55,9 @@ class Settings(BaseSettings):
 
     # ── 데이터베이스 ──────────────────────────────
     db_path: str = Field("./stockmind.db", env="DB_PATH")
+
+    # ── 데모 모드 (공개 시연 — demo_portfolio.json, 실보유 미노출) ──
+    demo_mode: bool = Field(False, env="DEMO_MODE")
 
     # ── 알림 설정 ─────────────────────────────────
     alert_threshold: float = Field(5.0, env="ALERT_THRESHOLD")

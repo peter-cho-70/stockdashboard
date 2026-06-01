@@ -104,10 +104,15 @@ def resolve_channel_id(handle_or_id: str, api_key: str) -> Optional[dict]:
     return None
 
 
-def fetch_latest_videos(channel_id: str, api_key: str, max_results: int = 10) -> list[dict]:
+def fetch_latest_videos(
+    channel_id: str,
+    api_key: str,
+    max_results: int = 10,
+    page_token: Optional[str] = None,
+) -> tuple[list[dict], Optional[str]]:
     """
     채널의 최신 영상 목록 반환
-    반환: [{"video_id", "title", "description", "published_at", "thumbnail", "url"}]
+    반환: (videos, next_page_token)
     """
     try:
         # 채널의 uploads 재생목록 ID 조회
@@ -124,19 +129,22 @@ def fetch_latest_videos(channel_id: str, api_key: str, max_results: int = 10) ->
         items = ch_data.get("items", [])
         if not items:
             logger.error(f"채널 정보 없음: {channel_id}")
-            return []
+            return [], None
 
         uploads_id = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
-        # 업로드 재생목록에서 최신 영상 조회
+        params: dict = {
+            "key": api_key,
+            "part": "snippet",
+            "playlistId": uploads_id,
+            "maxResults": max(1, min(max_results, 50)),
+        }
+        if page_token:
+            params["pageToken"] = page_token
+
         pl_resp = httpx.get(
             f"{YOUTUBE_API_BASE}/playlistItems",
-            params={
-                "key": api_key,
-                "part": "snippet",
-                "playlistId": uploads_id,
-                "maxResults": max_results,
-            },
+            params=params,
             timeout=10,
         )
         pl_data = pl_resp.json()
@@ -153,8 +161,8 @@ def fetch_latest_videos(channel_id: str, api_key: str, max_results: int = 10) ->
                 "thumbnail": snippet.get("thumbnails", {}).get("medium", {}).get("url", ""),
                 "url": f"https://www.youtube.com/watch?v={vid_id}",
             })
-        return videos
+        return videos, pl_data.get("nextPageToken")
 
     except Exception as e:
         logger.error(f"영상 목록 조회 실패: {e}")
-        return []
+        return [], None

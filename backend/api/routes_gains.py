@@ -10,6 +10,7 @@ from typing import Optional
 from datetime import datetime
 
 from config.database import get_db, RealizedGain, AppConfig
+from core.demo_mode import is_demo_mode, demo_write_blocked
 
 gains_router = APIRouter(prefix="/gains", tags=["gains"])
 
@@ -54,6 +55,8 @@ def _to_dict(g: RealizedGain) -> dict:
 @gains_router.get("")
 def get_gains(year: Optional[int] = None, gain_type: Optional[str] = None, db: Session = Depends(get_db)):
     """실현 수익 내역 조회 (연도/종류 필터 가능)"""
+    if is_demo_mode():
+        return []
     q = db.query(RealizedGain)
     if year:
         q = q.filter(RealizedGain.year == year)
@@ -67,6 +70,11 @@ def get_gains(year: Optional[int] = None, gain_type: Optional[str] = None, db: S
 @gains_router.get("/summary")
 def get_gains_summary(db: Session = Depends(get_db)):
     """연도별 매도/배당 합계 요약"""
+    if is_demo_mode():
+        return {
+            "yearly": [],
+            "all_time": {"capital": 0, "dividend": 0, "total": 0, "tax": 0, "net": 0},
+        }
     rows = (
         db.query(
             RealizedGain.year,
@@ -141,6 +149,7 @@ def get_gains_summary(db: Session = Depends(get_db)):
 @gains_router.post("")
 def add_gain(body: GainCreate, db: Session = Depends(get_db)):
     """실현 수익 내역 추가"""
+    demo_write_blocked()
     if body.gain_type not in ("CAPITAL", "DIVIDEND"):
         raise HTTPException(status_code=400, detail="gain_type은 CAPITAL 또는 DIVIDEND 여야 합니다.")
     g = RealizedGain(**body.model_dump())
@@ -154,6 +163,7 @@ def add_gain(body: GainCreate, db: Session = Depends(get_db)):
 @gains_router.patch("/{gain_id}")
 def update_gain(gain_id: int, body: GainUpdate, db: Session = Depends(get_db)):
     """실현 수익 수정"""
+    demo_write_blocked()
     g = db.query(RealizedGain).filter(RealizedGain.id == gain_id).first()
     if not g:
         raise HTTPException(status_code=404, detail="내역 없음")
@@ -168,6 +178,7 @@ def update_gain(gain_id: int, body: GainUpdate, db: Session = Depends(get_db)):
 @gains_router.delete("/{gain_id}")
 def delete_gain(gain_id: int, db: Session = Depends(get_db)):
     """실현 수익 삭제"""
+    demo_write_blocked()
     g = db.query(RealizedGain).filter(RealizedGain.id == gain_id).first()
     if not g:
         raise HTTPException(status_code=404, detail="내역 없음")
@@ -184,6 +195,8 @@ class CashBody(BaseModel):
 @gains_router.get("/cash")
 def get_cash(db: Session = Depends(get_db)):
     """예수금 조회"""
+    if is_demo_mode():
+        return {"cash_balance": 0.0}
     cfg = db.query(AppConfig).filter(AppConfig.key == "cash_balance").first()
     return {"cash_balance": float(cfg.value) if cfg else 0.0}
 
@@ -191,6 +204,7 @@ def get_cash(db: Session = Depends(get_db)):
 @gains_router.post("/cash")
 def set_cash(body: CashBody, db: Session = Depends(get_db)):
     """예수금 저장"""
+    demo_write_blocked()
     cfg = db.query(AppConfig).filter(AppConfig.key == "cash_balance").first()
     if cfg:
         cfg.value = str(body.amount)
