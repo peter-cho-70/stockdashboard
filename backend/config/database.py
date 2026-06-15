@@ -234,6 +234,7 @@ class IntelContent(Base):
     domain_id = Column(Integer, ForeignKey("knowledge_domains.id"), nullable=True, index=True)
     is_bookmarked = Column(Boolean, default=False)
     is_read = Column(Boolean, default=False)
+    user_highlights = Column(Text, nullable=True)  # JSON: 핀·스니펫·사용자 포인트
 
     analyzed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -530,6 +531,27 @@ class StockPriceTarget(Base):
 # ─────────────────────────────────────────────
 # 미국 증시 아침 리포트
 # ─────────────────────────────────────────────
+class TradeMonthlyReport(Base):
+    """월별 수출입 동향 AI 리포트"""
+    __tablename__ = "trade_monthly_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    report_month = Column(String(7), unique=True, nullable=False, index=True)  # YYYY-MM
+    ref_yyyymm = Column(String(6), nullable=True)
+    revision = Column(String(20), default="auto")
+    summary_json = Column(Text, nullable=True)
+    countries_json = Column(Text, nullable=True)
+    items_json = Column(Text, nullable=True)
+    analyses_json = Column(Text, nullable=True)
+    highlights_json = Column(Text, nullable=True)
+    body_markdown = Column(Text, nullable=True)
+    status = Column(String(20), default="pending")
+    error_message = Column(Text, nullable=True)
+    model = Column(String(80), nullable=True)
+    generated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class UsMarketReport(Base):
     __tablename__ = "us_market_reports"
 
@@ -760,6 +782,17 @@ def _migrate_knowledge_hub():
             pass
 
 
+def _migrate_user_highlights_column():
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE intel_contents ADD COLUMN user_highlights TEXT"))
+            conn.commit()
+        except Exception:
+            pass
+
+
 def _migrate_price_target_columns():
     from sqlalchemy import text
 
@@ -786,6 +819,7 @@ def init_db():
     _migrate_content_scope_columns()
     _migrate_knowledge_hub()
     _migrate_price_target_columns()
+    _migrate_user_highlights_column()
     print("✅ 데이터베이스 초기화 완료")
 
 

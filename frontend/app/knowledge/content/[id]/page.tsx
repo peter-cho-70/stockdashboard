@@ -41,7 +41,9 @@ export default function KnowledgeContentPage() {
           source_url: content.source_url,
           key_points: content.key_points || [],
           content_scope: "knowledge",
+          user_highlights: content.user_highlights,
         }}
+        contentId={content.id}
       />
       {content.source_url && (
         <a

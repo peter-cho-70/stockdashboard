@@ -173,6 +173,12 @@ export const api = {
       `/intel/contents${sourceType ? `?source_type=${sourceType}` : ""}`
     ),
   getIntelContent: (id: number) => fetchApi<IntelContent>(`/intel/contents/${id}`),
+
+  patchIntelHighlights: (id: number, highlights: UserHighlights) =>
+    fetchApi<{ ok: boolean; user_highlights: UserHighlights }>(
+      `/intel/contents/${id}/highlights`,
+      { method: "PATCH", body: JSON.stringify(highlights) },
+    ),
   setIntelContentScope: (id: number, scope: "knowledge" | "market") =>
     fetchApi<{ ok: boolean; content: IntelContent }>(`/intel/contents/${id}/scope`, {
       method: "PATCH",
@@ -298,13 +304,32 @@ export interface SectorAnalysisItem {
   mentioned_stocks?: string[];
 }
 
+export interface KeyPointItem {
+  text: string;
+  importance?: "high" | "normal" | "low";
+  by?: "ai" | "user";
+}
+
+export interface UserHighlights {
+  pinned_key_point_indexes: number[];
+  user_key_points: string[];
+  snippets: {
+    id: string;
+    field: string;
+    text: string;
+    note?: string;
+    color?: string;
+    created_at?: string;
+  }[];
+}
+
 export interface AnalysisResult {
   id: number;
   source_type: string;
   source_url?: string | null;
   source_title?: string | null;
   summary: string;
-  key_points: string[];
+  key_points: (string | KeyPointItem)[];
   mentioned_stocks: string[];
   mentioned_sectors: string[];
   keywords: string[];
@@ -315,6 +340,7 @@ export interface AnalysisResult {
   sector_analysis: SectorAnalysisItem[];
   source_document?: string | null;
   content_scope?: "knowledge" | "market" | string;
+  user_highlights?: UserHighlights;
   logs: AnalysisLog[];
 }
 
@@ -325,7 +351,8 @@ export interface IntelContent {
   source_title: string | null;
   channel_name: string | null;
   summary: string | null;
-  key_points?: string[];
+  key_points?: (string | KeyPointItem)[];
+  user_highlights?: UserHighlights;
   keywords?: string[];
   mentioned_stocks: string[];
   mentioned_sectors: string[];
@@ -638,11 +665,13 @@ export interface UsMarketQuote {
   name: string;
   ticker?: string;
   category?: string;
-  unit?: "index" | "fx" | "yield" | "price" | "stock";
+  unit?: "index" | "fx" | "yield" | "price" | "stock" | "futures";
   close?: number;
   change_pct?: number;
   change?: number;
   date?: string;
+  as_of?: string;
+  as_of_label?: string;
   error?: string;
 }
 
@@ -665,11 +694,26 @@ export interface UsMarketArticle {
   title: string;
   url: string;
   published?: string | null;
+  published_at?: string | null;
   snippet?: string | null;
+}
+
+export interface UsMarketLiveSnapshot {
+  us_indices: UsMarketQuote[];
+  us_futures: UsMarketQuote[];
+  commodity: UsMarketQuote[];
+  fx: UsMarketQuote[];
+  treasury: UsMarketQuote[];
+  us_stocks: UsMarketQuote[];
+  articles: UsMarketArticle[];
+  quote_mode: "futures_daytime" | "cash_close";
+  fetched_at: string;
+  fetched_at_label: string;
 }
 
 export interface UsMarketSnapshot {
   us_indices: UsMarketQuote[];
+  us_futures?: UsMarketQuote[];
   commodity: UsMarketQuote[];
   fx: UsMarketQuote[];
   treasury: UsMarketQuote[];
@@ -694,8 +738,31 @@ export interface UsMarketReport {
   generated_at: string | null;
 }
 
+export interface TradeMonthlyReport {
+  id: number;
+  report_month: string;
+  ref_yyyymm: string | null;
+  revision?: string;
+  summary: Record<string, unknown>[];
+  countries: Record<string, unknown>[];
+  items: Record<string, unknown>[];
+  analyses: {
+    summary_trend?: string;
+    country_trade?: string;
+    sector_items?: string;
+    integrated?: string;
+  };
+  highlights: string[];
+  body_markdown: string | null;
+  status: string;
+  error_message: string | null;
+  model: string | null;
+  generated_at: string | null;
+}
+
 const EMPTY_US_SNAPSHOT = (): UsMarketSnapshot => ({
   us_indices: [],
+  us_futures: [],
   commodity: [],
   fx: [],
   treasury: [],
@@ -713,6 +780,7 @@ export function normalizeUsSnapshot(report: UsMarketReport): UsMarketSnapshot {
     return {
       ...EMPTY_US_SNAPSHOT(),
       ...report.snapshot,
+      us_futures: report.snapshot.us_futures ?? [],
       us_stocks: report.snapshot.us_stocks ?? [],
       interpretations,
       articles,
@@ -727,6 +795,7 @@ export function normalizeUsSnapshot(report: UsMarketReport): UsMarketSnapshot {
     else if (cat === "fx") snap.fx.push(item);
     else if (cat === "treasury") snap.treasury.push(item);
     else if (cat === "us_stock") snap.us_stocks.push(item);
+    else if (cat === "us_futures") (snap.us_futures ??= []).push(item);
     else snap.us_indices.push(item);
   }
   return snap;
@@ -797,6 +866,56 @@ export const marketApi = {
       `/reports/us/daily/generate${qs ? `?${qs}` : ""}`,
       { method: "POST" },
     );
+  },
+
+  getUsLiveSnapshot: (mode: "auto" | "cash" | "futures" = "auto") =>
+    fetchApi<{ snapshot: UsMarketLiveSnapshot }>(
+      `/reports/us/daily/live-snapshot?mode=${mode}`,
+    ),
+
+  refreshUsReportNews: (opts?: { date?: string; refreshQuotes?: boolean }) => {
+    const q = new URLSearchParams();
+    if (opts?.date) q.set("date", opts.date);
+    if (opts?.refreshQuotes) q.set("refresh_quotes", "true");
+    const qs = q.toString();
+    return fetchApi<{ report: UsMarketReport }>(
+      `/reports/us/daily/refresh-news${qs ? `?${qs}` : ""}`,
+      { method: "POST" },
+    );
+  },
+
+  getTradeReport: (month: string) =>
+    fetchApi<{ report: TradeMonthlyReport | null }>(
+      `/reports/trade/monthly?month=${encodeURIComponent(month)}`,
+    ),
+
+  listTradeReports: (limit = 12) =>
+    fetchApi<{ reports: TradeMonthlyReport[] }>(
+      `/reports/trade/monthly?limit=${limit}`,
+    ),
+
+  generateTradeReport: async (opts?: { month?: string; force?: boolean }) => {
+    const q = new URLSearchParams();
+    if (opts?.month) q.set("month", opts.month);
+    if (opts?.force) q.set("force", "true");
+    const qs = q.toString();
+    const res = await fetch(`${BASE}/reports/trade/monthly/generate${qs ? `?${qs}` : ""}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(300_000),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      let message = err || `HTTP ${res.status}`;
+      try {
+        const parsed = JSON.parse(err) as { detail?: unknown };
+        if (typeof parsed.detail === "string") message = parsed.detail;
+      } catch {
+        /* keep */
+      }
+      throw new Error(message);
+    }
+    return res.json() as Promise<{ report: TradeMonthlyReport; warning?: string }>;
   },
 };
 

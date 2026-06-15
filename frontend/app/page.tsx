@@ -27,6 +27,7 @@ import {
 import { api, type PortfolioSummary, type Alert, type PortfolioSnapshot } from "@/lib/api";
 import { ClientOnly } from "@/components/client-only";
 import { UsMarketReportCard } from "@/components/us-market-report-card";
+import { TradeReportCard } from "@/components/trade-report-card";
 
 const CHART_PERIODS = [
   { days: 7, label: "7일" },
@@ -208,7 +209,12 @@ export default function DashboardPage() {
     평가금액: Math.round(h.total_value / 10000),
   }));
 
-  const usMarketReport = <UsMarketReportCard />;
+  const marketReports = (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <UsMarketReportCard />
+      <TradeReportCard />
+    </div>
+  );
 
   return (
     <div className="space-y-6">
@@ -257,7 +263,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {!usReportAtBottom && usMarketReport}
+      {!usReportAtBottom && marketReports}
 
       {/* 알림 배지 */}
       {unreadCount > 0 && (
@@ -487,7 +493,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {usReportAtBottom && usMarketReport}
+      {usReportAtBottom && marketReports}
     </div>
   );
 }

@@ -712,7 +712,7 @@ export function IntelCalendarHub() {
                 닫기
               </button>
             </div>
-            <IntelDetailPanel data={detailContent} />
+            <IntelDetailPanel data={detailContent} contentId={detailContent.id} />
           </div>
         </div>
       )}

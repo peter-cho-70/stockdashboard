@@ -14,10 +14,17 @@ from core.price_targets import (
     fetch_price_targets_with_ai,
     list_price_targets,
 )
+from core.trade_report import (
+    generate_trade_report,
+    get_report as get_trade_report,
+    list_reports as list_trade_reports,
+)
 from core.us_market_report import (
+    fetch_live_snapshot,
     generate_us_morning_report,
     get_report,
     list_reports,
+    refresh_us_report_news,
 )
 
 market_router = APIRouter(tags=["market"])
@@ -94,3 +101,63 @@ def api_generate_us_report(
         return {"report": report}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@market_router.get("/reports/us/daily/live-snapshot")
+def api_us_live_snapshot(
+    mode: str = Query("auto", description="auto | cash | futures"),
+):
+    if mode not in ("auto", "cash", "futures"):
+        raise HTTPException(status_code=400, detail="mode는 auto, cash, futures 중 하나")
+    try:
+        return {"snapshot": fetch_live_snapshot(mode=mode)}  # type: ignore[arg-type]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:300]) from e
+
+
+@market_router.post("/reports/us/daily/refresh-news")
+def api_refresh_us_report_news(
+    date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    refresh_quotes: bool = Query(False, description="시세도 함께 갱신"),
+    db: Session = Depends(get_db),
+):
+    try:
+        report = refresh_us_report_news(
+            db, report_date=date, refresh_quotes=refresh_quotes
+        )
+        return {"report": report}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+# ── 수출입 월간 리포트 ──────────────────────────────────────────────
+
+@market_router.get("/reports/trade/monthly")
+def api_trade_monthly_reports(
+    month: Optional[str] = Query(None, description="YYYY-MM, 단일 조회"),
+    limit: int = Query(12, ge=1, le=12, description="최대 12개월(1년)"),
+    db: Session = Depends(get_db),
+):
+    if month:
+        return {"report": get_trade_report(db, month)}
+    return {"reports": list_trade_reports(db, limit=limit)}
+
+
+@market_router.post("/reports/trade/monthly/generate")
+def api_generate_trade_report(
+    month: Optional[str] = Query(None, description="YYYY-MM"),
+    force: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    try:
+        report = generate_trade_report(db, report_month=month, force=force)
+        return {"report": report}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        from core.trade_report import _default_report_month, get_report as get_trade_report_by_month
+
+        saved = get_trade_report_by_month(db, month or _default_report_month())
+        if saved and saved.get("summary"):
+            return {"report": saved, "warning": str(e)[:300]}
+        raise HTTPException(status_code=500, detail=str(e)[:300]) from e

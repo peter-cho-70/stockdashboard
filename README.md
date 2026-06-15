@@ -57,18 +57,50 @@ stockdashboard/
 
 ## 🚀 빠른 시작
 
-### 백엔드
+### 한 번에 실행 (권장)
+
+프로젝트 루트에서 백엔드·프론트를 동시에 띄웁니다.
+
+| OS | 명령 |
+|----|------|
+| **macOS / Linux** | `./start-dev.sh` |
+| **Windows** | `start-dev.bat` 더블클릭 또는 명령 프롬프트에서 실행 |
+
+- 최초 실행 시 `backend/venv`, `frontend/node_modules` 가 없으면 자동 설치를 시도합니다.
+- `backend/.env` 가 없으면 안내 후 종료합니다 (`cp backend/.env.example backend/.env`).
+- `frontend/.env.local` 이 없으면 `NEXT_PUBLIC_API_URL=http://localhost:8000/api` 를 생성합니다.
+- 백엔드: [http://localhost:8000/docs](http://localhost:8000/docs) · 프론트: [http://localhost:3000](http://localhost:3000)
+- macOS/Linux: **Ctrl+C** 로 두 프로세스 모두 종료 · Windows: 각 터미널 창을 닫으면 종료
+- `venv` 폴더만 있고 패키지가 없으면 스크립트가 `pip install` 을 자동 실행합니다. 실패 시:
+
+```bash
+cd backend && source venv/bin/activate && pip install -r requirements.txt
+```
+
+```bash
+# macOS/Linux — 최초 1회 실행 권한
+chmod +x start-dev.sh
+./start-dev.sh
+```
+
+포트 변경 (선택):
+
+```bash
+BACKEND_PORT=8000 FRONTEND_PORT=3000 ./start-dev.sh
+```
+
+### 백엔드만
 
 ```bash
 cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # API 키 입력
-python main.py
+python3 main.py
 # → http://localhost:8000/docs
 ```
 
-### 프론트엔드
+### 프론트엔드만
 
 ```bash
 cd frontend

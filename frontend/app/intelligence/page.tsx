@@ -222,7 +222,7 @@ function InlineAnalysisPanel({ analysis }: { analysis: VideoAnalysis }) {
 
   return (
     <div className={`mt-2 rounded-lg border p-3 ${sentColors[s] ?? sentColors.NEUTRAL}`}>
-      <IntelDetailPanel data={analysis} compact />
+      <IntelDetailPanel data={analysis} contentId={analysis.id} compact />
     </div>
   );
 }
@@ -345,7 +345,15 @@ function ContentCard({
                 <Loader2 size={14} className="animate-spin" /> 상세 불러오는 중...
               </div>
             ) : (
-              <IntelDetailPanel data={{ ...display, source_type: display.source_type, source_url: display.source_url }} />
+              <IntelDetailPanel
+                data={{ ...display, source_type: display.source_type, source_url: display.source_url }}
+                contentId={display.id}
+                onHighlightsSaved={(h) => {
+                  const patched = { ...display, user_highlights: h };
+                  setDetail(patched);
+                  onScopeChange?.(patched);
+                }}
+              />
             )
           )}
           <div className="flex items-center gap-3 flex-wrap">
@@ -1171,7 +1179,7 @@ function AnalyzePanel({
               분석 이력에서 보기 →
             </button>
           </div>
-          <IntelDetailPanel data={lastResult} />
+          <IntelDetailPanel data={lastResult} contentId={lastResult.id} />
         </div>
       )}
     </div>

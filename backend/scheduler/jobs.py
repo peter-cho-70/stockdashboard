@@ -77,6 +77,25 @@ async def job_us_market_close():
         db.close()
 
 
+async def job_trade_monthly_report():
+    """[09:00 KST] 매월 1·20일 수출입 월간 리포트 생성"""
+    logger.info("⏰ [스케줄] 수출입 월간 리포트 생성")
+    db = SessionLocal()
+    try:
+        from core.trade_report import generate_trade_report
+
+        report = generate_trade_report(db)
+        logger.info(
+            "✅ 수출입 리포트: %s status=%s",
+            report.get("report_month"),
+            report.get("status"),
+        )
+    except Exception as e:
+        logger.error("❌ 수출입 리포트 생성 실패: %s", e)
+    finally:
+        db.close()
+
+
 async def job_us_morning_report():
     """[08:05 KST] 미국 증시 아침 리포트 생성 (전일 마감 반영)"""
     logger.info("⏰ [스케줄] 미국 증시 아침 리포트 생성 (08:05)")
@@ -260,6 +279,13 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(hour=8, minute=5, day_of_week="mon-fri", timezone="Asia/Seoul"),
         id="us_morning_report",
         name="미국 증시 아침 리포트",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_trade_monthly_report,
+        CronTrigger(day="1,20", hour=9, minute=0, timezone="Asia/Seoul"),
+        id="trade_monthly_report",
+        name="수출입 월간 리포트",
         replace_existing=True,
     )
     scheduler.add_job(

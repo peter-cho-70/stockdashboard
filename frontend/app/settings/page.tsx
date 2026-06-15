@@ -113,7 +113,7 @@ export default function SettingsPage() {
         <div className="rounded-md bg-[var(--surface-elevated)] p-3 font-mono text-xs text-neutral-600 dark:text-neutral-400 space-y-1">
           <p># 백엔드 서버 시작</p>
           <p className="text-neutral-800 dark:text-neutral-200">cd stockdashboard/backend</p>
-          <p className="text-neutral-800 dark:text-neutral-200">python main.py</p>
+          <p className="text-neutral-800 dark:text-neutral-200">python3 main.py</p>
         </div>
       </Section>
 

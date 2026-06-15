@@ -51,7 +51,12 @@ export interface KnowledgeContent {
   domain_id: number | null;
   content_scope?: string;
   summary: string | null;
-  key_points?: string[];
+  key_points?: (string | { text: string; importance?: string; by?: string })[];
+  user_highlights?: {
+    pinned_key_point_indexes: number[];
+    user_key_points: string[];
+    snippets: { id: string; field: string; text: string; note?: string; color?: string; created_at?: string }[];
+  };
   keywords: string[];
   sentiment: string | null;
   is_bookmarked: boolean;

@@ -945,6 +945,55 @@ class IntelContentScopeBody(BaseModel):
     scope: str  # knowledge | market
 
 
+class HighlightSnippetBody(BaseModel):
+    id: str
+    field: str = "summary"
+    text: str
+    note: Optional[str] = ""
+    color: Optional[str] = "amber"
+    created_at: Optional[str] = None
+
+
+class UserHighlightsBody(BaseModel):
+    pinned_key_point_indexes: List[int] = []
+    pin_colors: dict[str, str] = {}
+    user_key_points: List[str] = []
+    snippets: List[HighlightSnippetBody] = []
+
+
+@router.get("/intel/contents/{content_id}/highlights")
+def get_intel_highlights(content_id: int, db: Session = Depends(get_db)):
+    """사용자 강조(핀·스니펫·직접 포인트) 조회."""
+    from core.intel_highlights import parse_user_highlights
+
+    c = db.query(IntelContent).filter(IntelContent.id == content_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="콘텐츠 없음")
+    return parse_user_highlights(getattr(c, "user_highlights", None))
+
+
+@router.patch("/intel/contents/{content_id}/highlights")
+def patch_intel_highlights(
+    content_id: int,
+    body: UserHighlightsBody,
+    db: Session = Depends(get_db),
+):
+    """사용자 강조 저장."""
+    from core.intel_highlights import save_user_highlights
+
+    try:
+        data = save_user_highlights(
+            db,
+            content_id,
+            body.model_dump(mode="json"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"강조 저장 실패: {str(e)[:200]}") from e
+    return {"ok": True, "user_highlights": data}
+
+
 @router.patch("/intel/contents/{content_id}/scope")
 def patch_intel_content_scope(
     content_id: int,

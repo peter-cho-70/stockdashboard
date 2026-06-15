@@ -18,6 +18,56 @@ function todayKst(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
 }
 
+/** KST 08:30~22:59 — 미국 선물 표시 구간 */
+function isUsDaytimeKst(now = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  }).formatToParts(now);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  const totalMinutes = hour * 60 + minute;
+  return totalMinutes >= 8 * 60 + 30 && totalMinutes < 23 * 60;
+}
+
+function formatArticleDate(article: UsMarketArticle): string | null {
+  if (article.published_at) {
+    try {
+      return new Date(article.published_at).toLocaleString("ko-KR", {
+        timeZone: "Asia/Seoul",
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      /* fall through */
+    }
+  }
+  if (article.published) {
+    try {
+      return new Date(article.published).toLocaleString("ko-KR", {
+        timeZone: "Asia/Seoul",
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return article.published.slice(0, 16);
+    }
+  }
+  return null;
+}
+
+function formatQuoteAsOf(item: UsMarketQuote): string | null {
+  if (item.as_of_label) return item.as_of_label;
+  if (item.date) return item.date;
+  return null;
+}
+
 function formatClose(item: UsMarketQuote): string {
   if (item.error || item.close == null) return "—";
   const v = item.close;
@@ -28,7 +78,9 @@ function formatClose(item: UsMarketQuote): string {
     if (item.name.includes("위안")) return `¥${v.toFixed(4)}`;
     return v.toFixed(2);
   }
-  if (item.unit === "price" || item.unit === "stock") return `$${v.toFixed(2)}`;
+  if (item.unit === "price" || item.unit === "stock" || item.unit === "futures") {
+    return `$${v.toFixed(2)}`;
+  }
   return v.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
@@ -48,6 +100,7 @@ function ChangePct({ value }: { value?: number }) {
 
 function QuoteCard({ item }: { item: UsMarketQuote }) {
   const tooltip = getUsMarketQuoteTooltip(item.name, item.ticker);
+  const asOf = formatQuoteAsOf(item);
 
   return (
     <div
@@ -74,6 +127,11 @@ function QuoteCard({ item }: { item: UsMarketQuote }) {
         <>
           <p className="text-sm font-semibold tabular-nums">{formatClose(item)}</p>
           <ChangePct value={item.change_pct} />
+          {asOf && (
+            <p className="text-[9px] text-neutral-400 mt-0.5 tabular-nums leading-tight">
+              {asOf}
+            </p>
+          )}
         </>
       )}
       {tooltip && (
@@ -141,19 +199,27 @@ function InterpretationBlock({
         <div className="pt-1 border-t border-[var(--border-subtle)]">
           <p className="text-[10px] font-medium text-neutral-400 mb-1">참고 기사</p>
           <ul className="space-y-1">
-            {sources.map((a) => (
-              <li key={`${a.index}-${a.url}`}>
-                <a
-                  href={a.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-start gap-1 text-[11px] text-blue-600 dark:text-blue-400 hover:underline line-clamp-2"
-                >
-                  <ExternalLink size={10} className="shrink-0 mt-0.5" />
-                  <span>{a.title}</span>
-                </a>
-              </li>
-            ))}
+            {sources.map((a) => {
+              const pubLabel = formatArticleDate(a);
+              return (
+                <li key={`${a.index}-${a.url}`}>
+                  <a
+                    href={a.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-start gap-1 text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    <ExternalLink size={10} className="shrink-0 mt-0.5" />
+                    <span className="line-clamp-2">
+                      {pubLabel && (
+                        <span className="text-neutral-400 font-normal mr-1">[{pubLabel}]</span>
+                      )}
+                      {a.title}
+                    </span>
+                  </a>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
@@ -161,20 +227,42 @@ function InterpretationBlock({
   );
 }
 
-function SnapshotSections({ snapshot }: { snapshot: UsMarketSnapshot }) {
+function SnapshotSections({
+  snapshot,
+  liveLabel,
+}: {
+  snapshot: UsMarketSnapshot;
+  liveLabel?: string | null;
+}) {
   const { interpretations, articles } = snapshot;
+  const futures = snapshot.us_futures ?? [];
 
   return (
     <div className="space-y-4">
+      {liveLabel && (
+        <p className="text-[10px] text-neutral-400">시세 기준: {liveLabel}</p>
+      )}
       {snapshot.us_indices.length > 0 && (
         <section>
-          <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">미국 주요 지수</h3>
+          <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">
+            미국 주요 지수
+            <span className="font-normal text-neutral-400 ml-1">(전일 마감)</span>
+          </h3>
           <QuoteGrid items={snapshot.us_indices} />
           <InterpretationBlock
             topic="us_indices"
             interpretation={interpretations.us_indices}
             articles={articles}
           />
+        </section>
+      )}
+      {futures.length > 0 && (
+        <section>
+          <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">
+            미국 지수 선물
+            <span className="font-normal text-neutral-400 ml-1">(실시간)</span>
+          </h3>
+          <QuoteGrid items={futures} />
         </section>
       )}
       {(snapshot.commodity.length > 0 || snapshot.fx.length > 0) && (
@@ -225,9 +313,80 @@ function SnapshotSections({ snapshot }: { snapshot: UsMarketSnapshot }) {
 
 export function UsMarketReportCard() {
   const [report, setReport] = useState<UsMarketReport | null>(null);
+  const [liveLabel, setLiveLabel] = useState<string | null>(null);
+  const [displaySnapshot, setDisplaySnapshot] = useState<UsMarketSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [refreshingNews, setRefreshingNews] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const mergeLiveIntoSnapshot = useCallback(
+    (base: UsMarketSnapshot, live: Awaited<ReturnType<typeof marketApi.getUsLiveSnapshot>>["snapshot"]) => {
+      const merged: UsMarketSnapshot = {
+        ...base,
+        us_indices: live.us_indices.length > 0 ? live.us_indices : base.us_indices,
+        us_futures: live.us_futures ?? [],
+        commodity: live.commodity.length > 0 ? live.commodity : base.commodity,
+        fx: live.fx.length > 0 ? live.fx : base.fx,
+        treasury: live.treasury.length > 0 ? live.treasury : base.treasury,
+        us_stocks: live.us_stocks.length > 0 ? live.us_stocks : base.us_stocks,
+        articles: live.articles.length > 0 ? live.articles : base.articles,
+      };
+      return merged;
+    },
+    [],
+  );
+
+  const applyReport = useCallback(
+    async (r: UsMarketReport | null, opts?: { refreshNews?: boolean }) => {
+      if (!r || r.status !== "ready") {
+        setReport(r);
+        setDisplaySnapshot(null);
+        setLiveLabel(null);
+        return;
+      }
+      setReport(r);
+      const base = normalizeUsSnapshot(r);
+      try {
+        const { snapshot: live } = await marketApi.getUsLiveSnapshot("auto");
+        setDisplaySnapshot(mergeLiveIntoSnapshot(base, live));
+        setLiveLabel(live.fetched_at_label);
+      } catch {
+        setDisplaySnapshot(base);
+        setLiveLabel(null);
+      }
+
+      const isToday = r.report_date === todayKst();
+      const generatedAt = r.generated_at ? new Date(r.generated_at).getTime() : 0;
+      const stale = !generatedAt || Date.now() - generatedAt > 60 * 60 * 1000;
+      if (isToday && stale && opts?.refreshNews !== false) {
+        setRefreshingNews(true);
+        try {
+          const { report: refreshed } = await marketApi.refreshUsReportNews({
+            date: r.report_date,
+            refreshQuotes: isUsDaytimeKst(),
+          });
+          setReport(refreshed);
+          const refreshedBase = normalizeUsSnapshot(refreshed);
+          try {
+            const { snapshot: live } = await marketApi.getUsLiveSnapshot("auto");
+            const merged = mergeLiveIntoSnapshot(refreshedBase, live);
+            merged.articles = refreshedBase.articles;
+            merged.interpretations = refreshedBase.interpretations;
+            setDisplaySnapshot(merged);
+            setLiveLabel(live.fetched_at_label);
+          } catch {
+            setDisplaySnapshot(refreshedBase);
+          }
+        } catch {
+          /* 기사 갱신 실패 시 기존 리포트 유지 */
+        } finally {
+          setRefreshingNews(false);
+        }
+      }
+    },
+    [mergeLiveIntoSnapshot],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -236,19 +395,20 @@ export function UsMarketReportCard() {
       const today = todayKst();
       const res = await marketApi.getUsReport(today);
       if (res.report?.status === "ready") {
-        setReport(res.report);
+        await applyReport(res.report);
         return;
       }
       const list = await marketApi.listUsReports(3);
       const latest = list.reports.find((r) => r.status === "ready");
-      setReport(latest ?? res.report ?? null);
+      await applyReport(latest ?? res.report ?? null, { refreshNews: false });
     } catch (e) {
       setError(e instanceof Error ? e.message : "리포트 로드 실패");
       setReport(null);
+      setDisplaySnapshot(null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyReport]);
 
   useEffect(() => {
     load();
@@ -259,7 +419,7 @@ export function UsMarketReportCard() {
     setError(null);
     try {
       const res = await marketApi.generateUsReport({ force });
-      setReport(res.report);
+      await applyReport(res.report, { refreshNews: false });
     } catch (e) {
       setError(e instanceof Error ? e.message : "생성 실패");
     } finally {
@@ -267,7 +427,7 @@ export function UsMarketReportCard() {
     }
   }
 
-  const snapshot = report ? normalizeUsSnapshot(report) : null;
+  const snapshot = displaySnapshot ?? (report ? normalizeUsSnapshot(report) : null);
 
   return (
     <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] shadow-xs">
@@ -279,6 +439,12 @@ export function UsMarketReportCard() {
           </h2>
           {report?.report_date && (
             <span className="text-xs text-neutral-400">{report.report_date}</span>
+          )}
+          {refreshingNews && (
+            <span className="text-[10px] text-neutral-400 flex items-center gap-1">
+              <Loader2 size={10} className="animate-spin" />
+              기사 갱신 중
+            </span>
           )}
         </div>
         <button
@@ -308,7 +474,7 @@ export function UsMarketReportCard() {
         </div>
       ) : (
         <div className="p-4 space-y-4 overflow-visible">
-          {snapshot && <SnapshotSections snapshot={snapshot} />}
+          {snapshot && <SnapshotSections snapshot={snapshot} liveLabel={liveLabel} />}
 
           {report.highlights.length > 0 && (
             <ul className="space-y-1 text-sm text-neutral-700 dark:text-neutral-300 border-t border-[var(--border-subtle)] pt-4">

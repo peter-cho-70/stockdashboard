@@ -122,9 +122,12 @@ def _serialize_content(c: IntelContent, *, short: bool = False) -> dict:
         "published_at": c.published_at.isoformat() if c.published_at else None,
     }
     if not short:
+        from core.intel_highlights import normalize_key_points_list, parse_user_highlights
+
         base.update({
-            "key_points": _j(c.key_points),
+            "key_points": normalize_key_points_list(_j(c.key_points)),
             "source_document": c.source_document,
+            "user_highlights": parse_user_highlights(getattr(c, "user_highlights", None)),
             "concepts": [],
             "learning_notes": "",
             "related_topics": [],

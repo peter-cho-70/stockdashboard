@@ -30,7 +30,13 @@ class Settings(BaseSettings):
             return v.strip().split()[0].lower() in ("true", "1", "yes")
         return v
 
-    @field_validator("gemini_api_key", "openai_api_key", "anthropic_api_key", mode="before")
+    @field_validator(
+        "gemini_api_key",
+        "openai_api_key",
+        "anthropic_api_key",
+        "public_data_api_key",
+        mode="before",
+    )
     @classmethod
     def _strip_api_key(cls, v):
         if isinstance(v, str):
@@ -49,6 +55,7 @@ class Settings(BaseSettings):
     openai_model: str = Field("gpt-4o-mini", env="OPENAI_MODEL")
     analysis_provider: str = Field("gemini", env="ANALYSIS_PROVIDER")  # claude|openai|gemini
     youtube_api_key: str = Field("", env="YOUTUBE_API_KEY")
+    public_data_api_key: str = Field("", env="PUBLIC_DATA_API_KEY")
     ai_fallback: bool = Field(False, env="AI_FALLBACK")  # false=선택 provider만, true=429 시만 전환
     ai_skip_if_cached: bool = Field(True, env="AI_SKIP_IF_CACHED")
     enable_bulk_youtube_analyze: bool = Field(False, env="ENABLE_BULK_YOUTUBE_ANALYZE")

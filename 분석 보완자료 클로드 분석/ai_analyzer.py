@@ -48,36 +48,6 @@ YOUTUBE_EXTRACT_PROMPT = """당신은 경제·주식 유튜브 영상 분석 전
 응답 JSON만 출력:
 {"title":"...","document":"...","speakers":[],"topics":[]}"""
 
-YOUTUBE_EXTRACT_PROMPT_DEEP = """당신은 경제·주식 유튜브 영상 분석 전문가입니다.
-아래 YouTube 영상 내용(자막 또는 URL)을 **매우 상세히** 분석·정리하여 JSON으로만 응답하세요.
-기본 요약 모드보다 **약 3배** 분량으로 작성하세요.
-
-출력 항목:
-1. title: 영상 제목 (알 수 없으면 빈 문자열)
-2. document: 분석용 초상세 문서 (한국어, 마크다운 형식 권장)
-   - **반드시 6,000자 이상**, 가능하면 **9,000~15,000자**
-   - ## 섹션을 세분화 (핵심 주장, 배경, 매크로·정책, 섹터·종목, 수치·데이터, 사례, 반론, 전망·리스크, Q&A 등)
-   - 발언 맥락·근거·수치·인용에 가까운 표현을 최대한 보존
-   - 시간순 또는 주제별 서술, 생략·축약 최소화
-3. summary: 영상 전체 **12~18문장** 상세 요약 (기본 4~6문장 대비 약 3배)
-4. key_points: 핵심 포인트 **15~24개** (문자열 배열)
-5. speakers: 주요 발언자 (배열)
-6. topics: 다룬 주제 키워드 (배열, **15~25개**)
-
-응답 JSON만 출력:
-{"title":"...","document":"...","summary":"...","key_points":[],"speakers":[],"topics":[]}"""
-
-KNOWLEDGE_EXTRACT_PROMPT = """당신은 학습·정보 정리 전문가입니다.
-아래 문서를 읽고 핵심만 JSON으로만 응답하세요. 투자·주가 분석은 하지 마세요.
-
-출력:
-- title: 제목 추정 (없으면 빈 문자열)
-- summary: 3~6문장 요약
-- key_points: 핵심 포인트 5~10개 (문자열 배열)
-
-응답 JSON만:
-{"title":"...","summary":"...","key_points":[]}"""
-
 
 class ProviderQuotaError(Exception):
     def __init__(self, provider: str, delay: int = RETRY_DELAY):
@@ -86,85 +56,45 @@ class ProviderQuotaError(Exception):
         super().__init__(f"{provider.upper()}_QUOTA_EXCEEDED:{delay}")
 
 
-def _build_analysis_prompt(
-    document: str,
-    portfolio_stocks: list[dict],
-    source_label: str,
-    *,
-    detailed: bool = False,
-) -> str:
-    static, dynamic, _ = _analysis_prompt_parts(
-        portfolio_stocks, source_label, document, detailed=detailed
-    )
+def _build_analysis_prompt(document: str, portfolio_stocks: list[dict], source_label: str) -> str:
+    static, dynamic = _analysis_prompt_parts(portfolio_stocks, source_label, document)
     return static + dynamic
 
 
 def _analysis_prompt_parts(
-    portfolio_stocks: list[dict],
-    source_label: str,
-    document: str,
-    *,
-    detailed: bool = False,
+    portfolio_stocks: list[dict], source_label: str, document: str
 ) -> tuple[str, str]:
     stock_section = ""
     if portfolio_stocks:
         items = ", ".join(f"{s['name']}({s['symbol']})" for s in portfolio_stocks)
-        issue_hint = "각 3~5문장" if detailed else "각 2~3문장"
         stock_section = f"""
-10. stock_issues: 보유 종목 중 문서에서 언급된 종목만, {issue_hint} 요약 + 감성.
+10. stock_issues: 보유 종목 중 문서에서 언급된 종목만, 각 2~3문장 요약 + 감성.
    보유 종목: [{items}]
    형식: [{{"symbol":"005930","name":"삼성전자","summary":"...","sentiment":"POSITIVE"}}]
    (언급 없으면 [])"""
-
-    if detailed:
-        summary_rule = (
-            "1. summary: 전체 **15~21문장** 상세 요약 (한국어). "
-            "특히 중요한 문구는 **굵게** 표시(마크다운 **...**)"
-        )
-        kp_rule = (
-            "2. key_points: 핵심 포인트 **12~15개**. "
-            "각 항목은 문자열 또는 {\"text\":\"...\",\"importance\":\"high|normal\"}; "
-            "가장 중요한 3개는 importance high"
-        )
-        macro_rule = '   {{"summary":"4~6문장","topics":[...]}}'
-        sector_rule = '   [{{"sector":"반도체","summary":"4~6문장",...}}]'
-        doc_limit = 50_000
-        cache_suffix = "_deep"
-    else:
-        summary_rule = (
-            "1. summary: 전체 5~7문장 요약 (한국어). 중요 구절은 **굵게**(**...**)"
-        )
-        kp_rule = (
-            "2. key_points: 핵심 포인트 5개 이내. "
-            "문자열 또는 {\"text\":\"...\",\"importance\":\"high|normal\"}; 핵심 2개는 high"
-        )
-        macro_rule = '   {{"summary":"2~3문장","topics":[...]}}'
-        sector_rule = '   [{{"sector":"반도체","summary":"2~3문장",...}}]'
-        doc_limit = 20_000
-        cache_suffix = ""
 
     static = f"""당신은 주식·경제 전문 분석가입니다.
 아래 [{source_label}] 문서를 분석하여 JSON만 출력하세요.
 
 분석 항목:
-{summary_rule}
-{kp_rule}
+1. summary: 전체 5~7문장 요약 (한국어)
+2. key_points: 핵심 포인트 5개 이내 (배열)
 3. mentioned_stocks: 언급 종목 (배열)
 4. mentioned_sectors: 언급 섹터 (배열, 가능: [{SECTORS}])
 5. keywords: 키워드 10개 이내 (배열)
 6. sentiment: 전체 시장 톤 ("POSITIVE"/"NEUTRAL"/"NEGATIVE")
 7. economic_events: 경제 이벤트 배열 (날짜 있으면 포함)
 8. macro_analysis: 매크로(거시) 경제 분석
-   {macro_rule}
+   {{"summary":"2~3문장","topics":[{{"topic":"금리","summary":"...","sentiment":"NEGATIVE","impact":"..."}}]}}
    (금리, 환율, CPI, GDP, FOMC, 유가, 중국/미국 정책 등)
 9. sector_analysis: 섹터별 분석 배열
-   {sector_rule}
+   [{{"sector":"반도체","summary":"2~3문장","sentiment":"POSITIVE","outlook":"단기/중기 전망","mentioned_stocks":["삼성전자"]}}]
    (문서에서 언급된 섹터만){stock_section}
 
 응답 JSON:
 {{"summary":"","key_points":[],"mentioned_stocks":[],"mentioned_sectors":[],"keywords":[],"sentiment":"NEUTRAL","economic_events":[],"macro_analysis":{{"summary":"","topics":[]}},"sector_analysis":[],"stock_issues":[]}}"""
-    dynamic = f"\n\n[문서]\n{document[:doc_limit]}"
-    return static, dynamic, cache_suffix
+    dynamic = f"\n\n[문서]\n{document[:20000]}"
+    return static, dynamic
 
 
 def _extract_json(text: str) -> Optional[dict]:
@@ -185,8 +115,8 @@ def _extract_json(text: str) -> Optional[dict]:
     return None
 
 
-def normalize_provider(provider: Optional[str], default: str = "gemini") -> AnalysisProvider:
-    p = (provider or default or "gemini").lower().strip()
+def normalize_provider(provider: Optional[str], default: str = "claude") -> AnalysisProvider:
+    p = (provider or default or "claude").lower().strip()
     if p not in ANALYSIS_PROVIDERS:
         raise ValueError(f"지원하지 않는 analysis_provider: {p} (claude|openai|gemini)")
     return p  # type: ignore[return-value]
@@ -257,7 +187,7 @@ class AIAnalyzer:
         gemini_extract_model: str = "gemini-3.1-flash-lite",
         gemini_prompt_cache: bool = True,
         gemini_cache_ttl: str = "3600s",
-        default_provider: str = "gemini",
+        default_provider: str = "claude",
         ai_fallback: bool = False,
         on_log: Optional[Callable[[dict], None]] = None,
     ):
@@ -493,40 +423,12 @@ class AIAnalyzer:
         portfolio: list[dict],
         source_label: str,
         provider: Optional[str] = None,
-        *,
-        detailed: bool = False,
     ) -> Optional[dict]:
         preferred = normalize_provider(provider, self.default_provider)
-        static, dynamic, cache_suffix = _analysis_prompt_parts(
-            portfolio, source_label, document, detailed=detailed
-        )
+        static, dynamic = _analysis_prompt_parts(portfolio, source_label, document)
         prompt = static + dynamic
-        gemini_cache = {
-            "cache_key": f"analysis_v1{cache_suffix}",
-            "cache_static": static,
-            "dynamic": dynamic,
-        }
-        label = "📊 상세 분석 AI" if detailed else "📊 분석 AI"
-        return self._run_provider_chain(preferred, prompt, label, gemini_cache=gemini_cache)
-
-    def _extract_youtube_with_gemini(
-        self, extract_dynamic: str, *, detailed: bool
-    ) -> Optional[dict]:
-        if detailed:
-            return self._call_gemini_json(
-                extract_dynamic,
-                purpose="YouTube 상세 문서 추출 (~3배)",
-                cache_key="youtube_extract_deep_v1",
-                cache_static=YOUTUBE_EXTRACT_PROMPT_DEEP,
-                model=self.gemini_extract_model,
-            )
-        return self._call_gemini_json(
-            extract_dynamic,
-            purpose="YouTube 문서 추출",
-            cache_key="youtube_extract_v1",
-            cache_static=YOUTUBE_EXTRACT_PROMPT,
-            model=self.gemini_extract_model,
-        )
+        gemini_cache = {"cache_key": "analysis_v1", "cache_static": static, "dynamic": dynamic}
+        return self._run_provider_chain(preferred, prompt, "📊 분석 AI", gemini_cache=gemini_cache)
 
     def analyze_json_prompt(
         self, prompt: str, provider: Optional[str] = None, log_label: str = "JSON 분석"
@@ -574,31 +476,33 @@ class AIAnalyzer:
         url: str,
         channel_name: str = "",
         analysis_provider: Optional[str] = None,
-        *,
-        market_impact: bool = True,
-        detailed_extract: bool = False,
-        domain_id: int | None = None,
     ) -> Optional[IntelContent]:
-        mode = "상세 추출" if detailed_extract else "기본 추출"
-        self._log("info", f"🎬 YouTube 분석 시작 ({mode}): {url}")
+        self._log("info", f"🎬 YouTube 분석 시작: {url}")
         if not self._gemini or not self._gemini.ready:
             self._log("error", "❌ Gemini API 키 필요 (YouTube 문서 추출)")
             return None
 
         portfolio = self._get_portfolio()
         title = self._get_youtube_title(url) or ""
+
+        # ✅ BUG FIX: 영상 게시일 수집 → published_at 저장
         published_at = self._get_youtube_published_at(url)
 
-        transcript_limit = 60_000 if detailed_extract else 30_000
         transcript = self._get_youtube_transcript(url)
         if transcript:
             self._log("info", f"📝 자막 {len(transcript):,}자 → Gemini 문서화")
-            extract_dynamic = f"[YouTube 자막]\n{transcript[:transcript_limit]}"
+            extract_dynamic = f"[YouTube 자막]\n{transcript[:30000]}"
         else:
             self._log("warn", "⚠️ 자막 없음 → Gemini URL 직접 분석")
             extract_dynamic = f"[YouTube URL]\n{url}"
 
-        extracted = self._extract_youtube_with_gemini(extract_dynamic, detailed=detailed_extract)
+        extracted = self._call_gemini_json(
+            extract_dynamic,
+            purpose="YouTube 문서 추출",
+            cache_key="youtube_extract_v1",
+            cache_static=YOUTUBE_EXTRACT_PROMPT,
+            model=self.gemini_extract_model,
+        )
         if not extracted:
             self._log("error", "❌ Gemini 문서 추출 실패")
             return None
@@ -610,31 +514,7 @@ class AIAnalyzer:
             extracted["title"] = title
         self._log("info", f"📄 Gemini 문서 추출 완료 ({len(document):,}자)")
 
-        summary_cap = 2400 if detailed_extract else 800
-        fallback_kp = extracted.get("key_points") or []
-
-        if not market_impact:
-            self._log("info", "📚 지식 분류 — 주가 구조화 분석·Signal 생략")
-            return self._save_knowledge_content(
-                source_type="YOUTUBE",
-                source_url=url,
-                source_title=extracted.get("title") or title or "YouTube 지식",
-                channel_name=channel_name,
-                source_document=document,
-                published_at=published_at,
-                summary=extracted.get("summary") or document[:summary_cap],
-                key_points=fallback_kp,
-                domain_id=domain_id,
-                keywords=extracted.get("topics") or [],
-            )
-
-        analysis = self._analyze_document(
-            document,
-            portfolio,
-            "YouTube",
-            analysis_provider,
-            detailed=detailed_extract,
-        )
+        analysis = self._analyze_document(document, portfolio, "YouTube", analysis_provider)
         if not analysis:
             return None
 
@@ -646,53 +526,16 @@ class AIAnalyzer:
             analysis=analysis,
             portfolio=portfolio,
             source_document=document,
-            published_at=published_at,
-            content_scope="market",
+            published_at=published_at,  # ✅ 영상 게시일 전달
         )
 
-    def _extract_knowledge_document(self, document: str, label: str = "문서") -> Optional[dict]:
-        if not self._gemini or not self._gemini.ready:
-            self._log("error", "❌ Gemini API 키 필요 (지식 문서 추출)")
-            return None
-        extracted = self._call_gemini_json(
-            document[:30000],
-            purpose=f"{label} 지식 추출",
-            cache_key="knowledge_extract_v1",
-            cache_static=KNOWLEDGE_EXTRACT_PROMPT,
-            model=self.gemini_extract_model,
-        )
-        return extracted
-
-    def analyze_url(
-        self,
-        url: str,
-        analysis_provider: Optional[str] = None,
-        *,
-        market_impact: bool = True,
-        domain_id: int | None = None,
-    ) -> Optional[IntelContent]:
+    def analyze_url(self, url: str, analysis_provider: Optional[str] = None) -> Optional[IntelContent]:
         self._log("info", f"📰 뉴스 분석: {url}")
         text = self._fetch_article(url)
         if not text:
             return None
-        doc = text[:30000]
-        if not market_impact:
-            self._log("info", "📚 지식 분류 — 주가 구조화 분석·Signal 생략")
-            extracted = self._extract_knowledge_document(doc, "뉴스")
-            if not extracted:
-                return None
-            return self._save_knowledge_content(
-                source_type="NEWS",
-                source_url=url,
-                source_title=extracted.get("title") or url[:80],
-                source_document=doc,
-                summary=extracted.get("summary") or doc[:800],
-                key_points=extracted.get("key_points") or [],
-                domain_id=domain_id,
-                keywords=extracted.get("keywords") or [],
-            )
         portfolio = self._get_portfolio()
-        analysis = self._analyze_document(doc, portfolio, "뉴스", analysis_provider)
+        analysis = self._analyze_document(text[:30000], portfolio, "뉴스", analysis_provider)
         if not analysis:
             return None
         return self._save_intel_content(
@@ -700,8 +543,7 @@ class AIAnalyzer:
             source_url=url,
             analysis=analysis,
             portfolio=portfolio,
-            source_document=doc,
-            content_scope="market",
+            source_document=text[:30000],
         )
 
     def analyze_text(
@@ -709,28 +551,11 @@ class AIAnalyzer:
         text: str,
         title: str = "",
         analysis_provider: Optional[str] = None,
-        *,
-        market_impact: bool = True,
-        domain_id: int | None = None,
     ) -> Optional[IntelContent]:
         label = title[:30] if title else "(제목없음)"
         self._log("info", f"📝 텍스트 분석: {label} ({len(text):,}자)")
-        doc = text[:30000]
-        if not market_impact:
-            self._log("info", "📚 지식 분류 — 주가 구조화 분석·Signal 생략")
-            extracted = self._extract_knowledge_document(doc, "텍스트")
-            if not extracted:
-                return None
-            return self._save_knowledge_content(
-                source_type="TEXT",
-                source_title=title or extracted.get("title") or "텍스트",
-                source_document=doc,
-                summary=extracted.get("summary") or doc[:800],
-                key_points=extracted.get("key_points") or [],
-                domain_id=domain_id,
-                keywords=extracted.get("keywords") or [],
-            )
         portfolio = self._get_portfolio()
+        doc = text[:30000]
         analysis = self._analyze_document(doc, portfolio, "텍스트", analysis_provider)
         if not analysis:
             return None
@@ -740,7 +565,6 @@ class AIAnalyzer:
             analysis=analysis,
             portfolio=portfolio,
             source_document=doc,
-            content_scope="market",
         )
 
     def reanalyze_content(
@@ -754,12 +578,6 @@ class AIAnalyzer:
             return None
         if not content.source_document:
             self._log("error", "❌ 저장된 원문 없음 — 재분석 불가")
-            return None
-
-        from core.content_scope import is_market_scope
-
-        if not is_market_scope(getattr(content, "content_scope", None)):
-            self._log("error", "❌ 지식 분류 — 주가 재분석 불가. '주가 반영 적용' 후 재분석하세요.")
             return None
 
         self._log("info", f"🔄 재분석 (ID:{content_id}, Gemini 재호출 없음)")
@@ -783,11 +601,6 @@ class AIAnalyzer:
         content.analyzed_at = datetime.utcnow()
         self._save_stock_issues(content, analysis, portfolio)
         self.db.commit()
-        try:
-            portfolio_symbols = {s["symbol"] for s in portfolio if s.get("symbol")}
-            extract_signals(content, self.db, portfolio_symbols)
-        except Exception as _e:
-            self._log("warn", f"⚠️ 신호 파생 실패 (무시): {_e}")
         self._log("info", f"✅ 재분석 완료 (ID:{content_id})")
         return content
 
@@ -826,18 +639,25 @@ class AIAnalyzer:
             return None
 
     def _get_youtube_published_at(self, url: str) -> Optional[datetime]:
-        """YouTube 영상 게시일 (HTML datePublished 파싱)."""
+        """
+        YouTube oEmbed 또는 video ID로 게시일 파싱.
+        oEmbed 에는 날짜가 없으므로 youtube-transcript-api 메타 또는
+        URL 파라미터에서 video_id 추출 후 yt-dlp 없이 HTML 파싱 시도.
+        실패 시 None 반환 (analyzed_at fallback).
+        """
         try:
             vid = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
             if not vid:
                 return None
             video_id = vid.group(1)
+            # YouTube 공개 API (key 불필요) — watch 페이지 datePublished 파싱
             resp = httpx.get(
                 f"https://www.youtube.com/watch?v={video_id}",
                 headers={"User-Agent": "Mozilla/5.0"},
                 timeout=8,
                 follow_redirects=True,
             )
+            # JSON-LD 또는 meta 태그에서 날짜 추출
             for pattern in [
                 r'"datePublished"\s*:\s*"(\d{4}-\d{2}-\d{2})',
                 r'<meta itemprop="datePublished" content="(\d{4}-\d{2}-\d{2})',
@@ -847,7 +667,7 @@ class AIAnalyzer:
                 if m:
                     return datetime.strptime(m.group(1), "%Y-%m-%d")
         except Exception as e:
-            self._log("warn", f"⚠️ YouTube 게시일 파싱 실패: {str(e)[:80]}")
+            self._log("warn", f"⚠️ YouTube 게시일 파싱 실패: {str(e)[:60]}")
         return None
 
     def _fetch_article(self, url: str) -> Optional[str]:
@@ -870,49 +690,6 @@ class AIAnalyzer:
             self._log("error", f"❌ 크롤링 실패: {str(e)[:120]}")
             return None
 
-    def _save_knowledge_content(
-        self,
-        *,
-        source_type: str,
-        source_url: str = "",
-        source_title: str = "",
-        channel_name: str = "",
-        source_document: str = "",
-        published_at: Optional[datetime] = None,
-        summary: str = "",
-        key_points: list | None = None,
-        domain_id: int | None = None,
-        keywords: list | None = None,
-    ) -> IntelContent:
-        from core.knowledge_hub import resolve_knowledge_domain_id
-
-        kp = key_points if isinstance(key_points, list) else []
-        kw = keywords if isinstance(keywords, list) else []
-        resolved_domain = resolve_knowledge_domain_id(self.db, domain_id)
-        content = IntelContent(
-            source_type=source_type,
-            source_url=source_url,
-            source_title=source_title,
-            channel_name=channel_name,
-            published_at=published_at,
-            source_document=source_document[:50000] if source_document else None,
-            summary=summary or "",
-            key_points=json.dumps(kp, ensure_ascii=False),
-            mentioned_stocks="[]",
-            mentioned_sectors="[]",
-            keywords=json.dumps(kw, ensure_ascii=False),
-            macro_analysis=None,
-            sector_analysis=None,
-            sentiment="NEUTRAL",
-            content_scope="knowledge",
-            domain_id=resolved_domain,
-            analyzed_at=datetime.utcnow(),
-        )
-        self.db.add(content)
-        self.db.commit()
-        self._log("info", f"✅ 지식 콘텐츠 저장 (ID:{content.id}, 분야:{resolved_domain}) — Signal 미생성")
-        return content
-
     def _save_intel_content(
         self,
         source_type: str,
@@ -922,8 +699,7 @@ class AIAnalyzer:
         source_title: str = "",
         channel_name: str = "",
         source_document: str = "",
-        published_at: Optional[datetime] = None,
-        content_scope: str = "market",
+        published_at: Optional[datetime] = None,  # ✅ 추가: 영상/기사 실제 게시일
     ) -> IntelContent:
         macro = analysis.get("macro_analysis") or {}
         sectors = analysis.get("sector_analysis") or []
@@ -933,7 +709,7 @@ class AIAnalyzer:
             source_url=source_url,
             source_title=source_title or analysis.get("summary", "")[:100],
             channel_name=channel_name,
-            published_at=published_at,
+            published_at=published_at,  # ✅ 실제 게시일 저장
             source_document=source_document[:50000] if source_document else None,
             summary=analysis.get("summary", ""),
             key_points=json.dumps(analysis.get("key_points", []), ensure_ascii=False),
@@ -943,7 +719,6 @@ class AIAnalyzer:
             macro_analysis=json.dumps(macro, ensure_ascii=False),
             sector_analysis=json.dumps(sectors, ensure_ascii=False),
             sentiment=analysis.get("sentiment", "NEUTRAL"),
-            content_scope=content_scope,
             analyzed_at=datetime.utcnow(),
         )
         self.db.add(content)
@@ -954,18 +729,16 @@ class AIAnalyzer:
         macro_topics = len(macro.get("topics", [])) if isinstance(macro, dict) else 0
         self._log("info", f"✅ 저장 완료 (ID:{content.id}) — 섹터 {len(sectors)}개, 매크로 {macro_topics}개")
 
-        if content_scope == "market":
-            try:
-                portfolio_symbols = {s["symbol"] for s in portfolio if s.get("symbol")}
-                extract_signals(content, self.db, portfolio_symbols)
-            except Exception as _e:
-                self._log("warn", f"⚠️ 신호 파생 실패 (무시): {_e}")
+        # 신호 자동 파생
+        try:
+            portfolio_symbols = {s["symbol"] for s in portfolio if s.get("symbol")}
+            extract_signals(content, self.db, portfolio_symbols)
+        except Exception as _e:
+            self._log("warn", f"⚠️ 신호 파생 실패 (무시): {_e}")
 
         return content
 
     def _save_stock_issues(self, content: IntelContent, analysis: dict, portfolio: list[dict]):
-        from core.issue_event_date import resolve_issue_event_date
-
         issues_from_ai = analysis.get("stock_issues", [])
         self._log("info", f"🗂️ 보유 종목 매핑 ({len(issues_from_ai)}개)")
 
@@ -982,18 +755,12 @@ class AIAnalyzer:
             db_stock = db_stocks.get(symbol) or db_stocks.get(name_map.get(name, ""))
             if not db_stock:
                 continue
-            summary = issue.get("summary", analysis.get("summary", "")[:200])
-            ev_date, ev_src = resolve_issue_event_date(
-                content, summary, content.source_title or ""
-            )
             self.db.add(
                 StockIssue(
                     stock_id=db_stock.id,
                     content_id=content.id,
-                    issue_summary=summary,
+                    issue_summary=issue.get("summary", analysis.get("summary", "")[:200]),
                     sentiment=issue.get("sentiment", analysis.get("sentiment", "NEUTRAL")),
-                    event_date=ev_date,
-                    match_source=ev_src,
                 )
             )
             saved_symbols.add(db_stock.symbol)
@@ -1004,18 +771,12 @@ class AIAnalyzer:
             if stock.symbol in saved_symbols:
                 continue
             if any(stock.symbol.upper() in str(m).upper() or stock.name in str(m) for m in mentioned):
-                summary = analysis.get("summary", "")[:200]
-                ev_date, ev_src = resolve_issue_event_date(
-                    content, summary, content.source_title or ""
-                )
                 self.db.add(
                     StockIssue(
                         stock_id=stock.id,
                         content_id=content.id,
-                        issue_summary=summary,
+                        issue_summary=analysis.get("summary", "")[:200],
                         sentiment=analysis.get("sentiment", "NEUTRAL"),
-                        event_date=ev_date,
-                        match_source=ev_src,
                     )
                 )
                 self._log("info", f"🔗 {stock.name} (fallback)")
@@ -1080,8 +841,6 @@ def handle_provider_runtime_error(e: Exception) -> None:
 
 
 def serialize_intel(content: IntelContent, db: Session, logs: list | None = None) -> dict:
-    from core.intel_highlights import normalize_key_points_list, parse_user_highlights
-
     issues = db.query(StockIssue).filter(StockIssue.content_id == content.id).all()
     return {
         "id": content.id,
@@ -1090,7 +849,7 @@ def serialize_intel(content: IntelContent, db: Session, logs: list | None = None
         "source_title": content.source_title,
         "channel_name": content.channel_name,
         "summary": content.summary,
-        "key_points": normalize_key_points_list(json.loads(content.key_points or "[]")),
+        "key_points": json.loads(content.key_points or "[]"),
         "mentioned_stocks": json.loads(content.mentioned_stocks or "[]"),
         "mentioned_sectors": json.loads(content.mentioned_sectors or "[]"),
         "keywords": json.loads(content.keywords or "[]"),
@@ -1099,11 +858,6 @@ def serialize_intel(content: IntelContent, db: Session, logs: list | None = None
         "sentiment": content.sentiment,
         "source_document": content.source_document,
         "analyzed_at": content.analyzed_at.isoformat() if content.analyzed_at else None,
-        "content_scope": getattr(content, "content_scope", None) or "market",
-        "domain_id": getattr(content, "domain_id", None),
-        "is_bookmarked": bool(getattr(content, "is_bookmarked", False)),
-        "is_read": bool(getattr(content, "is_read", False)),
-        "user_highlights": parse_user_highlights(getattr(content, "user_highlights", None)),
         "stock_issues": [
             {
                 "stock_id": i.stock_id,
