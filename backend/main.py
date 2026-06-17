@@ -21,6 +21,8 @@ from api.routes_signals import signals_router
 from api.routes_watchlist import watchlist_router
 from api.routes_digest import digest_router
 from api.routes_market import market_router
+from api.routes_morning import morning_router
+from api.routes_system import system_router
 from scheduler.jobs import create_scheduler
 
 # 로깅 설정
@@ -41,6 +43,12 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 StockMind 시작 중... (serverless=%s)", SERVERLESS)
 
     init_db()
+    if not SERVERLESS:
+        from core.db_backup import maybe_auto_backup_on_startup
+
+        auto = maybe_auto_backup_on_startup()
+        if auto:
+            logger.info("💾 DB 자동 백업: %s", auto.get("filename"))
     if is_demo_mode():
         from config.database import SessionLocal
 
@@ -74,11 +82,15 @@ app = FastAPI(
 )
 
 # CORS 설정 (Next.js 프론트엔드 + Vercel 배포)
+_os = __import__("os")
+_frontend_port = _os.environ.get("FRONTEND_PORT", "4000")
 _cors_origins = [
+    f"http://localhost:{_frontend_port}",
+    f"http://127.0.0.1:{_frontend_port}",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-_frontend_url = __import__("os").environ.get("FRONTEND_URL")
+_frontend_url = _os.environ.get("FRONTEND_URL")
 if _frontend_url:
     _cors_origins.append(_frontend_url)
 
@@ -100,6 +112,8 @@ app.include_router(watchlist_router, prefix="/api")
 app.include_router(digest_router, prefix="/api")
 app.include_router(knowledge_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
+app.include_router(morning_router, prefix="/api")
+app.include_router(system_router, prefix="/api")
 
 
 @app.get("/")

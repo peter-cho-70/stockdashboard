@@ -69,7 +69,7 @@ stockdashboard/
 - 최초 실행 시 `backend/venv`, `frontend/node_modules` 가 없으면 자동 설치를 시도합니다.
 - `backend/.env` 가 없으면 안내 후 종료합니다 (`cp backend/.env.example backend/.env`).
 - `frontend/.env.local` 이 없으면 `NEXT_PUBLIC_API_URL=http://localhost:8000/api` 를 생성합니다.
-- 백엔드: [http://localhost:8000/docs](http://localhost:8000/docs) · 프론트: [http://localhost:3000](http://localhost:3000)
+- 백엔드: [http://localhost:8000/docs](http://localhost:8000/docs) · 프론트: [http://localhost:4000](http://localhost:4000)
 - macOS/Linux: **Ctrl+C** 로 두 프로세스 모두 종료 · Windows: 각 터미널 창을 닫으면 종료
 - `venv` 폴더만 있고 패키지가 없으면 스크립트가 `pip install` 을 자동 실행합니다. 실패 시:
 
@@ -86,7 +86,7 @@ chmod +x start-dev.sh
 포트 변경 (선택):
 
 ```bash
-BACKEND_PORT=8000 FRONTEND_PORT=3000 ./start-dev.sh
+BACKEND_PORT=8000 FRONTEND_PORT=4000 ./start-dev.sh
 ```
 
 ### 백엔드만
@@ -106,7 +106,7 @@ python3 main.py
 cd frontend
 npm install
 npm run dev
-# → http://localhost:3000
+# → http://localhost:4000
 ```
 
 ---

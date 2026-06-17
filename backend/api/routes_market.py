@@ -26,6 +26,7 @@ from core.us_market_report import (
     list_reports,
     refresh_us_report_news,
 )
+from core.kr_market_snapshot import fetch_kr_market_snapshot
 
 market_router = APIRouter(tags=["market"])
 
@@ -101,6 +102,8 @@ def api_generate_us_report(
         return {"report": report}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"리포트 생성 실패: {e}") from e
 
 
 @market_router.get("/reports/us/daily/live-snapshot")
@@ -128,6 +131,16 @@ def api_refresh_us_report_news(
         return {"report": report}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+# ── 국내 증시 스냅샷 ──────────────────────────────────────────────
+
+@market_router.get("/market/kr/snapshot")
+def api_kr_market_snapshot(force: bool = Query(False)):
+    try:
+        return {"snapshot": fetch_kr_market_snapshot(force=force)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:300]) from e
 
 
 # ── 수출입 월간 리포트 ──────────────────────────────────────────────

@@ -1,22 +1,40 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 
-async function fetchApi<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    let message = err || `HTTP ${res.status}`;
-    try {
-      const parsed = JSON.parse(err) as { detail?: unknown };
-      if (typeof parsed.detail === "string") message = parsed.detail;
-    } catch {
-      /* keep raw message */
-    }
-    throw new Error(message);
+const REPORT_GENERATE_TIMEOUT_MS = 300_000;
+
+function networkErrorMessage(err: unknown): string {
+  if (err instanceof TypeError && /fetch/i.test(err.message)) {
+    return "서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.";
   }
-  return res.json();
+  if (err instanceof DOMException && err.name === "TimeoutError") {
+    return "요청 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  if (err instanceof Error) return err.message;
+  return "요청 실패";
+}
+
+async function fetchApi<T>(path: string, init?: RequestInit): Promise<T> {
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...init,
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      let message = err || `HTTP ${res.status}`;
+      try {
+        const parsed = JSON.parse(err) as { detail?: unknown };
+        if (typeof parsed.detail === "string") message = parsed.detail;
+      } catch {
+        /* keep raw message */
+      }
+      throw new Error(message);
+    }
+    return res.json();
+  } catch (err) {
+    if (err instanceof Error && err.message !== "Failed to fetch") throw err;
+    throw new Error(networkErrorMessage(err));
+  }
 }
 
 // ── 포트폴리오 ──────────────────────────────────
@@ -218,6 +236,60 @@ export const settingsApi = {
       method: "PATCH",
       body: JSON.stringify({ enabled, pin }),
     }),
+};
+
+export interface DbBackupSummary {
+  tables: string[];
+  counts: Record<string, number>;
+}
+
+export interface DbInfo {
+  db_path: string;
+  exists: boolean;
+  backup_dir: string;
+  backup_count: number;
+  size_bytes?: number;
+  modified_at?: string;
+  summary?: DbBackupSummary;
+}
+
+export interface DbBackupItem {
+  filename: string;
+  label: string;
+  created_at: string;
+  size_bytes: number;
+}
+
+export const systemApi = {
+  getDbInfo: () => fetchApi<DbInfo>("/system/db"),
+  listBackups: () =>
+    fetchApi<{ backups: DbBackupItem[]; db: DbInfo }>("/system/db/backups"),
+  createBackup: (label = "manual") =>
+    fetchApi<{ backup: DbBackupItem & { summary?: DbBackupSummary }; backups: DbBackupItem[] }>(
+      "/system/db/backups",
+      { method: "POST", body: JSON.stringify({ label }) },
+    ),
+  restoreBackup: (filename: string) =>
+    fetchApi<{
+      ok: boolean;
+      restored_from: string;
+      pre_restore_backup: string | null;
+      message: string;
+      summary?: DbBackupSummary;
+    }>("/system/db/restore", {
+      method: "POST",
+      body: JSON.stringify({ filename }),
+    }),
+  deleteBackup: (filename: string) =>
+    fetchApi<{ ok: boolean; backups: DbBackupItem[] }>(
+      `/system/db/backups/${encodeURIComponent(filename)}`,
+      { method: "DELETE" },
+    ),
+  devRestart: (label = "pre_restart") =>
+    fetchApi<{ ok: boolean; message: string; backup: DbBackupItem }>(
+      "/system/dev/restart",
+      { method: "POST", body: JSON.stringify({ label }) },
+    ),
 };
 
 export interface StockChartBar {
@@ -722,6 +794,86 @@ export interface UsMarketSnapshot {
   articles: UsMarketArticle[];
 }
 
+export interface KrMarketMover {
+  symbol: string;
+  name: string;
+  close?: number | null;
+  change_pct: number;
+  volume?: number | null;
+  market?: string;
+}
+
+export interface KrMarketSector {
+  name: string;
+  change_pct: number;
+  theme_no?: string | null;
+  kind?: string;
+  group_no?: string | null;
+}
+
+export interface KrMarketPopularItem {
+  rank: number;
+  symbol: string;
+  name: string;
+  close?: number | null;
+}
+
+export interface KrMarketChartPoint {
+  time: string;
+  price: number;
+  volume: number;
+}
+
+export interface KrMarketInvestorFlow {
+  label: string;
+  buy: KrMarketMover[];
+  sell: KrMarketMover[];
+}
+
+export interface KrMarketBreadth {
+  individual_net_억?: number;
+  foreign_net_억?: number;
+  institution_net_억?: number;
+  limit_up?: number;
+  advancers?: number;
+  unchanged?: number;
+  decliners?: number;
+  limit_down?: number;
+}
+
+export interface KrMarketSnapshot {
+  session_date: string;
+  indices: UsMarketQuote[];
+  macro?: UsMarketQuote[];
+  market_stats?: {
+    kospi?: KrMarketBreadth;
+    kosdaq?: KrMarketBreadth;
+  };
+  movers?: {
+    kospi?: { gainers: KrMarketMover[]; losers: KrMarketMover[] };
+    kosdaq?: { gainers: KrMarketMover[]; losers: KrMarketMover[] };
+    hot_gainers?: KrMarketMover[];
+  };
+  sectors?: KrMarketSector[];
+  industries?: KrMarketSector[];
+  rankings?: {
+    upper_limit?: { kospi?: KrMarketMover[]; kosdaq?: KrMarketMover[] };
+    volume?: { kospi?: KrMarketMover[]; kosdaq?: KrMarketMover[] };
+  };
+  investor_flow?: {
+    foreign?: KrMarketInvestorFlow;
+    institution?: KrMarketInvestorFlow;
+  };
+  popular_search?: KrMarketPopularItem[];
+  index_chart?: {
+    kospi?: KrMarketChartPoint[];
+    kosdaq?: KrMarketChartPoint[];
+  };
+  fetched_at: string;
+  fetched_at_label: string;
+  source: string;
+}
+
 export interface UsMarketReport {
   id: number;
   report_date: string;
@@ -864,7 +1016,10 @@ export const marketApi = {
     const qs = q.toString();
     return fetchApi<{ report: UsMarketReport }>(
       `/reports/us/daily/generate${qs ? `?${qs}` : ""}`,
-      { method: "POST" },
+      {
+        method: "POST",
+        signal: AbortSignal.timeout(REPORT_GENERATE_TIMEOUT_MS),
+      },
     );
   },
 
@@ -884,6 +1039,11 @@ export const marketApi = {
     );
   },
 
+  getKrMarketSnapshot: (force = false) =>
+    fetchApi<{ snapshot: KrMarketSnapshot }>(
+      `/market/kr/snapshot${force ? "?force=true" : ""}`,
+    ),
+
   getTradeReport: (month: string) =>
     fetchApi<{ report: TradeMonthlyReport | null }>(
       `/reports/trade/monthly?month=${encodeURIComponent(month)}`,
@@ -899,23 +1059,28 @@ export const marketApi = {
     if (opts?.month) q.set("month", opts.month);
     if (opts?.force) q.set("force", "true");
     const qs = q.toString();
-    const res = await fetch(`${BASE}/reports/trade/monthly/generate${qs ? `?${qs}` : ""}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(300_000),
-    });
-    if (!res.ok) {
-      const err = await res.text();
-      let message = err || `HTTP ${res.status}`;
-      try {
-        const parsed = JSON.parse(err) as { detail?: unknown };
-        if (typeof parsed.detail === "string") message = parsed.detail;
-      } catch {
-        /* keep */
+    try {
+      const res = await fetch(`${BASE}/reports/trade/monthly/generate${qs ? `?${qs}` : ""}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(REPORT_GENERATE_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        let message = err || `HTTP ${res.status}`;
+        try {
+          const parsed = JSON.parse(err) as { detail?: unknown };
+          if (typeof parsed.detail === "string") message = parsed.detail;
+        } catch {
+          /* keep */
+        }
+        throw new Error(message);
       }
-      throw new Error(message);
+      return res.json() as Promise<{ report: TradeMonthlyReport; warning?: string }>;
+    } catch (err) {
+      if (err instanceof Error && err.message !== "Failed to fetch") throw err;
+      throw new Error(networkErrorMessage(err));
     }
-    return res.json() as Promise<{ report: TradeMonthlyReport; warning?: string }>;
   },
 };
 

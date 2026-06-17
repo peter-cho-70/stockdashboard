@@ -12,6 +12,8 @@ env/
 # Backend secrets & local data
 backend/.env
 backend/*.db
+backend/data/backups/
+backend/data/kr_snapshot_cache.json
 backend/nohup.out
 backend/.vercel
 

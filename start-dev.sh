@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 BACKEND_PORT="${BACKEND_PORT:-8000}"
-FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+FRONTEND_PORT="${FRONTEND_PORT:-4000}"
 API_URL="http://localhost:${BACKEND_PORT}/api"
 
 echo "════════════════════════════════════════"
@@ -45,6 +45,23 @@ ensure_backend_deps() {
 
 ensure_backend_deps
 
+if [[ -f backend/stockmind.db ]]; then
+  echo "💾 개발 DB 백업 중 (backend/data/backups)..."
+  (
+    cd backend
+    export DB_PATH="${DB_PATH:-./stockmind.db}"
+    "${ROOT}/backend/venv/bin/python3" -c "
+from core.db_backup import create_backup, prune_old_backups
+try:
+    m = create_backup(label='pre_dev')
+    prune_old_backups()
+    print('   →', m['filename'])
+except Exception as e:
+    print('   ⚠️ 백업 생략:', e)
+"
+  ) || true
+fi
+
 if [[ ! -d frontend/node_modules ]]; then
   echo "📦 프론트 npm 패키지 설치 중..."
   (cd frontend && npm install)
@@ -74,7 +91,22 @@ echo ""
 (
   cd backend
   export DB_PATH="${DB_PATH:-./stockmind.db}"
-  "${ROOT}/backend/venv/bin/python3" main.py
+  export FRONTEND_PORT="${FRONTEND_PORT}"
+  export DEV_RESTART="${DEV_RESTART:-true}"
+  # 백엔드가 SIGTERM(정상 종료)되면 자동 재기동
+  while true; do
+    "${ROOT}/backend/venv/bin/python3" main.py
+    code=$?
+    # 0: dev restart 요청으로 정상 종료
+    # 143: SIGTERM 종료 (환경에 따라 0 대신 143으로 나올 수 있음)
+    if [[ "$code" -eq 0 || "$code" -eq 143 ]]; then
+      echo "♻️  백엔드 재시작 요청 감지. 재기동 중..."
+      sleep 0.4
+      continue
+    fi
+    echo "❌ 백엔드가 비정상 종료되었습니다. (exit=$code)"
+    exit "$code"
+  done
 ) &
 BACK_PID=$!
 
@@ -92,4 +124,5 @@ fi
 ) &
 FRONT_PID=$!
 
-wait -n "$BACK_PID" "$FRONT_PID" 2>/dev/null || wait
+# 프론트가 종료되면 전체 종료. 백엔드는 루프에서 계속 재기동됨.
+wait "$FRONT_PID" 2>/dev/null || wait

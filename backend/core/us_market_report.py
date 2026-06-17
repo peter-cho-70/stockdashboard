@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
@@ -20,6 +21,29 @@ from config.settings import get_settings
 from core.gemini_client import GeminiClient
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_float(value: Any, *, ndigits: int = 2) -> Optional[float]:
+    """NaN/Inf 를 None 으로 — JSON 직렬화 오류 방지."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(num):
+        return None
+    return round(num, ndigits)
+
+
+def sanitize_for_json(value: Any) -> Any:
+    """응답 직렬화 전 NaN/Inf 제거 (DB에 이미 저장된 데이터 대비)."""
+    if isinstance(value, dict):
+        return {k: sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_for_json(v) for v in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
 
 # (표시명, yfinance 티커, unit: index|fx|yield|price)
 US_INDEX_TICKERS: list[tuple[str, str, str]] = [
@@ -234,8 +258,18 @@ def _fetch_ticker_group(
                 continue
             last = hist.iloc[-1]
             prev = hist.iloc[-2] if len(hist) > 1 else last
-            close = float(last["Close"])
-            prev_close = float(prev["Close"])
+            ndigits = 4 if unit in ("fx", "yield") else 2
+            close = _safe_float(last["Close"], ndigits=ndigits)
+            prev_close = _safe_float(prev["Close"], ndigits=ndigits)
+            if close is None or prev_close is None:
+                results.append({
+                    "name": label,
+                    "ticker": ticker,
+                    "category": category,
+                    "unit": unit,
+                    "error": "invalid_price",
+                })
+                continue
             chg_pct = ((close - prev_close) / prev_close * 100) if prev_close else 0.0
             idx_date = (
                 last.name.strftime("%Y-%m-%d")
@@ -252,9 +286,9 @@ def _fetch_ticker_group(
                     "date": idx_date,
                     "as_of": as_of_iso,
                     "as_of_label": as_of_label,
-                    "close": round(close, 4 if unit in ("fx", "yield") else 2),
-                    "change_pct": round(chg_pct, 2),
-                    "change": round(close - prev_close, 4 if unit in ("fx", "yield") else 2),
+                    "close": close,
+                    "change_pct": _safe_float(chg_pct, ndigits=2) or 0.0,
+                    "change": _safe_float(close - prev_close, ndigits=ndigits) or 0.0,
                 }
             )
         except Exception as e:
@@ -509,7 +543,7 @@ def serialize_report(row: UsMarketReport) -> dict[str, Any]:
         + snapshot["treasury"]
         + snapshot.get("us_stocks", [])
     )
-    return {
+    return sanitize_for_json({
         "id": row.id,
         "report_date": row.report_date,
         "session_date": row.session_date,
@@ -523,7 +557,7 @@ def serialize_report(row: UsMarketReport) -> dict[str, Any]:
         "error_message": row.error_message,
         "model": row.model,
         "generated_at": row.generated_at.isoformat() if row.generated_at else None,
-    }
+    })
 
 
 def get_report(db: Session, report_date: str) -> Optional[dict[str, Any]]:

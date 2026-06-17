@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { KeyRound, Bell, Server, CheckCircle2, XCircle, Loader2, Eye } from "lucide-react";
-import { api, settingsApi, type DemoModeStatus } from "@/lib/api";
+import { KeyRound, Bell, Server, CheckCircle2, XCircle, Loader2, Eye, Database, RotateCcw, Trash2 } from "lucide-react";
+import { api, settingsApi, systemApi, type DemoModeStatus, type DbBackupItem, type DbInfo } from "@/lib/api";
 
 function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -26,6 +26,12 @@ function Field({ label, description, children }: { label: string; description?: 
   );
 }
 
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default function SettingsPage() {
   const [apiStatus, setApiStatus] = useState<"idle" | "checking" | "ok" | "error">("idle");
   const [demoStatus, setDemoStatus] = useState<DemoModeStatus | null>(null);
@@ -34,6 +40,28 @@ export default function SettingsPage() {
   const [demoPin, setDemoPin] = useState("");
   const [demoSaving, setDemoSaving] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
+
+  const [dbInfo, setDbInfo] = useState<DbInfo | null>(null);
+  const [backups, setBackups] = useState<DbBackupItem[]>([]);
+  const [dbLoading, setDbLoading] = useState(true);
+  const [dbBusy, setDbBusy] = useState(false);
+  const [dbMsg, setDbMsg] = useState<string | null>(null);
+  const [dbError, setDbError] = useState<string | null>(null);
+  const [restarting, setRestarting] = useState(false);
+
+  const loadDbBackups = useCallback(async () => {
+    setDbLoading(true);
+    setDbError(null);
+    try {
+      const res = await systemApi.listBackups();
+      setDbInfo(res.db);
+      setBackups(res.backups);
+    } catch (e) {
+      setDbError(e instanceof Error ? e.message : "백업 목록을 불러오지 못했습니다.");
+    } finally {
+      setDbLoading(false);
+    }
+  }, []);
 
   const loadDemoStatus = useCallback(async () => {
     setDemoLoading(true);
@@ -51,7 +79,84 @@ export default function SettingsPage() {
 
   useEffect(() => {
     loadDemoStatus();
-  }, [loadDemoStatus]);
+    loadDbBackups();
+  }, [loadDemoStatus, loadDbBackups]);
+
+  async function handleCreateBackup() {
+    setDbBusy(true);
+    setDbMsg(null);
+    setDbError(null);
+    try {
+      const res = await systemApi.createBackup("manual");
+      await loadDbBackups();
+      setDbMsg(`백업 완료: ${res.backup.filename}`);
+    } catch (e) {
+      setDbError(e instanceof Error ? e.message : "백업 실패");
+    } finally {
+      setDbBusy(false);
+    }
+  }
+
+  async function handleBackendRestart() {
+    if (!confirm("DB를 백업한 뒤 백엔드를 재시작합니다.\n(프론트는 유지됩니다)\n계속할까요?")) return;
+    setRestarting(true);
+    setDbMsg(null);
+    setDbError(null);
+    try {
+      const res = await systemApi.devRestart("pre_restart");
+      setDbMsg(`재시작 요청 완료 (백업: ${res.backup.filename}). 잠시 후 자동으로 연결됩니다...`);
+      // 백엔드가 내려갔다가 다시 올라오므로 health 체크를 몇 번 시도
+      const start = Date.now();
+      while (Date.now() - start < 20_000) {
+        try {
+          await api.health();
+          setDbMsg(`백엔드 재시작 완료 (백업: ${res.backup.filename})`);
+          await loadDbBackups();
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+      setDbMsg("재시작 요청은 보냈습니다. 아직 연결이 복구되지 않았습니다. 잠시 후 다시 확인해 주세요.");
+    } catch (e) {
+      setDbError(e instanceof Error ? e.message : "재시작 실패");
+    } finally {
+      setRestarting(false);
+    }
+  }
+
+  async function handleRestore(filename: string) {
+    if (!confirm(`"${filename}" 으로 DB를 복원합니다.\n현재 DB는 자동으로 pre_restore 백업됩니다. 계속할까요?`)) {
+      return;
+    }
+    setDbBusy(true);
+    setDbMsg(null);
+    setDbError(null);
+    try {
+      const res = await systemApi.restoreBackup(filename);
+      setDbMsg(res.message);
+      await loadDbBackups();
+    } catch (e) {
+      setDbError(e instanceof Error ? e.message : "복원 실패");
+    } finally {
+      setDbBusy(false);
+    }
+  }
+
+  async function handleDeleteBackup(filename: string) {
+    if (!confirm(`백업 "${filename}" 을 삭제할까요?`)) return;
+    setDbBusy(true);
+    setDbError(null);
+    try {
+      const res = await systemApi.deleteBackup(filename);
+      setBackups(res.backups);
+      await loadDbBackups();
+    } catch (e) {
+      setDbError(e instanceof Error ? e.message : "삭제 실패");
+    } finally {
+      setDbBusy(false);
+    }
+  }
 
   async function applyDemoMode() {
     if (!demoPin.trim()) {
@@ -115,6 +220,119 @@ export default function SettingsPage() {
           <p className="text-neutral-800 dark:text-neutral-200">cd stockdashboard/backend</p>
           <p className="text-neutral-800 dark:text-neutral-200">python3 main.py</p>
         </div>
+      </Section>
+
+      <Section title="데이터 백업 (개발용)" icon={<Database size={15} />}>
+        <p className="text-sm text-neutral-600 dark:text-neutral-400">
+          미국 증시 리포트·AI 분석·포트폴리오 등 SQLite DB 전체를 백업합니다.
+          개발 중 재시작해도 데이터를 유지하려면 복원하세요.
+          <code className="ml-1 rounded bg-neutral-100 px-1 text-xs dark:bg-neutral-800">./start-dev.sh</code>
+          실행 시에도 자동 백업됩니다.
+        </p>
+
+        {dbLoading ? (
+          <div className="flex items-center gap-2 text-sm text-neutral-400">
+            <Loader2 size={14} className="animate-spin" /> 불러오는 중...
+          </div>
+        ) : (
+          <>
+            {dbInfo && (
+              <div className="rounded-md bg-[var(--surface-elevated)] p-3 text-xs text-neutral-600 dark:text-neutral-400 space-y-1">
+                <p>
+                  <span className="text-neutral-500">DB</span>{" "}
+                  <span className="font-mono text-neutral-800 dark:text-neutral-200">{dbInfo.db_path}</span>
+                </p>
+                {dbInfo.exists && (
+                  <>
+                    <p>크기 {fmtBytes(dbInfo.size_bytes ?? 0)} · 백업 {dbInfo.backup_count}개</p>
+                    {dbInfo.summary?.counts && (
+                      <p>
+                        미국증시 리포트 {dbInfo.summary.counts.us_market_reports ?? 0}건 · 종목{" "}
+                        {dbInfo.summary.counts.stocks ?? 0} · AI 분석{" "}
+                        {dbInfo.summary.counts.intel_contents ?? 0}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleCreateBackup}
+                disabled={dbBusy || !dbInfo?.exists}
+                className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] px-3 py-2 text-sm font-medium hover:bg-neutral-100 disabled:opacity-50 dark:hover:bg-neutral-800"
+              >
+                {dbBusy ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                지금 백업
+              </button>
+              <button
+                type="button"
+                onClick={handleBackendRestart}
+                disabled={dbBusy || restarting || !dbInfo?.exists}
+                className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] px-3 py-2 text-sm font-medium hover:bg-neutral-100 disabled:opacity-50 dark:hover:bg-neutral-800"
+                title="DB 백업 후 백엔드 프로세스를 재시작합니다."
+              >
+                {restarting ? <Loader2 size={14} className="animate-spin" /> : <Server size={14} />}
+                백업 후 재시작
+              </button>
+              <button
+                type="button"
+                onClick={loadDbBackups}
+                disabled={dbBusy}
+                className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] px-3 py-2 text-sm font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              >
+                <RotateCcw size={14} />
+                새로고침
+              </button>
+            </div>
+
+            {dbMsg && (
+              <p className="text-sm text-emerald-600 dark:text-emerald-400">{dbMsg}</p>
+            )}
+            {dbError && (
+              <p className="text-sm text-red-600 dark:text-red-400">{dbError}</p>
+            )}
+
+            {backups.length === 0 ? (
+              <p className="text-xs text-neutral-400">저장된 백업이 없습니다.</p>
+            ) : (
+              <ul className="divide-y divide-[var(--border-subtle)] rounded-md border border-[var(--border-subtle)]">
+                {backups.map((b) => (
+                  <li key={b.filename} className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-mono text-neutral-800 dark:text-neutral-200 truncate">
+                        {b.filename}
+                      </p>
+                      <p className="text-neutral-400">
+                        {b.label} · {fmtBytes(b.size_bytes)} ·{" "}
+                        {new Date(b.created_at).toLocaleString("ko-KR")}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRestore(b.filename)}
+                      disabled={dbBusy}
+                      className="rounded px-2 py-1 font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-950/30"
+                    >
+                      복원
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteBackup(b.filename)}
+                      disabled={dbBusy || b.label === "pre_restore"}
+                      className="rounded p-1 text-neutral-400 hover:text-red-500 disabled:opacity-30"
+                      title="삭제"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
       </Section>
 
       <Section title="데모 모드 (공개 시연)" icon={<Eye size={15} />}>

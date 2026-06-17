@@ -3,7 +3,7 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 set "BACKEND_PORT=8000"
-set "FRONTEND_PORT=3000"
+set "FRONTEND_PORT=4000"
 set "API_URL=http://localhost:%BACKEND_PORT%/api"
 
 echo ========================================
@@ -60,7 +60,7 @@ echo 각 창을 닫으면 해당 서버가 종료됩니다.
 echo.
 
 set "DB_PATH=./stockmind.db"
-start "StockMind Backend" cmd /k "cd /d %~dp0backend && call venv\Scripts\activate.bat && set DB_PATH=%DB_PATH% && python3 main.py"
+start "StockMind Backend" cmd /k "cd /d %~dp0backend && call venv\Scripts\activate.bat && set DB_PATH=%DB_PATH% && set FRONTEND_PORT=%FRONTEND_PORT% && python3 main.py"
 
 timeout /t 2 /nobreak >nul
 

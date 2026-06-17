@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ExternalLink, HelpCircle, Loader2, RefreshCw, Globe } from "lucide-react";
 import {
   marketApi,
@@ -13,10 +13,8 @@ import {
   type UsMarketSnapshot,
 } from "@/lib/api";
 import { getUsMarketQuoteTooltip } from "@/lib/usMarketTooltips";
-
-function todayKst(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
-}
+import { loadUsReportCache, saveUsReportCache } from "@/lib/marketCache";
+import { todayKst } from "@/lib/marketDisplay";
 
 /** KST 08:30~22:59 — 미국 선물 표시 구간 */
 function isUsDaytimeKst(now = new Date()): boolean {
@@ -311,11 +309,22 @@ function SnapshotSections({
   );
 }
 
-export function UsMarketReportCard() {
-  const [report, setReport] = useState<UsMarketReport | null>(null);
-  const [liveLabel, setLiveLabel] = useState<string | null>(null);
-  const [displaySnapshot, setDisplaySnapshot] = useState<UsMarketSnapshot | null>(null);
-  const [loading, setLoading] = useState(true);
+export function UsMarketReportCard({
+  cacheOnly = false,
+  marketToggle,
+}: {
+  cacheOnly?: boolean;
+  marketToggle?: ReactNode;
+}) {
+  const initialCached = cacheOnly ? loadUsReportCache() : null;
+  const [report, setReport] = useState<UsMarketReport | null>(initialCached);
+  const [liveLabel, setLiveLabel] = useState<string | null>(
+    initialCached?.generated_at ? `저장 리포트 · ${initialCached.report_date}` : null,
+  );
+  const [displaySnapshot, setDisplaySnapshot] = useState<UsMarketSnapshot | null>(
+    initialCached ? normalizeUsSnapshot(initialCached) : null,
+  );
+  const [loading, setLoading] = useState(cacheOnly ? false : !initialCached);
   const [generating, setGenerating] = useState(false);
   const [refreshingNews, setRefreshingNews] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -336,6 +345,19 @@ export function UsMarketReportCard() {
     },
     [],
   );
+
+  const applyCachedReport = useCallback((r: UsMarketReport | null) => {
+    if (!r || r.status !== "ready") {
+      setReport(r);
+      setDisplaySnapshot(null);
+      setLiveLabel(null);
+      return;
+    }
+    setReport(r);
+    setDisplaySnapshot(normalizeUsSnapshot(r));
+    setLiveLabel(r.generated_at ? `저장 리포트 · ${r.report_date}` : null);
+    saveUsReportCache(r);
+  }, []);
 
   const applyReport = useCallback(
     async (r: UsMarketReport | null, opts?: { refreshNews?: boolean }) => {
@@ -389,37 +411,53 @@ export function UsMarketReportCard() {
   );
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!cacheOnly) setLoading(true);
     setError(null);
     try {
       const today = todayKst();
       const res = await marketApi.getUsReport(today);
       if (res.report?.status === "ready") {
-        await applyReport(res.report);
+        if (cacheOnly) {
+          applyCachedReport(res.report);
+        } else {
+          await applyReport(res.report);
+        }
         return;
       }
       const list = await marketApi.listUsReports(3);
       const latest = list.reports.find((r) => r.status === "ready");
-      await applyReport(latest ?? res.report ?? null, { refreshNews: false });
+      const picked = latest ?? res.report ?? null;
+      if (cacheOnly) {
+        applyCachedReport(picked);
+      } else {
+        await applyReport(picked, { refreshNews: false });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "리포트 로드 실패");
-      setReport(null);
-      setDisplaySnapshot(null);
+      if (!cacheOnly && !initialCached) {
+        setReport(null);
+        setDisplaySnapshot(null);
+      }
     } finally {
-      setLoading(false);
+      if (!cacheOnly) setLoading(false);
     }
-  }, [applyReport]);
+  }, [applyReport, applyCachedReport, cacheOnly, initialCached]);
 
   useEffect(() => {
+    if (cacheOnly) return;
     load();
-  }, [load]);
+  }, [cacheOnly, load]);
 
   async function handleGenerate(force = false) {
     setGenerating(true);
     setError(null);
     try {
       const res = await marketApi.generateUsReport({ force });
-      await applyReport(res.report, { refreshNews: false });
+      if (cacheOnly) {
+        applyCachedReport(res.report);
+      } else {
+        await applyReport(res.report, { refreshNews: false });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "생성 실패");
     } finally {
@@ -432,7 +470,8 @@ export function UsMarketReportCard() {
   return (
     <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] shadow-xs">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-4 py-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {marketToggle}
           <Globe size={16} className="text-blue-500" />
           <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
             오늘의 미국 증시
@@ -440,7 +479,10 @@ export function UsMarketReportCard() {
           {report?.report_date && (
             <span className="text-xs text-neutral-400">{report.report_date}</span>
           )}
-          {refreshingNews && (
+          {liveLabel && cacheOnly && (
+            <span className="text-[10px] text-neutral-400">저장본</span>
+          )}
+          {!cacheOnly && refreshingNews && (
             <span className="text-[10px] text-neutral-400 flex items-center gap-1">
               <Loader2 size={10} className="animate-spin" />
               기사 갱신 중

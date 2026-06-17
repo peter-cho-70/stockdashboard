@@ -11,9 +11,7 @@ import {
   Wallet,
   ArrowUpRight,
   ArrowDownRight,
-  Minus,
   Database,
-  BarChart,
 } from "lucide-react";
 import {
   LineChart,
@@ -26,8 +24,11 @@ import {
 } from "recharts";
 import { api, type PortfolioSummary, type Alert, type PortfolioSnapshot } from "@/lib/api";
 import { ClientOnly } from "@/components/client-only";
-import { UsMarketReportCard } from "@/components/us-market-report-card";
+import { MarketBriefingCard } from "@/components/market-briefing-card";
 import { TradeReportCard } from "@/components/trade-report-card";
+import { HoldingsMiniCard } from "@/components/holdings-mini-card";
+import { MorningRoutineCard } from "@/components/morning/morning-routine-card";
+import { isUsReportAtBottomKST } from "@/lib/marketDisplay";
 
 const CHART_PERIODS = [
   { days: 7, label: "7일" },
@@ -41,45 +42,8 @@ function chartPeriodLabel(days: number) {
   return CHART_PERIODS.find((p) => p.days === days)?.label ?? `${days}일`;
 }
 
-/** KST 08:30~22:59 → 대시보드 하단, 23:00~08:29 → 상단 */
-function isUsReportAtBottomKST(now = new Date()): boolean {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Seoul",
-    hour: "numeric",
-    minute: "numeric",
-    hour12: false,
-  }).formatToParts(now);
-  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
-  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-  const totalMinutes = hour * 60 + minute;
-  return totalMinutes >= 8 * 60 + 30 && totalMinutes < 23 * 60;
-}
-
 function fmt(n: number) {
   return `${n.toLocaleString("ko-KR")}원`;
-}
-
-function RateTag({ rate }: { rate: number }) {
-  if (rate > 0)
-    return (
-      <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400">
-        <ArrowUpRight size={11} />
-        {rate.toFixed(2)}%
-      </span>
-    );
-  if (rate < 0)
-    return (
-      <span className="inline-flex items-center gap-0.5 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-400">
-        <ArrowDownRight size={11} />
-        {Math.abs(rate).toFixed(2)}%
-      </span>
-    );
-  return (
-    <span className="inline-flex items-center gap-0.5 rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-      <Minus size={11} />
-      0.00%
-    </span>
-  );
 }
 
 function SummaryCard({
@@ -209,9 +173,18 @@ export default function DashboardPage() {
     평가금액: Math.round(h.total_value / 10000),
   }));
 
-  const marketReports = (
-    <div className="grid gap-4 xl:grid-cols-2">
-      <UsMarketReportCard />
+  const marketStack = (
+    <div className="space-y-4">
+      {/* 보유종목을 모닝 루틴보다 앞에 — 미국증시 옆 배치 */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <MarketBriefingCard />
+        </div>
+        <div className="lg:col-span-1">
+          <HoldingsMiniCard summary={summary} />
+        </div>
+      </div>
+      <MorningRoutineCard />
       <TradeReportCard />
     </div>
   );
@@ -263,7 +236,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {!usReportAtBottom && marketReports}
+      {!usReportAtBottom && marketStack}
 
       {/* 알림 배지 */}
       {unreadCount > 0 && (
@@ -413,87 +386,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 오늘 변동 종목 */}
-      {summary && summary.stocks.length > 0 && (
-        <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] overflow-hidden">
-          <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
-            <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
-              전체 보유 종목 ({summary.stock_count}개)
-            </h2>
-            <Link
-              href="/portfolio"
-              className="text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-            >
-              전체 보기 →
-            </Link>
-          </div>
-          <div className="divide-y divide-[var(--border-subtle)]">
-            {summary.stocks.slice(0, 10).map((stock) => (
-              <Link
-                key={stock.symbol}
-                href={`/chart?symbol=${stock.symbol}`}
-                className={`flex items-center gap-4 px-4 py-3 transition-colors hover:bg-[var(--surface-elevated)] group ${Math.abs(stock.change_rate) >= 5 ? "bg-amber-50/50 dark:bg-amber-900/10" : ""}`}
-              >
-                {Math.abs(stock.change_rate) >= 5 && (
-                  <Bell size={12} className="shrink-0 text-amber-500" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                      {stock.name}
-                    </span>
-                    <span className="text-xs text-neutral-400">{stock.symbol}</span>
-                    {stock.sector && (
-                      <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800">
-                        {stock.sector}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                    {stock.current_price.toLocaleString("ko-KR")}원
-                  </div>
-                  <div className="mt-0.5 flex justify-end gap-1.5">
-                    <RateTag rate={stock.change_rate} />
-                    <span className="text-xs text-neutral-400">당일</span>
-                  </div>
-                </div>
-                <div className="text-right min-w-[110px]">
-                  <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
-                    {(stock.current_value ?? stock.current_price * stock.qty).toLocaleString("ko-KR")}원
-                  </div>
-                  <div className="mt-0.5 text-xs text-neutral-400">평가금액</div>
-                </div>
-                <div className="text-right min-w-[80px]">
-                  <RateTag rate={stock.profit_rate} />
-                  <div className="mt-0.5 text-xs text-neutral-400">수익률</div>
-                </div>
-                <BarChart size={14} className="shrink-0 text-neutral-300 group-hover:text-blue-400 transition-colors" />
-              </Link>
-            ))}
-          </div>
-          {summary.stock_count > 10 && (
-            <div className="border-t border-[var(--border-subtle)] px-4 py-2.5 text-center">
-              <Link href="/portfolio" className="text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300">
-                나머지 {summary.stock_count - 10}개 종목 보기 →
-              </Link>
-            </div>
-          )}
-        </div>
-      )}
-
-      {apiStatus === "ok" && summary && summary.stock_count === 0 && (
-        <div className="rounded-lg border border-dashed border-[var(--border-subtle)] px-8 py-16 text-center">
-          <Wallet size={40} className="mx-auto mb-3 text-neutral-300 dark:text-neutral-600" />
-          <p className="font-medium text-neutral-600 dark:text-neutral-400">보유 종목이 없습니다</p>
-          <p className="mt-1 text-sm text-neutral-400">
-            KIS API 설정 후 동기화하거나, 종목을 직접 등록해 주세요.
-          </p>
-        </div>
-      )}
-
-      {usReportAtBottom && marketReports}
+      {usReportAtBottom && marketStack}
     </div>
   );
 }

@@ -29,6 +29,13 @@ const menuGroups = [
     links: [{ href: "/gains", label: "총수익" }],
   },
   {
+    title: "아침 루틴",
+    links: [
+      { href: "/morning", label: "루틴 상세" },
+      { href: "/morning/journal", label: "매매 일지" },
+    ],
+  },
+  {
     title: "관리",
     links: [{ href: "/settings", label: "설정" }],
   },
