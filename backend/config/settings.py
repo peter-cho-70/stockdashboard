@@ -132,8 +132,29 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _parse_bool(cls, v):
+        if v is None:
+            return False
         if isinstance(v, str):
-            return v.strip().split()[0].lower() in ("true", "1", "yes")
+            s = v.strip()
+            if not s:
+                return False
+            return s.split()[0].lower() in ("true", "1", "yes")
+        return v
+
+    @field_validator("db_path", mode="before")
+    @classmethod
+    def _parse_db_path(cls, v):
+        if isinstance(v, str) and not v.strip():
+            if __import__("os").environ.get("VERCEL") or __import__("os").environ.get("SERVERLESS"):
+                return "/tmp/stockmind.db"
+            return "./stockmind.db"
+        return v
+
+    @field_validator("alert_threshold", mode="before")
+    @classmethod
+    def _parse_float(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return 5.0
         return v
 
     @field_validator(
