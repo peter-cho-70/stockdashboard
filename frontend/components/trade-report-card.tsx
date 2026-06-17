@@ -264,12 +264,12 @@ export function TradeReportCard() {
           <Loader2 size={18} className="animate-spin text-blue-500" />
           <p>수출입 데이터 수집·AI 분석 중… (1~3분 소요)</p>
         </div>
-      ) : !isReportViewable(report) ? (
+      ) : !report || !isReportViewable(report) ? (
         <div className="text-center py-8 space-y-2">
           <p className="text-xs text-neutral-500">
             {selectedMonth} 리포트가 없습니다. 생성 버튼을 눌러 주세요.
           </p>
-          {report?.status === "failed" && report.error_message && (
+          {report && report.status === "failed" && report.error_message && (
             <p className="text-[10px] text-red-500">{report.error_message}</p>
           )}
         </div>

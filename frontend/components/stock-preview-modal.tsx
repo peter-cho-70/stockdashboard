@@ -11,7 +11,7 @@ export type StockPreviewItem = {
   symbol: string;
   name: string;
   close?: number | null;
-  change_pct?: number;
+  change_pct?: number | null;
   market?: string;
   sector?: string | null;
 };

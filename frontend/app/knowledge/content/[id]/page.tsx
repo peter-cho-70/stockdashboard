@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { knowledgeApi, type KnowledgeContent } from "@/lib/knowledgeApi";
 import { IntelDetailPanel } from "@/components/intel-detail-panel";
+import { normalizeKeyPoints } from "@/lib/intelHighlights";
 
 export default function KnowledgeContentPage() {
   const params = useParams();
@@ -39,7 +40,7 @@ export default function KnowledgeContentPage() {
           ...content,
           source_type: content.source_type,
           source_url: content.source_url,
-          key_points: content.key_points || [],
+          key_points: normalizeKeyPoints(content.key_points),
           content_scope: "knowledge",
           user_highlights: content.user_highlights,
         }}

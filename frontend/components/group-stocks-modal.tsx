@@ -104,7 +104,7 @@ export function GroupStocksModal({
                         symbol: stock.symbol,
                         name: stock.name,
                         close: stock.close,
-                        change_pct: stock.change_pct,
+                        change_pct: stock.change_pct ?? undefined,
                         market: stock.market,
                       })
                     }
@@ -125,10 +125,17 @@ export function GroupStocksModal({
                           {stock.close.toLocaleString("ko-KR")}
                         </p>
                       )}
-                      <p className={`text-[11px] font-medium tabular-nums ${krChangeClass(stock.change_pct)}`}>
-                        {stock.change_pct >= 0 ? "+" : ""}
-                        {stock.change_pct.toFixed(2)}%
-                      </p>
+                      {stock.change_pct != null && (
+                        <p className={`text-[11px] font-medium tabular-nums ${krChangeClass(stock.change_pct)}`}>
+                          {stock.change_pct >= 0 ? "+" : ""}
+                          {stock.change_pct.toFixed(2)}%
+                        </p>
+                      )}
+                      {stock.change_pct == null && stock.net_amount_억 != null && (
+                        <p className="text-[11px] font-medium tabular-nums text-neutral-700 dark:text-neutral-300">
+                          {stock.net_amount_억.toLocaleString("ko-KR")}억
+                        </p>
+                      )}
                     </div>
                   </button>
                 ))}

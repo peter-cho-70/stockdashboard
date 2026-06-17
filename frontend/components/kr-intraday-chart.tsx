@@ -59,7 +59,7 @@ export function KrIntradayChart({
                 borderRadius: 8,
                 border: "1px solid var(--border-subtle)",
               }}
-              formatter={(value: number) => [value.toLocaleString("ko-KR"), "지수"]}
+              formatter={(value) => [Number(value ?? 0).toLocaleString("ko-KR"), "지수"]}
               labelFormatter={(label) => `${label}`}
             />
             <Area
