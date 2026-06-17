@@ -5,6 +5,7 @@ python-kis>=2.0.0
 
 # 웹 프레임워크
 fastapi>=0.110.0
+python-multipart>=0.0.9
 uvicorn[standard]>=0.29.0
 
 # 스케줄러

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { krChangeClass } from "@/lib/krMarketColors";
 
 export function MarketViewToggle({
   view,
@@ -48,6 +49,7 @@ export function MarketViewToggle({
 
 export function MoverRow({
   item,
+  onSelect,
 }: {
   item: {
     symbol: string;
@@ -56,13 +58,17 @@ export function MoverRow({
     change_pct: number;
     market?: string;
   };
+  onSelect?: (item: {
+    symbol: string;
+    name: string;
+    close?: number | null;
+    change_pct: number;
+    market?: string;
+  }) => void;
 }) {
   const up = item.change_pct >= 0;
-  return (
-    <Link
-      href={`/chart?symbol=${item.symbol}`}
-      className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-[var(--surface-elevated)]"
-    >
+  const row = (
+    <>
       <div className="min-w-0 flex-1">
         <p className="truncate text-xs font-medium text-neutral-800 dark:text-neutral-200">
           {item.name}
@@ -78,15 +84,32 @@ export function MoverRow({
             {item.close.toLocaleString("ko-KR")}
           </p>
         )}
-        <p
-          className={`text-[11px] font-medium tabular-nums ${
-            up ? "text-emerald-600 dark:text-emerald-400" : "text-red-500"
-          }`}
-        >
+        <p className={`text-[11px] font-medium tabular-nums ${krChangeClass(item.change_pct)}`}>
           {up ? "+" : ""}
           {item.change_pct.toFixed(2)}%
         </p>
       </div>
+    </>
+  );
+
+  if (onSelect) {
+    return (
+      <button
+        type="button"
+        onClick={() => onSelect(item)}
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-[var(--surface-elevated)]"
+      >
+        {row}
+      </button>
+    );
+  }
+
+  return (
+    <Link
+      href={`/chart?symbol=${item.symbol}`}
+      className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-[var(--surface-elevated)]"
+    >
+      {row}
     </Link>
   );
 }

@@ -17,6 +17,7 @@ import {
   MoreHorizontal,
 } from "lucide-react";
 import { api, type StockItem, type StockCreatePayload } from "@/lib/api";
+import { krChangeClass, krSignedMediumClass } from "@/lib/krMarketColors";
 
 type SortKey =
   | "name"
@@ -67,14 +68,14 @@ function todayStr() {
 function RateCell({ rate }: { rate: number }) {
   if (rate > 0)
     return (
-      <span className="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 font-medium">
+      <span className={`inline-flex items-center gap-0.5 ${krSignedMediumClass(rate)}`}>
         <ArrowUpRight size={13} />
         {rate.toFixed(2)}%
       </span>
     );
   if (rate < 0)
     return (
-      <span className="inline-flex items-center gap-0.5 text-red-600 dark:text-red-400 font-medium">
+      <span className={`inline-flex items-center gap-0.5 ${krSignedMediumClass(rate)}`}>
         <ArrowDownRight size={13} />
         {Math.abs(rate).toFixed(2)}%
       </span>
@@ -594,9 +595,7 @@ export default function PortfolioPage() {
                         const pnl = pnlValue(stock);
                         const isPos = pnl >= 0;
                         return (
-                          <span
-                            className={`font-medium ${isPos ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}
-                          >
+                          <span className={`font-medium ${krSignedMediumClass(pnl)}`}>
                             {isPos ? "+" : "-"}
                             {fmt(Math.abs(Math.round(pnl)), stock.currency)}
                           </span>

@@ -602,3 +602,97 @@ def fetch_kr_market_snapshot(*, force: bool = False) -> dict[str, Any]:
     except OSError as e:
         logger.warning("KR 스냅샷 캐시 저장 실패: %s", e)
     return payload
+
+
+def _parse_group_detail_table(
+    table: Any, *, group_type: str, limit: int = 10
+) -> list[dict[str, Any]]:
+    """테마/업종 상세 페이지 type_5 테이블 → 종목 목록 (등락률 내림차순)."""
+    close_idx = 2 if group_type == "theme" else 1
+    pct_idx = 4 if group_type == "theme" else 3
+    items: list[dict[str, Any]] = []
+    for tr in table.select("tr"):
+        a = tr.select_one("a")
+        if not a:
+            continue
+        sym = _symbol_from_href(a.get("href", ""))
+        if not sym:
+            continue
+        name = a.get_text(strip=True)
+        if not _is_common_stock(name):
+            continue
+        tds = tr.select("td")
+        if len(tds) <= pct_idx:
+            continue
+        try:
+            close_txt = tds[close_idx].get_text(strip=True).replace(",", "")
+            close = int(close_txt) if close_txt.isdigit() else None
+            change_pct = float(
+                tds[pct_idx].get_text(strip=True).replace("%", "").replace("+", "")
+            )
+        except (ValueError, IndexError):
+            continue
+        items.append(
+            {
+                "symbol": sym,
+                "name": name,
+                "close": close,
+                "change_pct": change_pct,
+                "market": "KRX",
+            }
+        )
+    items.sort(key=lambda x: x.get("change_pct", 0), reverse=True)
+    return items[:limit]
+
+
+def fetch_kr_group_stocks(
+    group_type: str,
+    group_no: str,
+    *,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """
+    네이버 테마(type=theme) / 업종(type=upjong) 구성 종목 상위 N개.
+    group_no: sise_group 테이블의 no 파라미터
+    """
+    gt = (group_type or "").strip().lower()
+    if gt not in ("theme", "upjong", "industry"):
+        raise ValueError("group_type은 theme 또는 upjong(upjong/industry) 이어야 합니다")
+    naver_type = "theme" if gt == "theme" else "upjong"
+    no = (group_no or "").strip()
+    if not no.isdigit():
+        raise ValueError("group_no가 올바르지 않습니다")
+
+    limit = max(1, min(limit, 30))
+    try:
+        with httpx.Client(timeout=15.0, headers={"User-Agent": _NAVER_UA}) as client:
+            r = client.get(
+                "https://finance.naver.com/sise/sise_group_detail.naver",
+                params={"type": naver_type, "no": no},
+            )
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "html.parser")
+            table = soup.select_one("table.type_5")
+            if not table:
+                return {
+                    "group_type": naver_type,
+                    "group_no": no,
+                    "name": None,
+                    "stocks": [],
+                }
+            title_el = soup.select_one("h4") or soup.select_one(".sub_tit")
+            group_name = title_el.get_text(strip=True) if title_el else None
+            stocks = _parse_group_detail_table(
+                table, group_type=naver_type, limit=limit
+            )
+            return {
+                "group_type": naver_type,
+                "group_no": no,
+                "name": group_name,
+                "stocks": stocks,
+            }
+    except ValueError:
+        raise
+    except Exception as e:
+        logger.warning("그룹 종목 조회 실패 %s/%s: %s", naver_type, no, e)
+        raise ValueError(f"그룹 종목을 불러오지 못했습니다: {e}") from e

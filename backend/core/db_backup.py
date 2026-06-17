@@ -16,7 +16,7 @@ from config.settings import get_settings
 logger = logging.getLogger(__name__)
 
 _BACKUP_NAME_RE = re.compile(r"^stockmind_\d{8}_\d{6}_[\w-]+\.db$")
-_DEFAULT_MAX_BACKUPS = 30
+_DEFAULT_MAX_BACKUPS = 3
 
 
 def resolve_db_path() -> Path:

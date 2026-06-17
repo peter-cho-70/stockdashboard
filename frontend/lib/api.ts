@@ -161,6 +161,12 @@ export const api = {
     ),
   deleteChartMemo: (memoId: number) =>
     fetchApi<{ message: string }>(`/portfolio/chart-memos/${memoId}`, { method: "DELETE" }),
+  /** 차트 조회용 임시 등록 (qty=0, 보유 목록 제외) */
+  ensureStock: (symbol: string) =>
+    fetchApi<{ message: string; created: boolean; stock: StockItem }>(
+      `/portfolio/stocks/${encodeURIComponent(symbol)}/ensure`,
+      { method: "POST" },
+    ),
 
   // ── 알림 ──────────────────────────────────────
   getAlerts: (unreadOnly?: boolean) =>
@@ -733,6 +739,222 @@ export interface PriceTargetSearchArticle {
   used_in_target?: boolean;
 }
 
+export interface KisSupplyCheck {
+  available: boolean;
+  passed: number;
+  total: number;
+  latest_date?: string | null;
+  items: { label: string; passed: boolean; unavailable?: boolean }[];
+}
+
+export interface KisInvestOpinion {
+  report_date: string | null;
+  broker: string;
+  rating: string | null;
+  prev_rating?: string | null;
+  target_price: number | null;
+  prev_close?: number | null;
+  upside_pct?: number | null;
+  source?: string;
+}
+
+export interface KisInvestorTrendRow {
+  date: string | null;
+  close?: number | null;
+  change?: number | null;
+  foreign_net_qty?: number | null;
+  institution_net_qty?: number | null;
+  personal_net_qty?: number | null;
+  foreign_net_amount?: number | null;
+  institution_net_amount?: number | null;
+}
+
+export interface KisInvestInfo {
+  symbol: string;
+  source: string;
+  fetched_at: string;
+  opinions: KisInvestOpinion[];
+  opinions_by_broker: KisInvestOpinion[];
+  investor_trend: KisInvestorTrendRow[];
+  supply_check: KisSupplyCheck;
+}
+
+export interface StockInvestmentInfo {
+  market_cap?: string | null;
+  market_cap_rank?: string | null;
+  listed_shares?: string | null;
+  face_value_trading_unit?: string | null;
+  foreign_limit_shares?: string | null;
+  foreign_held_shares?: string | null;
+  foreign_exhaustion_rate?: string | null;
+  foreign_holding_rate?: string | null;
+  consensus_rating?: string | null;
+  consensus_target_price?: string | null;
+  consensus_rating_score?: string | null;
+  consensus_target_price_numeric?: string | null;
+  week52_range?: string | null;
+  week52_high?: string | null;
+  week52_low?: string | null;
+  per_eps?: string | null;
+  forward_per_eps?: string | null;
+  pbr_bps?: string | null;
+  per?: string | null;
+  eps?: string | null;
+  forward_per?: string | null;
+  forward_eps?: string | null;
+  pbr?: string | null;
+  bps?: string | null;
+  dividend_yield?: string | null;
+  industry_per?: string | null;
+  industry_change_pct?: string | null;
+  [key: string]: string | null | undefined;
+}
+
+export interface StockBasicsNewsItem {
+  title: string;
+  url: string;
+  published?: string;
+}
+
+export interface StockBasicsTableRow {
+  label: string;
+  value: string;
+}
+
+export interface StockQuoteSnapshot {
+  close_price?: string | null;
+  change?: string | null;
+  change_pct?: string | null;
+  change_direction?: string | null;
+  market_status?: string | null;
+  traded_at?: string | null;
+  exchange?: string | null;
+  items?: StockBasicsTableRow[];
+  [key: string]: string | null | StockBasicsTableRow[] | undefined;
+}
+
+export interface StockInvestorTrendRow {
+  date?: string;
+  close_price?: string | null;
+  change?: string | null;
+  change_direction?: string | null;
+  volume?: string | null;
+  foreign_net_buy?: string | null;
+  foreign_holding_rate?: string | null;
+  institution_net_buy?: string | null;
+  individual_net_buy?: string | null;
+}
+
+export interface StockFinancePeriod {
+  key?: string;
+  title?: string;
+  is_consensus?: boolean;
+}
+
+export interface StockFinanceRow {
+  title?: string;
+  columns?: Record<string, string | null | undefined>;
+}
+
+export interface StockFinanceTable {
+  period_type?: string;
+  periods?: StockFinancePeriod[];
+  rows?: StockFinanceRow[];
+}
+
+export interface StockIndustryPeer {
+  symbol?: string;
+  name?: string;
+  close_price?: string | null;
+  change_pct?: string | null;
+  change_direction?: string | null;
+  market_cap?: string | null;
+}
+
+export interface StockResearchReport {
+  broker?: string | null;
+  title?: string | null;
+  date?: string | null;
+  target_price?: string | null;
+  report_id?: number | null;
+}
+
+export interface StockBasics {
+  symbol: string;
+  name: string;
+  source: string;
+  fetched_at: string;
+  investment_info: StockInvestmentInfo;
+  quote?: StockQuoteSnapshot;
+  investment_table?: StockBasicsTableRow[];
+  quote_table?: StockBasicsTableRow[];
+  investor_trends?: StockInvestorTrendRow[];
+  financials?: {
+    annual?: StockFinanceTable;
+    quarterly?: StockFinanceTable;
+  };
+  industry_peers?: StockIndustryPeer[];
+  research_reports?: StockResearchReport[];
+  corporation_summary?: Record<string, string>;
+  overview: string;
+  news: StockBasicsNewsItem[];
+}
+
+export interface VolatilityIssue {
+  date: string;
+  period: "daily" | "weekly";
+  change_pct: number;
+  direction: "up" | "down";
+  close?: number;
+  label: string;
+  reason?: string;
+  cause_source?: string;
+  confidence?: string | null;
+  key_factors?: string[];
+  week_start?: string;
+  week_end?: string;
+  week_key?: string;
+  summary?: string;
+  daily_moves_in_week?: number;
+  related_issues?: {
+    summary: string;
+    sentiment: string | null;
+    source_title?: string | null;
+    source_url?: string | null;
+  }[];
+}
+
+export interface HoldingsAnalysis {
+  symbol: string;
+  name: string;
+  is_holding: boolean;
+  eligible: boolean;
+  message?: string;
+  qty?: number;
+  avg_price?: number;
+  current_price?: number;
+  profit_rate?: number;
+  headline?: string;
+  investment_info?: StockInvestmentInfo;
+  quote?: StockQuoteSnapshot;
+  investment_table?: StockBasicsTableRow[];
+  quote_table?: StockBasicsTableRow[];
+  investor_trends?: StockInvestorTrendRow[];
+  financials?: {
+    annual?: StockFinanceTable;
+    quarterly?: StockFinanceTable;
+  };
+  industry_peers?: StockIndustryPeer[];
+  research_reports?: StockResearchReport[];
+  corporation_summary?: Record<string, string>;
+  overview?: string;
+  news?: StockBasicsNewsItem[];
+  daily_issues?: VolatilityIssue[];
+  weekly_issues?: VolatilityIssue[];
+  fetched_at?: string;
+  source?: string;
+}
+
 export interface UsMarketQuote {
   name: string;
   ticker?: string;
@@ -977,6 +1199,29 @@ export const marketApi = {
       targets: PriceTarget[];
     }>(`/stocks/${encodeURIComponent(symbol)}/price-targets/fetch`, { method: "POST" }),
 
+  fetchKisPriceTargets: (symbol: string) =>
+    fetchApi<{
+      symbol: string;
+      name: string;
+      fetched_count: number;
+      disclaimer: string;
+      kis_invest_info?: {
+        supply_check: KisSupplyCheck;
+        investor_trend: KisInvestorTrendRow[];
+        opinion_count: number;
+      };
+      targets: PriceTarget[];
+    }>(`/stocks/${encodeURIComponent(symbol)}/price-targets/fetch-kis`, { method: "POST" }),
+
+  getKisInvestInfo: (symbol: string) =>
+    fetchApi<KisInvestInfo>(`/stocks/${encodeURIComponent(symbol)}/kis-invest-info`),
+
+  getStockBasics: (symbol: string) =>
+    fetchApi<StockBasics>(`/stocks/${encodeURIComponent(symbol)}/basics`),
+
+  getHoldingsAnalysis: (symbol: string) =>
+    fetchApi<HoldingsAnalysis>(`/stocks/${encodeURIComponent(symbol)}/holdings-analysis`),
+
   addPriceTarget: (
     symbol: string,
     body: {
@@ -1042,6 +1287,22 @@ export const marketApi = {
   getKrMarketSnapshot: (force = false) =>
     fetchApi<{ snapshot: KrMarketSnapshot }>(
       `/market/kr/snapshot${force ? "?force=true" : ""}`,
+    ),
+
+  getKrGroupStocks: (groupType: "theme" | "upjong", groupNo: string, limit = 10) =>
+    fetchApi<{
+      group_type: string;
+      group_no: string;
+      name: string | null;
+      stocks: KrMarketMover[];
+    }>(
+      `/market/kr/group-stocks?group_type=${encodeURIComponent(groupType)}&group_no=${encodeURIComponent(groupNo)}&limit=${limit}`,
+    ),
+
+  ensureKrStock: (symbol: string) =>
+    fetchApi<{ message: string; created: boolean; stock: StockItem }>(
+      `/market/kr/stocks/${encodeURIComponent(symbol)}/ensure`,
+      { method: "POST" },
     ),
 
   getTradeReport: (month: string) =>

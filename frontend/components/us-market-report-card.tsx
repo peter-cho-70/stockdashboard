@@ -15,6 +15,7 @@ import {
 import { getUsMarketQuoteTooltip } from "@/lib/usMarketTooltips";
 import { loadUsReportCache, saveUsReportCache } from "@/lib/marketCache";
 import { todayKst } from "@/lib/marketDisplay";
+import { krChangeClass } from "@/lib/krMarketColors";
 
 /** KST 08:30~22:59 — 미국 선물 표시 구간 */
 function isUsDaytimeKst(now = new Date()): boolean {
@@ -85,11 +86,7 @@ function formatClose(item: UsMarketQuote): string {
 function ChangePct({ value }: { value?: number }) {
   const v = value ?? 0;
   return (
-    <p
-      className={`text-xs font-medium tabular-nums ${
-        v >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-500"
-      }`}
-    >
+    <p className={`text-xs font-medium tabular-nums ${krChangeClass(v)}`}>
       {v >= 0 ? "+" : ""}
       {v.toFixed(2)}%
     </p>

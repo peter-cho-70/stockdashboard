@@ -23,6 +23,7 @@ from api.routes_digest import digest_router
 from api.routes_market import market_router
 from api.routes_morning import morning_router
 from api.routes_system import system_router
+from api.routes_study import study_router
 from scheduler.jobs import create_scheduler
 
 # 로깅 설정
@@ -114,6 +115,7 @@ app.include_router(knowledge_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
 app.include_router(morning_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
+app.include_router(study_router, prefix="/api")
 
 
 @app.get("/")

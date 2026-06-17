@@ -11,7 +11,7 @@ from datetime import datetime, date
 from sqlalchemy.orm import Session
 
 from config.database import Stock, PriceHistory, PortfolioSnapshot, AlertHistory
-from core.kis_client import KISClient, BalanceItem
+from core.kis_client import KISClient, BalanceItem, fetch_merged_balance_from_settings
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,9 @@ class PortfolioManager:
         KIS API에서 잔고를 가져와 DB 동기화
         반환: {"added": N, "updated": N, "removed": N}
         """
-        balance_items = self.kis.get_all_balance()
+        balance_items = fetch_merged_balance_from_settings()
+        if not balance_items and self.kis:
+            balance_items = self.kis.get_all_balance()
         if not balance_items:
             logger.warning("잔고 데이터 없음 (API 응답 비어있음)")
             return {"added": 0, "updated": 0, "removed": 0}
@@ -54,21 +56,23 @@ class PortfolioManager:
             ).first()
 
             if existing:
-                if (existing.position_source or "kis") == "manual":
-                    if item.current_price:
-                        existing.current_price = item.current_price
-                    existing.last_synced_at = datetime.utcnow()
-                    existing.updated_at = datetime.utcnow()
-                    updated += 1
-                    continue
+                prev_source = existing.position_source or "kis"
                 existing.qty = item.qty
                 existing.avg_price = item.avg_price
                 existing.purchase_amount = item.purchase_amount
-                existing.current_price = item.current_price
+                existing.current_price = item.current_price or existing.current_price
                 existing.position_source = "kis"
+                existing.is_active = item.qty > 0
                 existing.last_synced_at = datetime.utcnow()
                 existing.updated_at = datetime.utcnow()
                 updated += 1
+                if prev_source == "manual":
+                    logger.info(
+                        "KIS 동기화 — manual→kis 수량 갱신: %s (%s) qty=%s",
+                        existing.name,
+                        existing.symbol,
+                        item.qty,
+                    )
             else:
                 # 신규 종목 추가
                 new_stock = Stock(

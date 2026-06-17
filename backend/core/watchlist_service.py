@@ -15,6 +15,47 @@ from core.stock_resolver import resolve_symbol
 from core.watchlist_detail import resolve_name_from_symbol
 
 
+def ensure_stock_for_chart(db: Session, symbol: str) -> tuple[Stock, bool]:
+    """
+    차트·조회용 Stock 레코드 확보 (qty=0, position_source=preview).
+    반환: (stock, created) — created=True 이면 이번에 새로 등록됨.
+    """
+    sym = (symbol or "").strip()
+    if len(sym) != 6 or not sym.isdigit():
+        raise ValueError("6자리 KRX 종목코드만 지원합니다")
+
+    existing = db.query(Stock).filter(Stock.symbol == sym).first()
+    created = False
+    if existing:
+        stock = existing
+    else:
+        name = resolve_name_from_symbol(sym)
+        if not name:
+            raise ValueError(f"종목을 찾을 수 없습니다: {sym}")
+        stock = ensure_stock_for_watch(
+            db,
+            stock_name=name,
+            symbol=sym,
+            sector=normalize_sector(None, sym),
+        )
+        if not stock:
+            raise ValueError(f"종목 등록 실패: {sym}")
+        stock.position_source = "preview"
+        created = True
+
+    from core.price_updater import fetch_krx_prices
+
+    prices = fetch_krx_prices([sym])
+    if sym in prices:
+        p = prices[sym]
+        stock.current_price = p["current_price"]
+        stock.change_rate = p.get("change_rate", 0)
+
+    db.commit()
+    db.refresh(stock)
+    return stock, created
+
+
 def resolve_symbol_by_name(name: str, db: Optional[Session] = None) -> Optional[str]:
     """종목명 → 종목코드 (별칭·정적·pykrx)."""
     return resolve_symbol(name, db)

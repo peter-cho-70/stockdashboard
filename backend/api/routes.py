@@ -34,6 +34,7 @@ from core.ai_analyzer import (
 )
 from core.analysis_stream import run_intel_analysis, stream_analysis, run_explain_move
 from core.move_explainer import explain_and_save, get_move_causes_for_stock, serialize_move_cause
+from core.watchlist_service import ensure_stock_for_chart
 from core.price_updater import update_prices_from_krx, save_daily_snapshot
 from core.demo_mode import (
     is_demo_mode,
@@ -333,6 +334,21 @@ def list_stock_trades(symbol: str, limit: int = 30, db: Session = Depends(get_db
 # ─────────────────────────────────────────────
 # 주가 차트 데이터 (pykrx — 최대 1년 OHLCV)
 # ─────────────────────────────────────────────
+@router.post("/portfolio/stocks/{symbol}/ensure")
+def ensure_stock_preview(symbol: str, db: Session = Depends(get_db)):
+    """차트 조회용 임시 종목 등록 (qty=0, 보유 목록 미포함)"""
+    try:
+        stock, created = ensure_stock_for_chart(db, symbol)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    msg = "조회용 종목이 등록되었습니다." if created else "종목 정보를 갱신했습니다."
+    return {
+        "message": msg,
+        "created": created,
+        "stock": serialize_stock(stock),
+    }
+
+
 @router.get("/portfolio/stocks/{symbol}/chart")
 def get_stock_chart(
     symbol: str,
@@ -349,7 +365,10 @@ def get_stock_chart(
 
     stock = db.query(Stock).filter(Stock.symbol == symbol).first()
     if not stock:
-        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+        try:
+            stock, _ = ensure_stock_for_chart(db, symbol)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
 
     period_days = {"1M": 30, "3M": 90, "6M": 180, "1Y": 365}.get(period, 90)
     end_date = date.today()
@@ -615,7 +634,7 @@ def get_portfolio_summary(db: Session = Depends(get_db)):
                 "current_value": round(s.current_value, 0),
                 "currency": s.currency,
             }
-            for s in sorted(stocks, key=lambda x: abs(x.change_rate), reverse=True)
+            for s in sorted(stocks, key=lambda x: x.change_rate, reverse=True)
         ],
     }
 

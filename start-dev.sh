@@ -93,6 +93,7 @@ echo ""
   export DB_PATH="${DB_PATH:-./stockmind.db}"
   export FRONTEND_PORT="${FRONTEND_PORT}"
   export DEV_RESTART="${DEV_RESTART:-true}"
+  export DEBUG="${DEBUG:-true}"  # 코드 변경 시 uvicorn 자동 reload
   # 백엔드가 SIGTERM(정상 종료)되면 자동 재기동
   while true; do
     "${ROOT}/backend/venv/bin/python3" main.py

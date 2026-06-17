@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
-import { ThemeScript } from "@/components/theme-script";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
@@ -21,7 +21,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-[var(--background)] text-[var(--foreground)] transition-colors duration-200">
-        <ThemeScript />
+        <Script id="stockmind-theme-init" strategy="beforeInteractive">
+          {`(function(){try{var t=localStorage.getItem("stockmind-theme")||"light";document.documentElement.setAttribute("data-theme",t)}catch(e){}})();`}
+        </Script>
         <AppShell>{children}</AppShell>
       </body>
     </html>

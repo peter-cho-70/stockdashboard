@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Highlighter, Pencil, Star, TrendingDown, TrendingUp, Minus, X, Plus } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { GraduationCap, Highlighter, Pencil, Star, TrendingDown, TrendingUp, Minus, X, Plus } from "lucide-react";
 import type { MacroAnalysis, SectorAnalysisItem, StockIssueItem } from "@/lib/api";
 import {
   intelHighlightsApi,
@@ -20,6 +22,7 @@ import {
   type HighlightColor,
 } from "@/lib/highlightColors";
 import { renderAnalysisText, type SnippetMark } from "@/lib/renderAnalysisText";
+import { studyApi } from "@/lib/studyApi";
 
 export interface IntelDetailData {
   id?: number;
@@ -227,6 +230,7 @@ export function IntelDetailPanel({
   contentId?: number;
   onHighlightsSaved?: (highlights: UserHighlights) => void;
 }) {
+  const router = useRouter();
   const resolvedId = contentId ?? data.id;
   const isKnowledge = data.content_scope === "knowledge";
   const isYoutube = data.source_type === "YOUTUBE";
@@ -246,12 +250,20 @@ export function IntelDetailPanel({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [newUserPoint, setNewUserPoint] = useState("");
+  const [studyLoading, setStudyLoading] = useState(false);
+  const [studyError, setStudyError] = useState<string | null>(null);
+  const [studyCardId, setStudyCardId] = useState<number | null>(null);
 
   useEffect(() => {
     setHighlights(normalizeUserHighlights(data.user_highlights));
     setDirty(false);
     setSaveError(null);
   }, [data.user_highlights, resolvedId]);
+
+  useEffect(() => {
+    setStudyCardId(null);
+    setStudyError(null);
+  }, [resolvedId]);
 
   useEffect(() => {
     if (!resolvedId) return;
@@ -300,6 +312,21 @@ export function IntelDetailPanel({
       setSaving(false);
     }
   }, [resolvedId, onHighlightsSaved]);
+
+  const createStudyCard = useCallback(async () => {
+    if (!resolvedId) return;
+    setStudyLoading(true);
+    setStudyError(null);
+    try {
+      const card = await studyApi.createCardFromContent(resolvedId);
+      setStudyCardId(card.id);
+      router.push(`/learn/card/${card.id}`);
+    } catch (e) {
+      setStudyError(e instanceof Error ? e.message : "학습 카드 생성 실패");
+    } finally {
+      setStudyLoading(false);
+    }
+  }, [resolvedId, router]);
 
   const togglePin = (index: number) => {
     setHighlights((prev) => {
@@ -420,6 +447,27 @@ export function IntelDetailPanel({
           </div>
         )}
         <div className="flex items-center gap-1 shrink-0">
+          {resolvedId && (
+            studyCardId ? (
+              <Link
+                href={`/learn/card/${studyCardId}`}
+                className="flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200"
+              >
+                <GraduationCap size={11} />
+                학습 카드
+              </Link>
+            ) : (
+              <button
+                type="button"
+                disabled={studyLoading}
+                onClick={() => createStudyCard()}
+                className="flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2 py-1 text-[10px] font-medium text-violet-800 disabled:opacity-50 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-200"
+              >
+                <GraduationCap size={11} />
+                {studyLoading ? "생성 중…" : "학습용으로 만들기"}
+              </button>
+            )
+          )}
           {editMode && resolvedId && (
             <button
               type="button"
@@ -453,6 +501,9 @@ export function IntelDetailPanel({
       )}
       {saveError && (
         <p className="text-[10px] text-red-600 bg-red-50 dark:bg-red-900/20 rounded-md px-2 py-1">{saveError}</p>
+      )}
+      {studyError && (
+        <p className="text-[10px] text-red-600 bg-red-50 dark:bg-red-900/20 rounded-md px-2 py-1">{studyError}</p>
       )}
 
       {(highlights.snippets.length > 0 || highlights.user_key_points.length > 0) && tab === "analysis" && (

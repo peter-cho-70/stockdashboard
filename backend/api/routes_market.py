@@ -26,7 +26,12 @@ from core.us_market_report import (
     list_reports,
     refresh_us_report_news,
 )
-from core.kr_market_snapshot import fetch_kr_market_snapshot
+from core.kr_market_snapshot import fetch_kr_market_snapshot, fetch_kr_group_stocks
+from core.kis_invest_info import fetch_kis_invest_info, sync_kis_price_targets
+from core.stock_basics import fetch_stock_basics
+from core.holdings_analysis import build_holdings_analysis
+from core.portfolio_positions import serialize_stock
+from core.watchlist_service import ensure_stock_for_chart
 
 market_router = APIRouter(tags=["market"])
 
@@ -75,6 +80,49 @@ def api_delete_price_target(symbol: str, target_id: int, db: Session = Depends(g
     if not delete_price_target(db, symbol.strip(), target_id):
         raise HTTPException(status_code=404, detail="목표가 없음")
     return {"ok": True}
+
+
+@market_router.get("/stocks/{symbol}/kis-invest-info")
+def api_kis_invest_info(symbol: str, force: bool = Query(False)):
+    try:
+        return fetch_kis_invest_info(symbol.strip(), force=force)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"KIS 투자정보 조회 실패: {e}") from e
+
+
+@market_router.post("/stocks/{symbol}/price-targets/fetch-kis")
+def api_fetch_kis_price_targets(symbol: str, db: Session = Depends(get_db)):
+    try:
+        return sync_kis_price_targets(db, symbol.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"KIS 목표가 조회 실패: {e}") from e
+
+
+@market_router.get("/stocks/{symbol}/basics")
+def api_stock_basics(symbol: str):
+    try:
+        return fetch_stock_basics(symbol.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"종목 기초정보 조회 실패: {e}") from e
+
+
+@market_router.get("/stocks/{symbol}/holdings-analysis")
+def api_holdings_analysis(
+    symbol: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        return build_holdings_analysis(db, symbol.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"보유 종목 분석 실패: {e}") from e
 
 
 # ── 미국 증시 리포트 ──────────────────────────────────────────────
@@ -141,6 +189,34 @@ def api_kr_market_snapshot(force: bool = Query(False)):
         return {"snapshot": fetch_kr_market_snapshot(force=force)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)[:300]) from e
+
+
+@market_router.get("/market/kr/group-stocks")
+def api_kr_group_stocks(
+    group_type: str = Query(..., description="theme | upjong"),
+    group_no: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=30),
+):
+    """테마/업종 구성 종목 (등락률 상위)"""
+    try:
+        return fetch_kr_group_stocks(group_type, group_no, limit=limit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@market_router.post("/market/kr/stocks/{symbol}/ensure")
+def api_ensure_kr_stock(symbol: str, db: Session = Depends(get_db)):
+    """차트 조회용 임시 종목 등록 (qty=0)"""
+    try:
+        stock, created = ensure_stock_for_chart(db, symbol)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    msg = "조회용 종목이 등록되었습니다." if created else "종목 정보를 갱신했습니다."
+    return {
+        "message": msg,
+        "created": created,
+        "stock": serialize_stock(stock),
+    }
 
 
 # ── 수출입 월간 리포트 ──────────────────────────────────────────────

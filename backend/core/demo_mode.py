@@ -216,7 +216,7 @@ def build_demo_summary(db: Session) -> dict:
             "current_value": s["current_value"],
             "currency": s["currency"],
         }
-        for s in sorted(stocks, key=lambda x: abs(x["change_rate"]), reverse=True)
+        for s in sorted(stocks, key=lambda x: x["change_rate"], reverse=True)
     ]
 
     return {

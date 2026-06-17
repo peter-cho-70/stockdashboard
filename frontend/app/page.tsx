@@ -29,6 +29,7 @@ import { TradeReportCard } from "@/components/trade-report-card";
 import { HoldingsMiniCard } from "@/components/holdings-mini-card";
 import { MorningRoutineCard } from "@/components/morning/morning-routine-card";
 import { isUsReportAtBottomKST } from "@/lib/marketDisplay";
+import { krChangeClass } from "@/lib/krMarketColors";
 
 const CHART_PERIODS = [
   { days: 7, label: "7일" },
@@ -57,13 +58,13 @@ function SummaryCard({
   label: string;
   value: string;
   sub?: string;
-  highlight?: "green" | "red";
+  highlight?: "up" | "down";
 }) {
   const valueClass =
-    highlight === "green"
-      ? "text-emerald-600 dark:text-emerald-400"
-      : highlight === "red"
-        ? "text-red-600 dark:text-red-400"
+    highlight === "up"
+      ? krChangeClass(1)
+      : highlight === "down"
+        ? krChangeClass(-1)
         : "text-neutral-900 dark:text-neutral-100";
 
   return (
@@ -176,7 +177,7 @@ export default function DashboardPage() {
   const marketStack = (
     <div className="space-y-4">
       {/* 보유종목을 모닝 루틴보다 앞에 — 미국증시 옆 배치 */}
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-3 items-stretch">
         <div className="lg:col-span-2">
           <MarketBriefingCard />
         </div>
@@ -273,26 +274,26 @@ export default function DashboardPage() {
           <SummaryCard
             icon={
               summary.total_profit >= 0 ? (
-                <TrendingUp size={18} className="text-emerald-500" />
+                <TrendingUp size={18} className="text-red-500" />
               ) : (
-                <TrendingDown size={18} className="text-red-500" />
+                <TrendingDown size={18} className="text-blue-500" />
               )
             }
             label="총 수익금액"
             value={fmt(summary.total_profit)}
-            highlight={summary.total_profit >= 0 ? "green" : "red"}
+            highlight={summary.total_profit >= 0 ? "up" : "down"}
           />
           <SummaryCard
             icon={
               summary.total_profit_rate >= 0 ? (
-                <ArrowUpRight size={18} className="text-emerald-500" />
+                <ArrowUpRight size={18} className="text-red-500" />
               ) : (
-                <ArrowDownRight size={18} className="text-red-500" />
+                <ArrowDownRight size={18} className="text-blue-500" />
               )
             }
             label="총 수익률"
             value={`${summary.total_profit_rate >= 0 ? "+" : ""}${summary.total_profit_rate.toFixed(2)}%`}
-            highlight={summary.total_profit_rate >= 0 ? "green" : "red"}
+            highlight={summary.total_profit_rate >= 0 ? "up" : "down"}
           />
         </div>
       )}

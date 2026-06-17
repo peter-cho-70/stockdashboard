@@ -1,5 +1,13 @@
 /** 차트 분석 신호 계산 — 한국주식_차트분석_실전가이드.md 기반 */
 
+import {
+  KR_UP_HEX,
+  KR_DOWN_HEX,
+  KR_UP_HEX_STRONG,
+  KR_DOWN_HEX_STRONG,
+  krDirectionHex,
+} from "./krMarketColors";
+
 export interface ChartBar {
   date: string;
   open: number;
@@ -39,6 +47,15 @@ export interface StageCheck {
   passed: number;
   total: number;
   available: boolean;
+}
+
+/** KIS HTS 투자자 매매동향 기반 수급 체크 (백엔드 /kis-invest-info) */
+export interface KisSupplyCheck {
+  available: boolean;
+  passed: number;
+  total: number;
+  latest_date?: string | null;
+  items: CheckItem[];
 }
 
 export interface ChartAnnotation {
@@ -723,7 +740,8 @@ function analyzePullback(data: ChartBar[], regime: MarketRegime): ChartSignal {
 
 function buildThreeStage(
   technicalSignals: ChartSignal[],
-  regime: MarketRegime
+  regime: MarketRegime,
+  supplyCheck?: KisSupplyCheck | null
 ): ChartAnalysisResult["threeStage"] {
   const techApplicable = technicalSignals.filter((s) => s.applicable);
   const techPassed = techApplicable.filter((s) => s.passed);
@@ -754,17 +772,25 @@ function buildThreeStage(
     ],
   };
 
-  const stage2: StageCheck = {
-    label: "수급 확인 (가장 중요)",
-    available: false,
-    passed: 0,
-    total: 3,
-    items: [
-      { label: "외국인 3일 이상 연속 순매수", passed: false, unavailable: true },
-      { label: "기관 동반 순매수", passed: false, unavailable: true },
-      { label: "공매도 비중 5% 이하", passed: false, unavailable: true },
-    ],
-  };
+  const stage2: StageCheck = supplyCheck?.available
+    ? {
+        label: "수급 확인 (가장 중요)",
+        available: true,
+        passed: supplyCheck.passed,
+        total: supplyCheck.total,
+        items: supplyCheck.items,
+      }
+    : {
+        label: "수급 확인 (가장 중요)",
+        available: false,
+        passed: 0,
+        total: 3,
+        items: [
+          { label: "외국인 3일 이상 연속 순매수", passed: false, unavailable: true },
+          { label: "기관 동반 순매수", passed: false, unavailable: true },
+          { label: "공매도 비중 5% 이하", passed: false, unavailable: true },
+        ],
+      };
 
   const stage3: StageCheck = {
     label: "기술적 확인",
@@ -778,8 +804,18 @@ function buildThreeStage(
   let summary: string;
 
   if (stage3Passed >= 5) {
-    verdict = "기술 양호 — 수급 확인 후 검토";
-    summary = `기술 ${stage3Passed}/${stage3Items.length} 통과. 수급(KIS API) 미연동 — 실매매 전 외국인·기관 순매수를 반드시 확인하세요.`;
+    if (supplyCheck?.available) {
+      verdict =
+        stage2.passed >= 2
+          ? "기술·수급 양호 — 진입 검토"
+          : stage2.passed >= 1
+            ? "기술 양호 — 수급 일부 충족"
+            : "기술 양호 — 수급 미충족";
+      summary = `기술 ${stage3Passed}/${stage3Items.length} · 수급 ${stage2.passed}/${stage2.total} 통과 (KIS HTS${supplyCheck.latest_date ? ` · ${supplyCheck.latest_date}` : ""}).`;
+    } else {
+      verdict = "기술 양호 — 수급 확인 후 검토";
+      summary = `기술 ${stage3Passed}/${stage3Items.length} 통과. 수급(KIS API) 미연동 — 실매매 전 외국인·기관 순매수를 반드시 확인하세요.`;
+    }
   } else if (stage3Passed >= 3) {
     verdict = "기술 일부 충족 — 관망";
     summary = `기술 ${stage3Passed}/${stage3Items.length} 통과. 추가 확인 후 소량 검토 가능.`;
@@ -887,7 +923,7 @@ export function buildChartAnnotations(
     signalId: "sr",
     type: "line",
     label: "지지",
-    color: "#10b981",
+    color: KR_UP_HEX,
     y: support,
     strokeDasharray: "3 3",
   });
@@ -932,7 +968,7 @@ export function buildChartAnnotations(
       signalId: "ma_cross",
       type: "dot",
       label: ev.label,
-      color: ev.type === "gc" ? "#10b981" : "#ef4444",
+      color: ev.type === "gc" ? KR_UP_HEX : KR_DOWN_HEX,
       date: ev.date,
       y: ev.y,
     });
@@ -1021,7 +1057,8 @@ export function filterAnnotations(
 export function analyzeChart(
   data: ChartBar[],
   avgPrice: number,
-  _currentPrice: number
+  _currentPrice: number,
+  supplyCheck?: KisSupplyCheck | null
 ): ChartAnalysisResult | null {
   if (!data || data.length < 5) return null;
 
@@ -1050,7 +1087,7 @@ export function analyzeChart(
   if (ma60 > 0) stopParts.push(`60일선 ${fmt(ma60)}원`);
   stopParts.push(`매수가 -7% (${fmt(Math.round(pct7))}원)`);
 
-  const threeStage = buildThreeStage(signals, regime);
+  const threeStage = buildThreeStage(signals, regime, supplyCheck);
   const stopLoss = {
     ma60: ma60 > 0 ? ma60 : null,
     pct7: Math.round(pct7),
@@ -1416,7 +1453,7 @@ export function buildPriceEventAnnotations(
       signalId: "events",
       type: "dot" as const,
       label: `${m.changePct >= 0 ? "+" : ""}${m.changePct.toFixed(1)}%`,
-      color: m.direction === "up" ? "#059669" : "#dc2626",
+      color: krDirectionHex(m.direction),
       date: m.date,
       y: m.close,
       description: m.reason,

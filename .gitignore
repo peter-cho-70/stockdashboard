@@ -13,6 +13,10 @@ env/
 backend/.env
 backend/*.db
 backend/data/backups/
+backend/data/study_images/
+backend/data/kis_invest_cache/
+backend/data/stock_basics_cache/
+backend/data/backend.pid
 backend/data/kr_snapshot_cache.json
 backend/nohup.out
 backend/.vercel

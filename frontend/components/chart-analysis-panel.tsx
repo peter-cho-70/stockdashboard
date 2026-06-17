@@ -14,6 +14,12 @@ import {
 } from "lucide-react";
 import type { ChartAnalysisResult, ChartSignal, Sentiment } from "@/lib/chartAnalysis";
 import {
+  krBullishBorderClass,
+  krBearishBorderClass,
+  krBullishPanelClass,
+  krBearishPanelClass,
+} from "@/lib/krMarketColors";
+import {
   CHART_DISCLAIMER,
   GUIDE_SECTIONS,
 } from "@/lib/chartGuideContent";
@@ -22,18 +28,18 @@ function SentimentIcon({ sentiment, passed }: { sentiment: Sentiment; passed: bo
   if (!passed && sentiment === "warning")
     return <AlertTriangle size={14} className="text-amber-500 shrink-0" />;
   if (passed && (sentiment === "bullish" || sentiment === "neutral"))
-    return <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />;
+    return <CheckCircle2 size={14} className="text-red-500 shrink-0" />;
   if (sentiment === "bearish" || !passed)
-    return <XCircle size={14} className="text-red-500 shrink-0" />;
+    return <XCircle size={14} className="text-blue-500 shrink-0" />;
   return <MinusCircle size={14} className="text-neutral-400 shrink-0" />;
 }
 
 function sentimentBorder(sentiment: Sentiment, passed: boolean, active: boolean) {
   const base =
     sentiment === "bullish" && passed
-      ? "border-emerald-200 dark:border-emerald-800/50 bg-emerald-50/50 dark:bg-emerald-900/10"
+      ? krBullishBorderClass()
       : sentiment === "bearish" || (!passed && sentiment !== "warning")
-        ? "border-red-200 dark:border-red-800/50 bg-red-50/50 dark:bg-red-900/10"
+        ? krBearishBorderClass()
         : sentiment === "warning"
           ? "border-amber-200 dark:border-amber-800/50 bg-amber-50/50 dark:bg-amber-900/10"
           : "border-[var(--border-subtle)] bg-[var(--surface-elevated)]";
@@ -75,7 +81,7 @@ function SignalCard({
               {signal.category}
             </span>
             {signal.passed ? (
-              <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">통과</span>
+              <span className="text-[10px] font-medium text-red-600 dark:text-red-400">통과</span>
             ) : (
               <span className="text-[10px] font-medium text-neutral-500">미통과</span>
             )}
@@ -152,7 +158,7 @@ function StageBlock({
             {item.unavailable ? (
               <MinusCircle size={12} className="mt-0.5 shrink-0 text-neutral-300" />
             ) : item.passed ? (
-              <CheckCircle2 size={12} className="mt-0.5 shrink-0 text-emerald-500" />
+              <CheckCircle2 size={12} className="mt-0.5 shrink-0 text-red-500" />
             ) : (
               <XCircle size={12} className="mt-0.5 shrink-0 text-neutral-300" />
             )}
@@ -189,9 +195,9 @@ export function ChartAnalysisPanel({
 }: ChartAnalysisPanelProps) {
   const regimeColor =
     analysis.regime === "bull"
-      ? "text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20"
+      ? krBullishPanelClass()
       : analysis.regime === "bear"
-        ? "text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20"
+        ? krBearishPanelClass()
         : "text-neutral-600 dark:text-neutral-400 bg-neutral-100 dark:bg-neutral-800";
 
   const orderedSignals = [...analysis.signals].sort((a, b) => a.step - b.step);

@@ -25,7 +25,7 @@ async def job_domestic_market_close():
         result = update_prices_from_krx(db, alert_threshold=settings.alert_threshold)
         logger.info("✅ 시세 갱신: %s개 / 알림: %s건", result["updated"], len(result["alerts"]))
 
-        if settings.kis_app_key and settings.kis_account_no:
+        if settings.kis_is_configured():
             try:
                 from core.kis_client import create_kis_client_from_settings
                 from core.portfolio import PortfolioManager
@@ -48,7 +48,7 @@ async def job_domestic_market_close():
 async def job_us_market_close():
     """[07:05 KST] 해외주식 잔고 동기화"""
     logger.info("⏰ [스케줄] 미국 장 마감 후 동기화 시작 (07:05)")
-    if not (settings.kis_app_key and settings.kis_account_no):
+    if not settings.kis_is_configured():
         logger.info("ℹ️ KIS API 미설정 — 미국 장 마감 동기화 생략")
         return
 

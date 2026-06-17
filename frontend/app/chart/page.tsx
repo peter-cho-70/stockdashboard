@@ -58,7 +58,18 @@ import {
   type WatchlistItem,
   type PriceTarget,
   type PriceTargetSearchArticle,
+  type KisSupplyCheck,
+  type HoldingsAnalysis,
 } from "@/lib/api";
+import {
+  krDirectionBorderPanel,
+  krDirectionTextClass,
+  krSignedBoldClass,
+  KR_UP_HEX,
+  KR_DOWN_HEX,
+  KR_UP_HEX_STRONG,
+  KR_DOWN_HEX_STRONG,
+} from "@/lib/krMarketColors";
 import { streamAnalyze, AnalyzeStreamError } from "@/lib/analyzeStream";
 import {
   analyzeChart,
@@ -75,6 +86,12 @@ import {
   type SavedMoveCause,
 } from "@/lib/chartAnalysis";
 import { ChartAnalysisPanel } from "@/components/chart-analysis-panel";
+import { HoldingsAnalysisPanel } from "@/components/holdings-analysis-panel";
+import { ensureStockForChart } from "@/lib/ensureStock";
+
+function isKrStockSymbol(symbol: string | null | undefined): boolean {
+  return !!symbol && /^\d{6}$/.test(symbol);
+}
 
 type Period = "1M" | "3M" | "6M" | "1Y";
 
@@ -145,12 +162,8 @@ function ChartTooltip({
         </div>
       )}
       {ev && (
-        <div className={`mt-2 rounded-md border p-2 ${
-          ev.direction === "up"
-            ? "border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20"
-            : "border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20"
-        }`}>
-          <p className={`font-semibold ${ev.direction === "up" ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"}`}>
+        <div className={`mt-2 rounded-md border p-2 ${krDirectionBorderPanel(ev.direction)}`}>
+          <p className={`font-semibold ${krDirectionTextClass(ev.direction)}`}>
             {ev.changePct >= 0 ? "+" : ""}{ev.changePct.toFixed(1)}% {ev.direction === "up" ? "급등" : "급락"}
             {ev.matchedIssue && " · AI 연결"}
           </p>
@@ -177,8 +190,9 @@ interface ChartMemoMarker {
   body: string;
 }
 
-/** 차트에 표시할 목표가: 최근 1개월 + 동일 가격은 최신 1건만 */
+/** 차트에 표시할 목표가: 최근 1개월 */
 const CHART_TARGET_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const CHART_TARGET_PREVIEW_LIMIT = 5;
 
 function targetEffectiveDate(t: PriceTarget): number {
   const raw = t.report_date || t.fetched_at;
@@ -191,17 +205,36 @@ function isTargetShownOnChart(t: PriceTarget): boolean {
   return Date.now() - targetEffectiveDate(t) <= CHART_TARGET_MAX_AGE_MS;
 }
 
-function pickTargetsForChart(targets: PriceTarget[]): PriceTarget[] {
-  const byPrice = new Map<number, PriceTarget>();
-  for (const t of targets) {
-    if (!isTargetShownOnChart(t)) continue;
-    const priceKey = Math.round(t.target_price);
-    const prev = byPrice.get(priceKey);
-    if (!prev || targetEffectiveDate(t) > targetEffectiveDate(prev)) {
-      byPrice.set(priceKey, t);
-    }
-  }
-  return Array.from(byPrice.values()).sort((a, b) => b.target_price - a.target_price);
+function pickAllChartTargets(targets: PriceTarget[]): PriceTarget[] {
+  return targets
+    .filter(isTargetShownOnChart)
+    .sort((a, b) => targetEffectiveDate(b) - targetEffectiveDate(a));
+}
+
+function pickPreviewChartTargets(targets: PriceTarget[]): PriceTarget[] {
+  return pickAllChartTargets(targets).slice(0, CHART_TARGET_PREVIEW_LIMIT);
+}
+
+function buildAnalystTargetLines(
+  targets: PriceTarget[],
+  enabled: boolean,
+): { id: string; price: number; label: string; color: string; isConsensus?: boolean }[] {
+  if (!enabled) return [];
+  let idx = 0;
+  return targets.map((t) => {
+    const color = analystTargetColor(idx, t.is_consensus);
+    if (!t.is_consensus) idx += 1;
+    const label = t.is_consensus
+      ? `컨센서스 ${t.target_price.toLocaleString("ko-KR")}`
+      : `${t.source} ${t.target_price.toLocaleString("ko-KR")}`;
+    return {
+      id: `analyst-target-${t.id}`,
+      price: t.target_price,
+      label,
+      color,
+      isConsensus: t.is_consensus,
+    };
+  });
 }
 
 interface PriceChartProps {
@@ -234,7 +267,7 @@ function CrossDot(props: {
 }) {
   const { cx, cy, payload } = props;
   if (cx == null || cy == null || !payload?.crossMarker) return null;
-  const color = payload.crossMarker === "gc" ? "#10b981" : "#ef4444";
+  const color = payload.crossMarker === "gc" ? KR_UP_HEX : KR_DOWN_HEX;
   const label = payload.crossMarker === "gc" ? "▲" : "▼";
   return (
     <g>
@@ -582,7 +615,7 @@ function PriceChart({
                 let opacity = 0.7;
                 if (analysisMode && annotationLayers.volume) {
                   if (entry.volSpike) {
-                    fill = entry.close >= (plotData[index - 1]?.close ?? entry.close) ? "#3b82f6" : "#ef4444";
+                    fill = entry.close >= (plotData[index - 1]?.close ?? entry.close) ? KR_UP_HEX : KR_DOWN_HEX;
                     opacity = emphasizeVolume || !activeSignalId ? 1 : 0.95;
                   } else if (emphasizeVolume) {
                     opacity = 0.25;
@@ -603,11 +636,11 @@ function PriceChart({
             { color: "#10b981", label: "지지선" },
             { color: "#f97316", label: "저항선" },
             { color: "#3b82f6", label: "눌림목 구간" },
-            { color: "#10b981", label: "▲ 골든크로스" },
-            { color: "#ef4444", label: "▼ 데드크로스" },
+            { color: KR_UP_HEX, label: "▲ 골든크로스" },
+            { color: KR_DOWN_HEX, label: "▼ 데드크로스" },
             { color: "#3b82f6", label: "거래량 급증" },
-            { color: "#059669", label: "▲ 급등 (AI)" },
-            { color: "#dc2626", label: "▼ 급락 (AI)" },
+            { color: KR_UP_HEX_STRONG, label: "▲ 급등 (AI)" },
+            { color: KR_DOWN_HEX_STRONG, label: "▼ 급락 (AI)" },
           ].map(({ color, label }) => (
             <span
               key={label}
@@ -622,8 +655,8 @@ function PriceChart({
       {!analysisMode && showEvents && visibleEvents.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {[
-            { color: "#059669", label: "▲ 급등" },
-            { color: "#dc2626", label: "▼ 급락" },
+            { color: KR_UP_HEX_STRONG, label: "▲ 급등" },
+            { color: KR_DOWN_HEX_STRONG, label: "▼ 급락" },
             { color: "#fbbf24", label: "선택 강조" },
           ].map(({ color, label }) => (
             <span
@@ -885,9 +918,7 @@ function PriceEventsPanel({
           >
             <div className="flex items-center gap-2 mb-1">
               <span
-                className={`text-xs font-bold ${
-                  m.direction === "up" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
-                }`}
+                className={`text-xs font-bold ${krDirectionTextClass(m.direction)}`}
               >
                 {m.date.slice(5)} {m.changePct >= 0 ? "+" : ""}{m.changePct.toFixed(1)}%
               </span>
@@ -1151,6 +1182,10 @@ function ChartContent() {
   const [showAnalystTargets, setShowAnalystTargets] = useState(true);
   const [targetDisclaimer, setTargetDisclaimer] = useState<string | null>(null);
   const [targetSearchArticles, setTargetSearchArticles] = useState<PriceTargetSearchArticle[]>([]);
+  const [kisSupplyCheck, setKisSupplyCheck] = useState<KisSupplyCheck | null>(null);
+  const [holdingsAnalysis, setHoldingsAnalysis] = useState<HoldingsAnalysis | null>(null);
+  const [holdingsAnalysisLoading, setHoldingsAnalysisLoading] = useState(false);
+  const [holdingsAnalysisError, setHoldingsAnalysisError] = useState<string | null>(null);
   const [chartExpanded, setChartExpanded] = useState(false);
 
   const fetchPeriod = analysisMode ? "6M" : period;
@@ -1177,29 +1212,65 @@ function ChartContent() {
     setTargetSearchArticles([]);
   }, [loadPriceTargets]);
 
-  const chartPriceTargets = useMemo(
-    () => pickTargetsForChart(priceTargets),
+  const loadKisSupplyCheck = useCallback(async () => {
+    if (!selectedSymbol || !isKrStockSymbol(selectedSymbol) || !analysisMode) {
+      setKisSupplyCheck(null);
+      return;
+    }
+    try {
+      const info = await marketApi.getKisInvestInfo(selectedSymbol);
+      setKisSupplyCheck(info.supply_check);
+    } catch {
+      setKisSupplyCheck(null);
+    }
+  }, [selectedSymbol, analysisMode]);
+
+  useEffect(() => {
+    loadKisSupplyCheck();
+  }, [loadKisSupplyCheck]);
+
+  const loadHoldingsAnalysis = useCallback(async () => {
+    if (!selectedSymbol || !analysisMode || !isKrStockSymbol(selectedSymbol)) {
+      setHoldingsAnalysis(null);
+      setHoldingsAnalysisError(null);
+      return;
+    }
+    setHoldingsAnalysisLoading(true);
+    setHoldingsAnalysisError(null);
+    try {
+      const data = await marketApi.getHoldingsAnalysis(selectedSymbol);
+      setHoldingsAnalysis(data);
+    } catch (e) {
+      setHoldingsAnalysis(null);
+      setHoldingsAnalysisError(e instanceof Error ? e.message : "종목 기초정보 조회 실패");
+    } finally {
+      setHoldingsAnalysisLoading(false);
+    }
+  }, [selectedSymbol, analysisMode]);
+
+  useEffect(() => {
+    loadHoldingsAnalysis();
+  }, [loadHoldingsAnalysis]);
+
+  const allChartPriceTargets = useMemo(
+    () => pickAllChartTargets(priceTargets),
     [priceTargets],
   );
 
-  const analystTargetLines = useMemo(() => {
-    if (!showAnalystTargets) return [];
-    let idx = 0;
-    return chartPriceTargets.map((t) => {
-      const color = analystTargetColor(idx, t.is_consensus);
-      if (!t.is_consensus) idx += 1;
-      const label = t.is_consensus
-        ? `컨센서스 ${t.target_price.toLocaleString("ko-KR")}`
-        : `${t.source} ${t.target_price.toLocaleString("ko-KR")}`;
-      return {
-        id: `analyst-target-${t.id}`,
-        price: t.target_price,
-        label,
-        color,
-        isConsensus: t.is_consensus,
-      };
-    });
-  }, [chartPriceTargets, showAnalystTargets]);
+  const previewChartPriceTargets = useMemo(
+    () => pickPreviewChartTargets(priceTargets),
+    [priceTargets],
+  );
+
+  const analystTargetLinesPreview = useMemo(
+    () => buildAnalystTargetLines(previewChartPriceTargets, showAnalystTargets),
+    [previewChartPriceTargets, showAnalystTargets],
+  );
+
+  const analystTargetLinesAll = useMemo(
+    () => buildAnalystTargetLines(allChartPriceTargets, showAnalystTargets),
+    [allChartPriceTargets, showAnalystTargets],
+  );
 
   useEffect(() => {
     if (!chartExpanded) return;
@@ -1213,7 +1284,9 @@ function ChartContent() {
   const baseChartHeight = analysisMode ? 280 : 320;
   const expandedChartHeight = analysisMode ? 480 : 560;
   const showTargetsOnExpanded =
-    showAnalystTargets && chartPriceTargets.length > 0;
+    showAnalystTargets && allChartPriceTargets.length > 0;
+  const hasMoreTargetsThanPreview =
+    allChartPriceTargets.length > previewChartPriceTargets.length;
 
   async function handleFetchPriceTargets() {
     if (!selectedSymbol) return;
@@ -1225,6 +1298,26 @@ function ChartContent() {
       setTargetSearchArticles(res.search_articles ?? []);
     } catch (e) {
       alert(e instanceof Error ? e.message : "목표가 검색 실패");
+    } finally {
+      setTargetsFetching(false);
+    }
+  }
+
+  async function handleFetchKisPriceTargets() {
+    if (!selectedSymbol) return;
+    setTargetsFetching(true);
+    try {
+      const res = await marketApi.fetchKisPriceTargets(selectedSymbol);
+      setPriceTargets(res.targets);
+      setTargetDisclaimer(res.disclaimer);
+      setTargetSearchArticles([]);
+      if (res.kis_invest_info?.supply_check) {
+        setKisSupplyCheck(res.kis_invest_info.supply_check);
+      } else {
+        await loadKisSupplyCheck();
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "한투 투자의견 조회 실패");
     } finally {
       setTargetsFetching(false);
     }
@@ -1281,21 +1374,32 @@ function ChartContent() {
       const savedSymbol =
         typeof window !== "undefined" ? localStorage.getItem(CHART_SYMBOL_STORAGE) : null;
 
+      let ensuredPreview: StockItem | null = null;
       if (urlSymbol && !combined.some((s) => s.symbol === urlSymbol)) {
+        try {
+          ensuredPreview = await ensureStockForChart(urlSymbol);
+        } catch {
+          ensuredPreview = null;
+        }
+      }
+
+      if (urlSymbol && !combined.some((s) => s.symbol === urlSymbol)) {
+        const preview = ensuredPreview;
         combined.unshift({
-          id: 0,
+          id: preview?.id ?? 0,
           symbol: urlSymbol,
-          name: urlSymbol,
-          market: "KRX",
-          sector: null,
-          currency: "KRW",
-          qty: 0,
-          avg_price: 0,
-          current_price: 0,
-          change_rate: 0,
-          profit_rate: 0,
-          memo: null,
-          last_synced_at: null,
+          name: preview?.name ?? urlSymbol,
+          market: preview?.market ?? "KRX",
+          sector: preview?.sector ?? null,
+          currency: preview?.currency ?? "KRW",
+          qty: preview?.qty ?? 0,
+          avg_price: preview?.avg_price ?? 0,
+          current_price: preview?.current_price ?? 0,
+          change_rate: preview?.change_rate ?? 0,
+          profit_rate: preview?.profit_rate ?? 0,
+          memo: preview?.memo ?? null,
+          position_source: preview?.position_source,
+          last_synced_at: preview?.last_synced_at ?? null,
         });
       }
 
@@ -1642,9 +1746,10 @@ function ChartContent() {
     return analyzeChart(
       chartData.data,
       chartData.avg_price,
-      chartData.current_price
+      chartData.current_price,
+      kisSupplyCheck
     );
-  }, [chartData]);
+  }, [chartData, kisSupplyCheck]);
 
   const statsData = analysisMode ? displayPlotData : fullPlotData;
   const prices = statsData.map((d) => d.close).filter(Boolean);
@@ -1783,13 +1888,7 @@ function ChartContent() {
           <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
             <div className="text-xs text-neutral-400">차익액</div>
             {hasHoldings ? (
-              <div
-                className={`mt-1 flex items-center gap-1 text-base font-bold ${
-                  pnlAmount >= 0
-                    ? "text-emerald-600 dark:text-emerald-400"
-                    : "text-red-600 dark:text-red-400"
-                }`}
-              >
+              <div className={`mt-1 flex items-center gap-1 text-base font-bold ${krSignedBoldClass(pnlAmount)}`}>
                 {pnlAmount >= 0 ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
                 {pnlAmount >= 0 ? "+" : "-"}
                 {fmtMoney(Math.abs(pnlAmount), displayCurrency)}
@@ -1800,7 +1899,7 @@ function ChartContent() {
           </div>
           <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
             <div className="text-xs text-neutral-400">보유 수익률</div>
-            <div className={`mt-1 flex items-center gap-1 text-base font-bold ${displayProfitRate >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+            <div className={`mt-1 flex items-center gap-1 text-base font-bold ${krSignedBoldClass(displayProfitRate)}`}>
               {displayProfitRate >= 0 ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
               {displayProfitRate >= 0 ? "+" : ""}{displayProfitRate.toFixed(2)}%
             </div>
@@ -1809,7 +1908,7 @@ function ChartContent() {
             <div className="text-xs text-neutral-400">
               {analysisMode ? "1개월" : PERIODS.find(p => p.id === period)?.label} 수익률
             </div>
-            <div className={`mt-1 flex items-center gap-1 text-base font-bold ${periodReturn >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+            <div className={`mt-1 flex items-center gap-1 text-base font-bold ${krSignedBoldClass(periodReturn)}`}>
               {periodReturn >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
               {periodReturn >= 0 ? "+" : ""}{periodReturn.toFixed(2)}%
             </div>
@@ -1947,6 +2046,22 @@ function ChartContent() {
                 )}
                 목표가 검색
               </button>
+              {isKrStockSymbol(selectedSymbol) && (
+                <button
+                  type="button"
+                  onClick={handleFetchKisPriceTargets}
+                  disabled={!selectedSymbol || targetsFetching}
+                  className="flex items-center gap-1 rounded-full px-2.5 py-1 font-medium border border-blue-300 text-blue-700 bg-blue-50 dark:border-blue-800 dark:text-blue-300 dark:bg-blue-950/40 disabled:opacity-50"
+                  title="한국투자증권 HTS 투자의견·목표가"
+                >
+                  {targetsFetching ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <BarChart3 size={12} />
+                  )}
+                  한투 투자의견
+                </button>
+              )}
               {priceTargets.length > 0 && (
                 <button
                   type="button"
@@ -1957,7 +2072,12 @@ function ChartContent() {
                       : "border-[var(--border-subtle)] text-neutral-400"
                   }`}
                 >
-                  목표가 {chartPriceTargets.length}/{priceTargets.length}
+                  목표가 {previewChartPriceTargets.length}
+                  {hasMoreTargetsThanPreview
+                    ? `/${allChartPriceTargets.length}`
+                    : priceTargets.length > allChartPriceTargets.length
+                      ? `/${priceTargets.length}`
+                      : ""}
                 </button>
               )}
               <button
@@ -1965,11 +2085,11 @@ function ChartContent() {
                 onClick={() => setShowPriceEvents((v) => !v)}
                 className={`flex items-center gap-1 rounded-full px-2.5 py-1 font-medium transition-colors border ${
                   showPriceEvents
-                    ? "border-emerald-600 bg-emerald-600 text-white"
+                    ? "border-red-600 bg-red-600 text-white"
                     : "border-[var(--border-subtle)] text-neutral-400"
                 }`}
               >
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                <span className="h-2 w-2 rounded-full bg-red-400" />
                 급등·급락
               </button>
               {maToggles.map(({ key, label, color }) => (
@@ -2045,7 +2165,7 @@ function ChartContent() {
                   summary: s.summary,
                 }))}
                 targetBuyPrice={selectedWatchlist?.target_buy_price ?? null}
-                analystTargets={analystTargetLines}
+                analystTargets={analystTargetLinesPreview}
                 includeTargetsInYDomain={false}
               />
             </div>
@@ -2064,16 +2184,11 @@ function ChartContent() {
               )}
 
               {priceTargets.length > 0 && (
+                <>
                 <ul className="space-y-2">
-                  {priceTargets.map((t, i) => {
-                    const onChart = chartPriceTargets.some((c) => c.id === t.id);
+                  {previewChartPriceTargets.map((t, i) => {
+                    const onChart = true;
                     const stale = !isTargetShownOnChart(t);
-                    const dupHidden =
-                      !stale &&
-                      !onChart &&
-                      chartPriceTargets.some(
-                        (c) => Math.round(c.target_price) === Math.round(t.target_price),
-                      );
                     return (
                     <li
                       key={t.id}
@@ -2100,9 +2215,6 @@ function ChartContent() {
                           )}
                           {stale && (
                             <span className="text-[9px] text-neutral-400">차트 제외 · 1개월 초과</span>
-                          )}
-                          {dupHidden && (
-                            <span className="text-[9px] text-neutral-400">차트 제외 · 동일가 중복</span>
                           )}
                         </div>
                         {t.source_url && (
@@ -2131,6 +2243,20 @@ function ChartContent() {
                     );
                   })}
                 </ul>
+                {hasMoreTargetsThanPreview && (
+                  <p className="text-[10px] text-neutral-500">
+                    최신 {CHART_TARGET_PREVIEW_LIMIT}건만 표시 · 증권사 목표가 {allChartPriceTargets.length}건은{" "}
+                    <button
+                      type="button"
+                      className="text-violet-600 dark:text-violet-400 hover:underline font-medium"
+                      onClick={() => setChartExpanded(true)}
+                    >
+                      차트 확장
+                    </button>
+                    에서 전체 확인
+                  </p>
+                )}
+                </>
               )}
 
               {targetSearchArticles.length > 0 && (
@@ -2174,14 +2300,28 @@ function ChartContent() {
           )}
         </div>
 
-        {analysisMode && analysisResult && chartData && (
-          <div className="lg:col-span-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4 overflow-y-auto max-h-[720px]">
-            <ChartAnalysisPanel
-              analysis={analysisResult}
-              stockName={chartData.name}
-              activeSignalId={activeSignalId}
-              onSignalSelect={setActiveSignalId}
-            />
+        {analysisMode && chartData && isKrStockSymbol(selectedSymbol) && (
+          <div className="lg:col-span-2 space-y-4 overflow-y-auto max-h-[720px]">
+            <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
+              <h3 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200 mb-3">
+                {hasHoldings ? "보유 종목 · 종목 기초정보" : "종목 기초정보"}
+              </h3>
+              <HoldingsAnalysisPanel
+                data={holdingsAnalysis}
+                loading={holdingsAnalysisLoading}
+                error={holdingsAnalysisError}
+              />
+            </div>
+            {analysisResult && (
+              <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
+                <ChartAnalysisPanel
+                  analysis={analysisResult}
+                  stockName={chartData.name}
+                  activeSignalId={activeSignalId}
+                  onSignalSelect={setActiveSignalId}
+                />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -2446,9 +2586,7 @@ function ChartContent() {
                     className={`text-xs ${
                       isSelected
                         ? "text-white/90"
-                        : s.profit_rate >= 0
-                          ? "text-emerald-600 dark:text-emerald-400"
-                          : "text-red-500 dark:text-red-400"
+                        : krSignedBoldClass(s.profit_rate)
                     }`}
                   >
                     {s.profit_rate >= 0 ? "+" : ""}
@@ -2484,8 +2622,8 @@ function ChartContent() {
                 </h3>
                 <p className="text-[11px] text-neutral-500 mt-0.5">
                   {showTargetsOnExpanded
-                    ? "주가 + 목표가·희망가 전체 구간"
-                    : "주가 구간 중심 (목표가 표시 시 전체 구간 포함)"}
+                    ? `증권사 목표가 ${allChartPriceTargets.length}건 전체 · 주가+목표가 구간`
+                    : "주가 구간 중심 (확대 시 증권사 목표가 전체 표시)"}
                 </p>
               </div>
               <button
@@ -2520,7 +2658,7 @@ function ChartContent() {
                   summary: s.summary,
                 }))}
                 targetBuyPrice={selectedWatchlist?.target_buy_price ?? null}
-                analystTargets={analystTargetLines}
+                analystTargets={analystTargetLinesAll}
                 includeTargetsInYDomain={showTargetsOnExpanded}
               />
             </div>

@@ -3,31 +3,21 @@
 import Link from "next/link";
 import { BarChart, Bell, Wallet } from "lucide-react";
 import type { PortfolioSummary } from "@/lib/api";
+import { krChangeClass } from "@/lib/krMarketColors";
 
 function RateTag({ rate }: { rate: number }) {
-  const up = rate > 0;
-  const down = rate < 0;
   return (
-    <span
-      className={`text-[10px] font-medium tabular-nums ${
-        up
-          ? "text-emerald-600 dark:text-emerald-400"
-          : down
-            ? "text-red-600 dark:text-red-400"
-            : "text-neutral-400"
-      }`}
-    >
-      {up ? "+" : ""}
+    <span className={`text-[10px] font-medium tabular-nums ${krChangeClass(rate)}`}>
+      {rate > 0 ? "+" : ""}
       {rate.toFixed(2)}%
     </span>
   );
 }
 
-
 export function HoldingsMiniCard({ summary }: { summary: PortfolioSummary | null }) {
   if (!summary || summary.stock_count === 0) {
     return (
-      <div className="flex h-full min-h-[200px] flex-col rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] shadow-xs">
+      <div className="flex h-full min-h-[760px] flex-col rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] shadow-xs">
         <div className="border-b border-[var(--border-subtle)] px-3 py-2.5">
           <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">보유 종목</h2>
         </div>
@@ -42,10 +32,10 @@ export function HoldingsMiniCard({ summary }: { summary: PortfolioSummary | null
     );
   }
 
-  const stocks = summary.stocks;
+  const stocks = [...summary.stocks].sort((a, b) => b.change_rate - a.change_rate);
 
   return (
-    <div className="flex h-full flex-col rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] shadow-xs overflow-hidden">
+    <div className="flex h-full min-h-[760px] flex-col rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] shadow-xs overflow-hidden">
       <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2.5">
         <h2 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
           보유 종목
@@ -60,7 +50,7 @@ export function HoldingsMiniCard({ summary }: { summary: PortfolioSummary | null
           전체 →
         </Link>
       </div>
-      <div className="flex-1 divide-y divide-[var(--border-subtle)] overflow-y-auto max-h-[520px]">
+      <div className="flex-1 divide-y divide-[var(--border-subtle)] overflow-y-auto max-h-[760px]">
         {stocks.map((stock) => (
           <Link
             key={stock.symbol}

@@ -207,6 +207,41 @@ class KnowledgeDigest(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class StudyCard(Base):
+    """주식공부하기 — 유튜브/AI 분석에서 생성한 학습 카드"""
+    __tablename__ = "study_cards"
+
+    id = Column(Integer, primary_key=True, index=True)
+    content_id = Column(Integer, ForeignKey("intel_contents.id"), nullable=True, index=True)
+    lesson_id = Column(String(50), nullable=True, index=True)
+    title = Column(String(300), nullable=False)
+    summary = Column(Text, nullable=True)
+    body_markdown = Column(Text, nullable=True)
+    key_points = Column(Text, nullable=True)
+    study_topics = Column(Text, nullable=True)
+    quiz_items = Column(Text, nullable=True)
+    source_title = Column(String(300), nullable=True)
+    source_url = Column(String(500), nullable=True)
+    source_type = Column(String(20), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    content = relationship("IntelContent", backref="study_cards")
+
+
+class StudyLessonImage(Base):
+    """주식공부하기 — 레슨별 참고 이미지 (붙여넣기 업로드)"""
+    __tablename__ = "study_lesson_images"
+
+    id = Column(Integer, primary_key=True, index=True)
+    lesson_id = Column(String(50), nullable=False, index=True)
+    stored_name = Column(String(255), nullable=False)
+    original_name = Column(String(255), nullable=True)
+    mime_type = Column(String(80), default="image/png")
+    caption = Column(String(300), nullable=True)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
 # ─────────────────────────────────────────────
 # 인텔리전스 콘텐츠 (Phase 2)
 # ─────────────────────────────────────────────

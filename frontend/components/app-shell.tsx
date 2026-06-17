@@ -20,6 +20,7 @@ const menuGroups = [
     links: [
       { href: "/intelligence", label: "AI 분석" },
       { href: "/knowledge", label: "지식 허브" },
+      { href: "/learn", label: "주식공부하기" },
       { href: "/watchlist", label: "관심 종목" },
       { href: "/alerts", label: "알림" },
     ],

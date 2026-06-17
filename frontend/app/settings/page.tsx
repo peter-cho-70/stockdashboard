@@ -410,6 +410,7 @@ export default function SettingsPage() {
       {/* KIS API 설정 */}
       <Section title="한국투자증권 (KIS) API" icon={<KeyRound size={15} />}>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
+          계좌마다 App Key / Secret이 다릅니다.{" "}
           <a
             href="https://apiportal.koreainvestment.com"
             target="_blank"
@@ -418,13 +419,17 @@ export default function SettingsPage() {
           >
             apiportal.koreainvestment.com
           </a>
-          에서 App Key / App Secret을 발급받고, 백엔드 폴더의{" "}
-          <code className="rounded bg-neutral-100 px-1 py-0.5 text-xs dark:bg-neutral-800">.env</code> 파일에 입력하세요.
+          에서 계좌별로 발급받고, 백엔드{" "}
+          <code className="rounded bg-neutral-100 px-1 py-0.5 text-xs dark:bg-neutral-800">.env</code>에 입력하세요.
         </p>
         <div className="rounded-md bg-[var(--surface-elevated)] p-3 font-mono text-xs text-neutral-600 dark:text-neutral-400 space-y-0.5">
+          <p className="text-neutral-500 dark:text-neutral-500"># 단일 계좌</p>
           <p>KIS_APP_KEY=<span className="text-amber-600 dark:text-amber-400">your_app_key</span></p>
           <p>KIS_APP_SECRET=<span className="text-amber-600 dark:text-amber-400">your_app_secret</span></p>
           <p>KIS_ACCOUNT_NO=<span className="text-amber-600 dark:text-amber-400">12345678-01</span></p>
+          <p>KIS_HTS_ID=<span className="text-amber-600 dark:text-amber-400">your_hts_id</span>&nbsp;&nbsp;# HTS 로그인 ID (선택)</p>
+          <p className="pt-2 text-neutral-500 dark:text-neutral-500"># 복수 계좌 (계좌별 키 — 한 줄)</p>
+          <p>KIS_ACCOUNTS=<span className="text-amber-600 dark:text-amber-400">12345678-01|key1|secret1;12345678-22|key2|secret2</span></p>
           <p>KIS_IS_MOCK=<span className="text-amber-600 dark:text-amber-400">true</span>&nbsp;&nbsp;# 모의투자 / false=실전</p>
         </div>
         <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">

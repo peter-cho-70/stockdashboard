@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Loader2, RefreshCw, TrendingUp } from "lucide-react";
 import {
@@ -11,8 +10,14 @@ import {
 } from "@/lib/api";
 import { loadKrSnapshotCache, saveKrSnapshotCache } from "@/lib/marketCache";
 import { todayKst } from "@/lib/marketDisplay";
+import { krChangeClass, krChangeBgClass } from "@/lib/krMarketColors";
 import { MoverRow, SectionTitle } from "@/components/market-view-parts";
 import { KrIntradayChart } from "@/components/kr-intraday-chart";
+import { StockPreviewModal, type StockPreviewItem } from "@/components/stock-preview-modal";
+import {
+  GroupStocksModal,
+  type GroupPreviewTarget,
+} from "@/components/group-stocks-modal";
 
 function formatClose(item: UsMarketQuote): string {
   if (item.error || item.close == null) return "—";
@@ -25,11 +30,7 @@ function formatClose(item: UsMarketQuote): string {
 function ChangePct({ value }: { value?: number }) {
   const v = value ?? 0;
   return (
-    <p
-      className={`text-xs font-medium tabular-nums ${
-        v >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-500"
-      }`}
-    >
+    <p className={`text-xs font-medium tabular-nums ${krChangeClass(v)}`}>
       {v >= 0 ? "+" : ""}
       {v.toFixed(2)}%
     </p>
@@ -82,12 +83,12 @@ function BreadthBar({
     <div className="rounded-md border border-[var(--border-subtle)] px-3 py-2 space-y-2">
       <p className="text-[10px] font-medium text-neutral-500">{label}</p>
       <div className="flex h-1.5 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
-        <div className="bg-emerald-500" style={{ width: `${upPct}%` }} />
-        <div className="flex-1 bg-red-400" />
+        <div className={krChangeBgClass(1)} style={{ width: `${upPct}%` }} />
+        <div className={`flex-1 ${krChangeBgClass(-1)}`} />
       </div>
       <div className="flex justify-between text-[10px] text-neutral-500">
-        <span className="text-emerald-600">상승 {stats.advancers ?? "—"}</span>
-        <span className="text-red-500">하락 {stats.decliners ?? "—"}</span>
+        <span className="text-red-600 dark:text-red-400">상승 {stats.advancers ?? "—"}</span>
+        <span className="text-blue-600 dark:text-blue-400">하락 {stats.decliners ?? "—"}</span>
       </div>
       <div className="grid grid-cols-3 gap-1 text-[9px] text-neutral-400">
         <span>외국인 {fmtNet(stats.foreign_net_억)}</span>
@@ -103,12 +104,34 @@ function fmtNet(v?: number) {
   return `${v > 0 ? "+" : ""}${v.toLocaleString("ko-KR")}억`;
 }
 
-function SectorChip({ name, change_pct }: { name: string; change_pct: number }) {
-  return (
-    <div className="rounded-md border border-[var(--border-subtle)] px-2.5 py-2">
+function SectorChip({
+  name,
+  change_pct,
+  onSelect,
+}: {
+  name: string;
+  change_pct: number;
+  onSelect?: () => void;
+}) {
+  const inner = (
+    <>
       <p className="text-[10px] text-neutral-500 line-clamp-2 leading-tight min-h-[2rem]">{name}</p>
       <ChangePct value={change_pct} />
-    </div>
+    </>
+  );
+  if (onSelect) {
+    return (
+      <button
+        type="button"
+        onClick={onSelect}
+        className="rounded-md border border-[var(--border-subtle)] px-2.5 py-2 text-left transition-colors hover:bg-[var(--surface-elevated)] hover:border-neutral-300 dark:hover:border-neutral-600"
+      >
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <div className="rounded-md border border-[var(--border-subtle)] px-2.5 py-2">{inner}</div>
   );
 }
 
@@ -127,14 +150,24 @@ const RANK_TABS: { id: RankTab; label: string }[] = [
   { id: "institution", label: "기관" },
 ];
 
-function RankList({ items }: { items: KrMarketMover[] }) {
+function RankList({
+  items,
+  onSelect,
+}: {
+  items: KrMarketMover[];
+  onSelect?: (item: StockPreviewItem) => void;
+}) {
   if (!items.length) {
     return <p className="text-xs text-neutral-400 py-4 text-center">데이터 없음</p>;
   }
   return (
     <div className="grid gap-1 sm:grid-cols-2">
       {items.map((item) => (
-        <MoverRow key={`${item.symbol}-${item.market ?? ""}`} item={item} />
+        <MoverRow
+          key={`${item.symbol}-${item.market ?? ""}`}
+          item={item}
+          onSelect={onSelect}
+        />
       ))}
     </div>
   );
@@ -143,19 +176,21 @@ function RankList({ items }: { items: KrMarketMover[] }) {
 function InvestorList({
   buy,
   sell,
+  onSelect,
 }: {
   buy: KrMarketMover[];
   sell: KrMarketMover[];
+  onSelect?: (item: StockPreviewItem) => void;
 }) {
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <div>
-        <p className="text-[10px] font-medium text-emerald-600 mb-1.5">순매수 상위</p>
-        <RankList items={buy} />
+        <p className="text-[10px] font-medium text-red-600 dark:text-red-400 mb-1.5">순매수 상위</p>
+        <RankList items={buy} onSelect={onSelect} />
       </div>
       <div>
-        <p className="text-[10px] font-medium text-red-500 mb-1.5">순매도 상위</p>
-        <RankList items={sell} />
+        <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400 mb-1.5">순매도 상위</p>
+        <RankList items={sell} onSelect={onSelect} />
       </div>
     </div>
   );
@@ -170,6 +205,32 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [chartIndex, setChartIndex] = useState<"kospi" | "kosdaq">("kospi");
   const [rankTab, setRankTab] = useState<RankTab>("upper");
+  const [previewItem, setPreviewItem] = useState<StockPreviewItem | null>(null);
+  const [groupPreview, setGroupPreview] = useState<GroupPreviewTarget | null>(null);
+
+  const openGroup = useCallback(
+    (kind: "theme" | "industry", item: { name: string; change_pct: number; group_no?: string | null; theme_no?: string | null }) => {
+      const no = item.group_no || item.theme_no;
+      if (!no) return;
+      setGroupPreview({
+        kind,
+        name: item.name,
+        group_no: no,
+        change_pct: item.change_pct,
+      });
+    },
+    [],
+  );
+
+  const openPreview = useCallback((item: KrMarketMover) => {
+    setPreviewItem({
+      symbol: item.symbol,
+      name: item.name,
+      close: item.close,
+      change_pct: item.change_pct,
+      market: item.market,
+    });
+  }, []);
 
   const load = useCallback(async (force = false) => {
     if (!force && !snapshot) setLoading(true);
@@ -216,16 +277,17 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
   const rankContent = (() => {
     switch (rankTab) {
       case "upper":
-        return <RankList items={upperItems} />;
+        return <RankList items={upperItems} onSelect={openPreview} />;
       case "volume":
-        return <RankList items={volumeItems.slice(0, 12)} />;
+        return <RankList items={volumeItems.slice(0, 12)} onSelect={openPreview} />;
       case "gainers":
-        return <RankList items={snapshot?.movers?.hot_gainers ?? []} />;
+        return <RankList items={snapshot?.movers?.hot_gainers ?? []} onSelect={openPreview} />;
       case "foreign":
         return (
           <InvestorList
             buy={snapshot?.investor_flow?.foreign?.buy ?? []}
             sell={snapshot?.investor_flow?.foreign?.sell ?? []}
+            onSelect={openPreview}
           />
         );
       case "institution":
@@ -233,6 +295,7 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
           <InvestorList
             buy={snapshot?.investor_flow?.institution?.buy ?? []}
             sell={snapshot?.investor_flow?.institution?.sell ?? []}
+            onSelect={openPreview}
           />
         );
       default:
@@ -241,6 +304,7 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
   })();
 
   return (
+    <>
     <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] shadow-xs">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -315,10 +379,18 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
               <SectionTitle>인기 검색 종목</SectionTitle>
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {snapshot.popular_search.map((item) => (
-                  <Link
+                  <button
                     key={item.symbol}
-                    href={`/chart?symbol=${item.symbol}`}
-                    className="shrink-0 rounded-md border border-[var(--border-subtle)] px-3 py-2 min-w-[120px] hover:bg-[var(--surface-elevated)]"
+                    type="button"
+                    onClick={() =>
+                      openPreview({
+                        symbol: item.symbol,
+                        name: item.name,
+                        close: item.close,
+                        change_pct: 0,
+                      })
+                    }
+                    className="shrink-0 rounded-md border border-[var(--border-subtle)] px-3 py-2 min-w-[120px] text-left hover:bg-[var(--surface-elevated)]"
                   >
                     <p className="text-[10px] text-neutral-400">#{item.rank}</p>
                     <p className="text-xs font-medium truncate">{item.name}</p>
@@ -327,7 +399,7 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
                         {item.close.toLocaleString("ko-KR")}
                       </p>
                     )}
-                  </Link>
+                  </button>
                 ))}
               </div>
             </section>
@@ -349,7 +421,12 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
                 <SectionTitle>업종별 (상승률 상위)</SectionTitle>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {snapshot.industries.map((s) => (
-                    <SectorChip key={s.name} name={s.name} change_pct={s.change_pct} />
+                    <SectorChip
+                      key={s.name}
+                      name={s.name}
+                      change_pct={s.change_pct}
+                      onSelect={() => openGroup("industry", s)}
+                    />
                   ))}
                 </div>
               </section>
@@ -359,7 +436,12 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
                 <SectionTitle>테마별 (상승률 상위)</SectionTitle>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {snapshot.sectors.map((s) => (
-                    <SectorChip key={s.name} name={s.name} change_pct={s.change_pct} />
+                    <SectorChip
+                      key={s.name}
+                      name={s.name}
+                      change_pct={s.change_pct}
+                      onSelect={() => openGroup("theme", s)}
+                    />
                   ))}
                 </div>
               </section>
@@ -395,5 +477,8 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
         </div>
       ) : null}
     </div>
+    <StockPreviewModal item={previewItem} onClose={() => setPreviewItem(null)} />
+    <GroupStocksModal group={groupPreview} onClose={() => setGroupPreview(null)} />
+    </>
   );
 }
