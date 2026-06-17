@@ -4,11 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, ImagePlus, Loader2, Trash2, X } from "lucide-react";
 import { studyApi, type StudyLessonImage } from "@/lib/studyApi";
 
-const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(/\/api\/?$/, "");
-
 function imageSrc(url: string): string {
   if (url.startsWith("http")) return url;
-  return `${API_ORIGIN}${url}`;
+  const origin =
+    typeof window !== "undefined"
+      ? window.location.origin
+      : (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api").replace(
+          /\/api\/?$/,
+          "",
+        ) || "http://localhost:8000";
+  return `${origin}${url}`;
 }
 
 interface LessonImagePastePanelProps {

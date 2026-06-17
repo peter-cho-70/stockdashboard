@@ -16,6 +16,48 @@ from core.kis_client import KISClient, BalanceItem, fetch_merged_balance_from_se
 logger = logging.getLogger(__name__)
 
 
+def resolve_prev_close(
+    *,
+    prev_close: float,
+    current_price: float,
+    change_rate: float,
+    fallback_prev: float = 0,
+) -> float:
+    """전일 종가 — API 값 우선, 없으면 등락률로 역산."""
+    if prev_close > 0:
+        return prev_close
+    if current_price > 0 and change_rate != 0:
+        return current_price / (1 + change_rate / 100.0)
+    if fallback_prev > 0:
+        return fallback_prev
+    return 0.0
+
+
+def format_price_alert_message(
+    *,
+    name: str,
+    symbol: str,
+    change_rate: float,
+    prev_close: float,
+    current_price: float,
+    currency: str,
+) -> str:
+    direction = "🚀 급등" if change_rate > 0 else "🔻 급락"
+    unit = "원" if currency == "KRW" else currency
+    if prev_close > 0:
+        change_amount = current_price - prev_close
+        price_part = (
+            f"{prev_close:,.0f} → {current_price:,.0f}{unit} "
+            f"({change_amount:+,.0f}{unit})"
+        )
+    else:
+        price_part = f"{current_price:,.0f}{unit}"
+    return (
+        f"{direction} [{name}({symbol})] "
+        f"전일 대비 {change_rate:+.2f}% ({price_part})"
+    )
+
+
 class PortfolioManager:
     """
     포트폴리오 관리자
@@ -130,24 +172,29 @@ class PortfolioManager:
             if not price_data:
                 continue
 
-            # 전일 대비 등락률 계산
-            prev_price = stock.current_price  # 갱신 전 가격 = 전일 종가
             new_price = price_data.current_price
             change_rate = price_data.change_rate
+            prev_close = resolve_prev_close(
+                prev_close=price_data.prev_price,
+                current_price=new_price,
+                change_rate=change_rate,
+                fallback_prev=stock.prev_price if stock.prev_price > 0 else 0,
+            )
 
-            # DB 갱신
-            stock.prev_price = prev_price
+            stock.prev_price = prev_close if prev_close > 0 else stock.prev_price
             stock.current_price = new_price
             stock.change_rate = change_rate
             stock.updated_at = datetime.utcnow()
 
             # 5% 이상 변동 감지
             if abs(change_rate) >= threshold:
-                direction = "🚀 급등" if change_rate > 0 else "🔻 급락"
-                alert_msg = (
-                    f"{direction} [{stock.name}({stock.symbol})] "
-                    f"전일 대비 {change_rate:+.2f}% "
-                    f"({prev_price:,.0f} → {new_price:,.0f} {stock.currency})"
+                alert_msg = format_price_alert_message(
+                    name=stock.name,
+                    symbol=stock.symbol,
+                    change_rate=change_rate,
+                    prev_close=prev_close,
+                    current_price=new_price,
+                    currency=stock.currency or "KRW",
                 )
                 alert_type = "PRICE_SURGE" if change_rate > 0 else "PRICE_DROP"
 

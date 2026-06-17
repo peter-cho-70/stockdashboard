@@ -207,12 +207,25 @@ class KnowledgeDigest(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class StudyCategory(Base):
+    """주식공부하기 — 사용자 정의 카테고리"""
+    __tablename__ = "study_categories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=True)
+    sort_order = Column(Integer, default=0)
+    is_default = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
 class StudyCard(Base):
     """주식공부하기 — 유튜브/AI 분석에서 생성한 학습 카드"""
     __tablename__ = "study_cards"
 
     id = Column(Integer, primary_key=True, index=True)
     content_id = Column(Integer, ForeignKey("intel_contents.id"), nullable=True, index=True)
+    category_id = Column(Integer, ForeignKey("study_categories.id"), nullable=True, index=True)
     lesson_id = Column(String(50), nullable=True, index=True)
     title = Column(String(300), nullable=False)
     summary = Column(Text, nullable=True)
@@ -223,9 +236,16 @@ class StudyCard(Base):
     source_title = Column(String(300), nullable=True)
     source_url = Column(String(500), nullable=True)
     source_type = Column(String(20), nullable=True)
+    thumbnail = Column(String(500), nullable=True)
+    origin = Column(String(20), default="ai")
+    sort_order = Column(Integer, default=0)
+    user_note = Column(Text, nullable=True)
+    analysis_status = Column(String(20), default="none")
+    simple_analysis = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     content = relationship("IntelContent", backref="study_cards")
+    category = relationship("StudyCategory", backref="cards")
 
 
 class StudyLessonImage(Base):
@@ -238,6 +258,21 @@ class StudyLessonImage(Base):
     original_name = Column(String(255), nullable=True)
     mime_type = Column(String(80), default="image/png")
     caption = Column(String(300), nullable=True)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class StudyLessonLink(Base):
+    """주식공부하기 — 레슨별 참고 유튜브 링크"""
+    __tablename__ = "study_lesson_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    lesson_id = Column(String(50), nullable=False, index=True)
+    video_id = Column(String(20), nullable=False, index=True)
+    url = Column(String(500), nullable=False)
+    title = Column(String(300), nullable=False)
+    channel_name = Column(String(200), nullable=True)
+    thumbnail = Column(String(500), nullable=True)
     sort_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
@@ -843,6 +878,26 @@ def _migrate_price_target_columns():
                 pass
 
 
+def _migrate_study_library_columns():
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        for col, typ in (
+            ("category_id", "INTEGER"),
+            ("thumbnail", "VARCHAR(500)"),
+            ("origin", "VARCHAR(20) DEFAULT 'ai'"),
+            ("sort_order", "INTEGER DEFAULT 0"),
+            ("user_note", "TEXT"),
+            ("analysis_status", "VARCHAR(20) DEFAULT 'none'"),
+            ("simple_analysis", "TEXT"),
+        ):
+            try:
+                conn.execute(text(f"ALTER TABLE study_cards ADD COLUMN {col} {typ}"))
+                conn.commit()
+            except Exception:
+                pass
+
+
 def init_db():
     """테이블 생성"""
     Base.metadata.create_all(bind=engine)
@@ -855,6 +910,7 @@ def init_db():
     _migrate_knowledge_hub()
     _migrate_price_target_columns()
     _migrate_user_highlights_column()
+    _migrate_study_library_columns()
     print("✅ 데이터베이스 초기화 완료")
 
 

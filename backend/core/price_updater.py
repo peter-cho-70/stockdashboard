@@ -9,6 +9,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from config.database import Stock, PriceHistory, PortfolioSnapshot, AlertHistory
+from core.portfolio import format_price_alert_message, resolve_prev_close
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +104,17 @@ def update_prices_from_krx(db: Session, alert_threshold: float = 5.0) -> dict:
         new_price = p["current_price"]
         change_rate = p["change_rate"]
 
-        # 전일 대비 등락률이 없으면 직접 계산
-        if change_rate == 0 and prev_price > 0:
-            change_rate = (new_price - prev_price) / prev_price * 100
+        prev_close = resolve_prev_close(
+            prev_close=0,
+            current_price=new_price,
+            change_rate=change_rate,
+            fallback_prev=stock.prev_price if stock.prev_price > 0 else prev_price,
+        )
 
-        stock.prev_price = prev_price
+        if change_rate == 0 and prev_close > 0 and new_price != prev_close:
+            change_rate = (new_price - prev_close) / prev_close * 100
+
+        stock.prev_price = prev_close if prev_close > 0 else prev_price
         stock.current_price = new_price
         stock.change_rate = change_rate
         stock.updated_at = datetime.utcnow()
@@ -115,11 +122,13 @@ def update_prices_from_krx(db: Session, alert_threshold: float = 5.0) -> dict:
 
         # 5% 이상 변동 감지
         if abs(change_rate) >= alert_threshold:
-            direction = "🚀 급등" if change_rate > 0 else "🔻 급락"
-            msg = (
-                f"{direction} [{stock.name}({stock.symbol})] "
-                f"전일대비 {change_rate:+.2f}% "
-                f"({prev_price:,.0f} → {new_price:,.0f}원)"
+            msg = format_price_alert_message(
+                name=stock.name,
+                symbol=stock.symbol,
+                change_rate=change_rate,
+                prev_close=prev_close,
+                current_price=new_price,
+                currency=stock.currency or "KRW",
             )
             alert = AlertHistory(
                 stock_symbol=stock.symbol,

@@ -115,7 +115,7 @@ export default function LearnPage() {
               내가 만든 학습 카드
             </h2>
             <Link href="/learn/cards" className="text-xs text-neutral-500 hover:text-emerald-600">
-              전체 보기
+              내 학습 서재
             </Link>
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
@@ -138,15 +138,20 @@ export default function LearnPage() {
         </div>
       </section>
 
-      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-4 text-xs text-neutral-500">
-        <p className="font-medium text-neutral-700 dark:text-neutral-300 mb-1">유튜브 → 학습 카드 만들기</p>
+      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-4 text-xs text-neutral-500 space-y-2">
+        <p className="font-medium text-neutral-700 dark:text-neutral-300">학습 자료 모으기</p>
         <p>
-          AI 분석 또는 지식 허브에서 콘텐츠를 열고 「학습용으로 만들기」를 누르면 핵심 개념만 정리된 학습 카드가
-          생성됩니다.
+          <Link href="/learn/cards" className="text-emerald-600 hover:underline">
+            내 학습 서재
+          </Link>
+          에서 유튜브·웹 링크를 직접 추가하고, 카테고리별로 정리·간단 분석할 수 있습니다.
         </p>
-        <Link href="/intelligence" className="inline-block mt-2 text-emerald-600 hover:underline">
-          AI 분석으로 이동 →
-        </Link>
+        <p>
+          AI 분석에서 「학습용으로 만들기」를 누르면 상세 학습 카드(퀴즈 포함)도 생성됩니다.{" "}
+          <Link href="/intelligence" className="text-emerald-600 hover:underline">
+            AI 분석으로 이동 →
+          </Link>
+        </p>
       </div>
     </div>
   );

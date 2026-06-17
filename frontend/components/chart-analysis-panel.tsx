@@ -23,6 +23,9 @@ import {
   CHART_DISCLAIMER,
   GUIDE_SECTIONS,
 } from "@/lib/chartGuideContent";
+import { renderStudyTerms } from "@/lib/renderStudyTerms";
+import { SIGNAL_LESSON_LINKS, STAGE_LESSON_LINKS } from "@/lib/studyTermGlossary";
+import { StudyLessonChip } from "@/components/study-term-link";
 
 function SentimentIcon({ sentiment, passed }: { sentiment: Sentiment; passed: boolean }) {
   if (!passed && sentiment === "warning")
@@ -92,10 +95,10 @@ function SignalCard({
             )}
           </div>
           <p className="mt-0.5 text-xs font-semibold text-neutral-800 dark:text-neutral-200">
-            {signal.title}
+            {renderStudyTerms(signal.title, `title-${signal.id}`)}
           </p>
           <p className="mt-1 text-xs leading-relaxed text-neutral-700 dark:text-neutral-300">
-            {signal.result}
+            {renderStudyTerms(signal.result, `result-${signal.id}`)}
           </p>
           <span
             role="presentation"
@@ -111,9 +114,14 @@ function SignalCard({
           </span>
           {expanded && (
             <p className="mt-1.5 rounded bg-neutral-100/80 px-2 py-1.5 text-[10px] leading-relaxed text-neutral-600 dark:bg-neutral-800/50 dark:text-neutral-400">
-              {signal.method}
+              {renderStudyTerms(signal.method, `method-${signal.id}`)}
               {guide && (
                 <span className="mt-1 block text-neutral-400">출처: 가이드 {guide.source}</span>
+              )}
+              {SIGNAL_LESSON_LINKS[signal.id] && (
+                <span className="mt-1.5 block">
+                  <StudyLessonChip lessonId={SIGNAL_LESSON_LINKS[signal.id]} />
+                </span>
               )}
             </p>
           )}
@@ -138,19 +146,24 @@ function StageBlock({
           : "border-[var(--border-subtle)] bg-[var(--surface-elevated)]"
       }`}
     >
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-2 gap-2">
         <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
-          {stage.label}
+          {renderStudyTerms(stage.label, `stage-${stage.label}`)}
         </span>
-        {stage.available ? (
-          <span className="text-[10px] font-medium text-neutral-500">
-            {stage.passed}/{stage.total} 통과
-          </span>
-        ) : (
-          <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
-            KIS 연동 필요
-          </span>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {STAGE_LESSON_LINKS[stage.label] && (
+            <StudyLessonChip lessonId={STAGE_LESSON_LINKS[stage.label]} label="레슨" />
+          )}
+          {stage.available ? (
+            <span className="text-[10px] font-medium text-neutral-500">
+              {stage.passed}/{stage.total} 통과
+            </span>
+          ) : (
+            <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+              KIS 연동 필요
+            </span>
+          )}
+        </div>
       </div>
       <ul className="space-y-1">
         {stage.items.map((item) => (
@@ -171,7 +184,7 @@ function StageBlock({
                     : "text-neutral-500"
               }
             >
-              {item.label}
+              {renderStudyTerms(item.label, `item-${item.label}`)}
             </span>
           </li>
         ))}
@@ -209,7 +222,11 @@ export function ChartAnalysisPanel({
           차트 분석 — {stockName}
         </h3>
         <p className="mt-0.5 text-[10px] text-neutral-400">
-          1개월 차트 기준 · 항목 클릭 시 차트에 해당 구간 표시
+          1개월 차트 기준 · 항목 클릭 시 차트에 해당 구간 표시 ·{" "}
+          <span className="border-b border-dotted border-blue-400/60 text-blue-600 dark:text-blue-400">
+            파란 밑줄
+          </span>
+          용어 클릭 → 주식공부하기
         </p>
       </div>
 
@@ -218,7 +235,7 @@ export function ChartAnalysisPanel({
           <Info size={12} />
           <span className="text-xs font-semibold">시장 국면: {analysis.regimeLabel}</span>
         </div>
-        <p className="mt-1 text-[11px] leading-relaxed opacity-90">{analysis.regimeHint}</p>
+        <p className="mt-1 text-[11px] leading-relaxed opacity-90">{renderStudyTerms(analysis.regimeHint, "regime")}</p>
       </div>
 
       <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-elevated)] p-3">
@@ -226,10 +243,10 @@ export function ChartAnalysisPanel({
           {analysis.threeStage.verdict}
         </p>
         <p className="mt-1 text-[11px] leading-relaxed text-neutral-600 dark:text-neutral-400">
-          {analysis.threeStage.summary}
+          {renderStudyTerms(analysis.threeStage.summary, "summary")}
         </p>
         <p className="mt-2 text-[10px] text-neutral-400">
-          손절 참고: {analysis.stopLoss.text}
+          {renderStudyTerms(`손절 참고: ${analysis.stopLoss.text}`, "stop")}
         </p>
       </div>
 
@@ -276,8 +293,11 @@ export function ChartAnalysisPanel({
           2단계: 수급 분석 (Phase 2)
         </p>
         <p className="mt-1 text-[11px] leading-relaxed text-amber-900/80 dark:text-amber-200/80">
-          {GUIDE_SECTIONS.supply.body}
+          {renderStudyTerms(GUIDE_SECTIONS.supply.body, "supply")}
         </p>
+        <div className="mt-2">
+          <StudyLessonChip lessonId="patterns-context" />
+        </div>
       </div>
 
       <p className="text-[10px] leading-relaxed text-neutral-400 border-t border-[var(--border-subtle)] pt-3">

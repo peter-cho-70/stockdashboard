@@ -12,16 +12,90 @@ logger = logging.getLogger(__name__)
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 
 
-def _extract_video_id(url: str) -> Optional[str]:
+def extract_video_id(url: str) -> Optional[str]:
     patterns = [
         r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})",
         r"(?:embed/)([a-zA-Z0-9_-]{11})",
+        r"(?:shorts/)([a-zA-Z0-9_-]{11})",
     ]
     for p in patterns:
         m = re.search(p, url)
         if m:
             return m.group(1)
     return None
+
+
+_extract_video_id = extract_video_id
+
+
+def is_youtube_url(url: str) -> bool:
+    u = (url or "").strip().lower()
+    return "youtube.com" in u or "youtu.be" in u
+
+
+def fetch_video_metadata(url: str, api_key: str | None = None) -> Optional[dict]:
+    """
+    YouTube URL에서 제목·채널·썸네일 등 메타데이터 조회.
+    oEmbed 우선 (API 키 불필요), 키가 있으면 Data API로 published_at 보강.
+    """
+    video_id = extract_video_id(url)
+    if not video_id:
+        return None
+
+    canonical_url = f"https://www.youtube.com/watch?v={video_id}"
+    meta: dict = {
+        "video_id": video_id,
+        "url": canonical_url,
+        "title": "",
+        "channel_name": "",
+        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        "published_at": "",
+    }
+
+    try:
+        resp = httpx.get(
+            "https://www.youtube.com/oembed",
+            params={"url": canonical_url, "format": "json"},
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            meta["title"] = (data.get("title") or "").strip()
+            meta["channel_name"] = (data.get("author_name") or "").strip()
+            thumb = data.get("thumbnail_url")
+            if thumb:
+                meta["thumbnail"] = thumb
+    except Exception as e:
+        logger.warning("YouTube oEmbed 조회 실패: %s", e)
+
+    if api_key:
+        try:
+            resp = httpx.get(
+                f"{YOUTUBE_API_BASE}/videos",
+                params={
+                    "key": api_key,
+                    "part": "snippet",
+                    "id": video_id,
+                },
+                timeout=8,
+            )
+            items = resp.json().get("items", [])
+            if items:
+                snippet = items[0].get("snippet", {})
+                meta["title"] = (snippet.get("title") or meta["title"] or "").strip()
+                meta["channel_name"] = (snippet.get("channelTitle") or meta["channel_name"] or "").strip()
+                thumbs = snippet.get("thumbnails", {})
+                for key in ("medium", "high", "default"):
+                    if thumbs.get(key, {}).get("url"):
+                        meta["thumbnail"] = thumbs[key]["url"]
+                        break
+                meta["published_at"] = snippet.get("publishedAt") or ""
+        except Exception as e:
+            logger.warning("YouTube Data API 조회 실패: %s", e)
+
+    if not meta["title"]:
+        return None
+    return meta
 
 
 def resolve_channel_id(handle_or_id: str, api_key: str) -> Optional[dict]:

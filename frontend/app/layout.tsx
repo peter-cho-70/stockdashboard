@@ -21,9 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-[var(--background)] text-[var(--foreground)] transition-colors duration-200">
-        <Script id="stockmind-theme-init" strategy="beforeInteractive">
-          {`(function(){try{var t=localStorage.getItem("stockmind-theme")||"light";document.documentElement.setAttribute("data-theme",t)}catch(e){}})();`}
-        </Script>
+        <Script src="/theme-init.js" strategy="beforeInteractive" />
         <AppShell>{children}</AppShell>
       </body>
     </html>

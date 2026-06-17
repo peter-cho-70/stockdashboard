@@ -1020,7 +1020,9 @@ export interface KrMarketMover {
   symbol: string;
   name: string;
   close?: number | null;
-  change_pct: number;
+  change_pct?: number | null;
+  /** 외국인·기관 순매수/순매도 금액 (억원) */
+  net_amount_억?: number | null;
   volume?: number | null;
   market?: string;
 }

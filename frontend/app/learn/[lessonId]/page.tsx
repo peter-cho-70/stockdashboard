@@ -1,12 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, BarChart3, ExternalLink, Sparkles } from "lucide-react";
 import { studyApi, type RelatedContentItem, type StudyCard, type StudyLessonDetail } from "@/lib/studyApi";
 import { MarkdownLite } from "@/components/markdown-lite";
 import { LessonImagePastePanel } from "@/components/lesson-image-paste-panel";
+import { LessonYoutubeLinksPanel } from "@/components/lesson-youtube-links-panel";
+import { useListenPanel } from "@/lib/useListenPanel";
+import { ListenExperience } from "@/components/audio-listen/ListenExperience";
+import { ListenPlayButton } from "@/components/audio-listen/ListenPlayButton";
 
 export default function LearnLessonPage() {
   const params = useParams();
@@ -18,6 +22,12 @@ export default function LearnLessonPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const listenSource = useMemo(
+    () => (lesson ? ({ kind: "lesson" as const, lesson }) : null),
+    [lesson],
+  );
+  const listenPanel = useListenPanel(listenSource);
+
   useEffect(() => {
     if (!lessonId) return;
     let cancelled = false;
@@ -25,7 +35,7 @@ export default function LearnLessonPage() {
       try {
         const [l, cardRes, rel] = await Promise.all([
           studyApi.getLesson(lessonId),
-          studyApi.listCards(lessonId),
+          studyApi.listCards({ lessonId }),
           studyApi.getRelatedContent(lessonId),
         ]);
         if (!cancelled) {
@@ -70,19 +80,39 @@ export default function LearnLessonPage() {
         </p>
         <h1 className="text-xl font-bold">{lesson.title}</h1>
         <p className="text-sm text-neutral-500 mt-1">{lesson.subtitle}</p>
-        {lesson.chart_link && (
-          <Link
-            href={lesson.chart_link}
-            className="inline-flex items-center gap-1 mt-3 text-xs rounded-md border border-emerald-200 bg-emerald-50 text-emerald-800 px-2.5 py-1.5 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"
-          >
-            <BarChart3 size={12} />
-            차트에서 연습하기
-          </Link>
-        )}
+        <div className="flex flex-wrap items-center gap-2 mt-3">
+          {!listenPanel.open && listenPanel.canListen && (
+            <ListenPlayButton onPlay={listenPanel.start} size="md" />
+          )}
+          {lesson.chart_link && (
+            <Link
+              href={lesson.chart_link}
+              className="inline-flex items-center gap-1 text-xs rounded-md border border-emerald-200 bg-emerald-50 text-emerald-800 px-2.5 py-1.5 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"
+            >
+              <BarChart3 size={12} />
+              차트에서 연습하기
+            </Link>
+          )}
+        </div>
       </div>
+
+      {listenPanel.open && listenPanel.script && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 dark:border-emerald-800 dark:bg-emerald-950/20">
+          <ListenExperience
+            title={lesson.title}
+            script={listenPanel.script}
+            listen={listenPanel.listen}
+            onClose={listenPanel.close}
+          />
+        </div>
+      )}
 
       <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-5">
         <MarkdownLite markdown={lesson.body_markdown} />
+      </div>
+
+      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-5">
+        <LessonYoutubeLinksPanel lessonId={lesson.id} />
       </div>
 
       <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-5">

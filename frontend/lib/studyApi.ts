@@ -50,6 +50,7 @@ export interface StudyQuizItem {
 export interface StudyCard {
   id: number;
   content_id: number | null;
+  category_id: number | null;
   lesson_id: string | null;
   title: string;
   summary: string | null;
@@ -60,7 +61,38 @@ export interface StudyCard {
   source_title: string | null;
   source_url: string | null;
   source_type: string | null;
+  thumbnail: string | null;
+  origin: string;
+  sort_order: number;
+  user_note: string | null;
+  analysis_status: string;
+  simple_analysis: SimpleAnalysis | null;
   created_at: string | null;
+}
+
+export interface SimpleAnalysis {
+  summary: string;
+  key_points: string[];
+  analyzed_at?: string;
+  source_type?: string;
+}
+
+export interface StudyCategory {
+  id: number;
+  name: string;
+  description: string | null;
+  sort_order: number;
+  is_default: boolean;
+  created_at: string | null;
+}
+
+export interface LinkPreview {
+  source_type: string;
+  url: string;
+  title: string;
+  channel_name: string;
+  thumbnail: string;
+  video_id?: string | null;
 }
 
 export interface RelatedContentItem {
@@ -80,6 +112,27 @@ export interface StudyLessonImage {
   original_name: string | null;
   mime_type: string;
   caption: string | null;
+  sort_order: number;
+  created_at: string | null;
+}
+
+export interface YoutubePreview {
+  video_id: string;
+  url: string;
+  title: string;
+  channel_name: string;
+  thumbnail: string;
+  published_at?: string;
+}
+
+export interface StudyLessonLink {
+  id: number;
+  lesson_id: string;
+  video_id: string;
+  url: string;
+  title: string;
+  channel_name: string | null;
+  thumbnail: string | null;
   sort_order: number;
   created_at: string | null;
 }
@@ -110,8 +163,11 @@ export const studyApi = {
       `/study/lessons/${lessonId}/related-content`,
     ),
 
-  listCards: (lessonId?: string) => {
-    const q = lessonId ? `?lesson_id=${encodeURIComponent(lessonId)}` : "";
+  listCards: (opts?: { lessonId?: string; categoryId?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.lessonId) params.set("lesson_id", opts.lessonId);
+    if (opts?.categoryId != null) params.set("category_id", String(opts.categoryId));
+    const q = params.toString() ? `?${params.toString()}` : "";
     return fetchApi<{ items: StudyCard[] }>(`/study/cards${q}`);
   },
 
@@ -125,6 +181,59 @@ export const studyApi = {
 
   deleteCard: (cardId: number) =>
     fetchApi<{ ok: boolean }>(`/study/cards/${cardId}`, { method: "DELETE" }),
+
+  listCategories: () => fetchApi<{ items: StudyCategory[] }>("/study/categories"),
+
+  createCategory: (name: string, description?: string) =>
+    fetchApi<StudyCategory>("/study/categories", {
+      method: "POST",
+      body: JSON.stringify({ name, description }),
+    }),
+
+  updateCategory: (id: number, data: { name?: string; description?: string }) =>
+    fetchApi<StudyCategory>(`/study/categories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  deleteCategory: (id: number, moveTo?: number) => {
+    const q = moveTo != null ? `?move_to=${moveTo}` : "";
+    return fetchApi<{ ok: boolean }>(`/study/categories/${id}${q}`, { method: "DELETE" });
+  },
+
+  previewLink: (url: string) =>
+    fetchApi<LinkPreview>("/study/link-preview", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+
+  createManualCard: (data: {
+    url: string;
+    category_id?: number;
+    title?: string;
+    user_note?: string;
+  }) =>
+    fetchApi<StudyCard>("/study/cards/manual", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateCard: (id: number, data: { title?: string; category_id?: number; user_note?: string }) =>
+    fetchApi<StudyCard>(`/study/cards/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  moveCard: (id: number, categoryId: number, sortOrder?: number) =>
+    fetchApi<StudyCard>(`/study/cards/${id}/move`, {
+      method: "PATCH",
+      body: JSON.stringify({ category_id: categoryId, sort_order: sortOrder }),
+    }),
+
+  analyzeCard: (id: number, force?: boolean) => {
+    const q = force ? "?force=true" : "";
+    return fetchApi<StudyCard>(`/study/cards/${id}/analyze${q}`, { method: "POST" });
+  },
 
   listLessonImages: (lessonId: string) =>
     fetchApi<{ lesson_id: string; items: StudyLessonImage[] }>(
@@ -144,6 +253,29 @@ export const studyApi = {
   deleteLessonImage: (lessonId: string, imageId: number) =>
     fetchApi<{ ok: boolean }>(
       `/study/lessons/${encodeURIComponent(lessonId)}/images/${imageId}`,
+      { method: "DELETE" },
+    ),
+
+  previewYoutube: (url: string) =>
+    fetchApi<YoutubePreview>("/study/youtube/preview", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+
+  listLessonLinks: (lessonId: string) =>
+    fetchApi<{ lesson_id: string; items: StudyLessonLink[] }>(
+      `/study/lessons/${encodeURIComponent(lessonId)}/links`,
+    ),
+
+  addLessonLink: (lessonId: string, url: string) =>
+    fetchApi<StudyLessonLink>(`/study/lessons/${encodeURIComponent(lessonId)}/links`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+
+  deleteLessonLink: (lessonId: string, linkId: number) =>
+    fetchApi<{ ok: boolean }>(
+      `/study/lessons/${encodeURIComponent(lessonId)}/links/${linkId}`,
       { method: "DELETE" },
     ),
 };

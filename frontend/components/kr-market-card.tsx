@@ -198,9 +198,8 @@ function InvestorList({
 
 export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
   const sessionDate = todayKst();
-  const cached = loadKrSnapshotCache(sessionDate);
-  const [snapshot, setSnapshot] = useState<KrMarketSnapshot | null>(cached);
-  const [loading, setLoading] = useState(!cached);
+  const [snapshot, setSnapshot] = useState<KrMarketSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chartIndex, setChartIndex] = useState<"kospi" | "kosdaq">("kospi");

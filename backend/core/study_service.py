@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 from config.database import IntelContent, StudyCard
 from config.settings import get_settings
 from core.gemini_client import GeminiClient
+from core.study_categories import ensure_default_category, get_category
 from core.study_curriculum import TOPIC_KEYWORDS, all_lesson_ids, get_lesson
+from core.study_link_preview import fetch_web_page_text, preview_link
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,24 @@ STUDY_FROM_CONTENT_PROMPT = """아래는 유튜브/뉴스 AI 분석 결과입니
 }}
 
 study_topics·linked_lessons 값은 반드시 lesson_id 후보 목록에 있는 id만 사용하세요."""
+
+SIMPLE_ANALYSIS_SYSTEM = """당신은 주식·차트 학습 도우미입니다.
+제공된 내용에서 학습에 도움이 되는 개념만 짧게 정리하세요.
+종목 추천, 매수·매도 신호, 수익률 예측은 절대 하지 마세요."""
+
+SIMPLE_ANALYSIS_PROMPT = """아래 {label} 내용을 **학습용**으로 간단히 정리하세요.
+
+[제목] {title}
+[출처] {source}
+
+[본문]
+{body}
+
+다음 JSON만 출력:
+{{
+  "summary": "3~5문장 — 개념·교훈 중심",
+  "key_points": ["핵심 3~5개"]
+}}"""
 
 
 def _parse_json_list(raw: str | None) -> list:
@@ -107,10 +127,22 @@ def _guess_topics_from_text(text: str) -> list[str]:
     return [lid for _, lid in scores[:3]]
 
 
+def _parse_json_obj(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
 def serialize_study_card(row: StudyCard) -> dict[str, Any]:
+    simple = _parse_json_obj(row.simple_analysis)
     return {
         "id": row.id,
         "content_id": row.content_id,
+        "category_id": row.category_id,
         "lesson_id": row.lesson_id,
         "title": row.title,
         "summary": row.summary,
@@ -121,6 +153,12 @@ def serialize_study_card(row: StudyCard) -> dict[str, Any]:
         "source_title": row.source_title,
         "source_url": row.source_url,
         "source_type": row.source_type,
+        "thumbnail": row.thumbnail,
+        "origin": row.origin or "ai",
+        "sort_order": row.sort_order or 0,
+        "user_note": row.user_note,
+        "analysis_status": row.analysis_status or "none",
+        "simple_analysis": simple,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -129,15 +167,28 @@ def list_study_cards(
     db: Session,
     *,
     lesson_id: str | None = None,
+    category_id: int | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    q = db.query(StudyCard).order_by(StudyCard.created_at.desc())
+    q = db.query(StudyCard)
     if lesson_id:
         q = q.filter(
             (StudyCard.lesson_id == lesson_id)
             | StudyCard.study_topics.like(f'%"{lesson_id}"%')
         )
-    rows = q.limit(limit).all()
+    if category_id is not None:
+        default = ensure_default_category(db)
+        if category_id == default.id:
+            q = q.filter(
+                (StudyCard.category_id == category_id) | (StudyCard.category_id.is_(None))
+            )
+        else:
+            q = q.filter(StudyCard.category_id == category_id)
+    rows = (
+        q.order_by(StudyCard.sort_order.asc(), StudyCard.created_at.desc())
+        .limit(limit)
+        .all()
+    )
     return [serialize_study_card(r) for r in rows]
 
 
@@ -256,9 +307,239 @@ def create_study_card_from_content(
         source_title=content.source_title,
         source_url=content.source_url,
         source_type=content.source_type,
+        origin="ai",
     )
     db.add(row)
     db.commit()
     db.refresh(row)
     logger.info("학습 카드 생성 content=%s card=%s lesson=%s", content_id, row.id, primary_lesson)
     return serialize_study_card(row)
+
+
+def _resolve_category_id(db: Session, category_id: int | None) -> int:
+    default = ensure_default_category(db)
+    if category_id is None:
+        return default.id
+    if not get_category(db, category_id):
+        raise ValueError("카테고리를 찾을 수 없습니다.")
+    return category_id
+
+
+def _next_sort_order(db: Session, category_id: int) -> int:
+    count = db.query(StudyCard).filter(StudyCard.category_id == category_id).count()
+    return count
+
+
+def create_manual_study_card(
+    db: Session,
+    *,
+    url: str,
+    category_id: int | None = None,
+    title: str | None = None,
+    user_note: str | None = None,
+) -> dict[str, Any]:
+    meta = preview_link(url)
+    cat_id = _resolve_category_id(db, category_id)
+
+    existing = (
+        db.query(StudyCard)
+        .filter(StudyCard.source_url == meta["url"], StudyCard.origin == "manual")
+        .first()
+    )
+    card_title = (title or meta["title"] or "학습 링크")[:300]
+
+    if existing:
+        existing.title = card_title
+        existing.source_title = meta["title"][:300]
+        existing.source_type = meta["source_type"]
+        existing.thumbnail = (meta.get("thumbnail") or "")[:500] or None
+        existing.category_id = cat_id
+        if user_note is not None:
+            existing.user_note = user_note[:2000] or None
+        db.commit()
+        db.refresh(existing)
+        return serialize_study_card(existing)
+
+    row = StudyCard(
+        category_id=cat_id,
+        title=card_title,
+        source_title=meta["title"][:300],
+        source_url=meta["url"],
+        source_type=meta["source_type"],
+        thumbnail=(meta.get("thumbnail") or "")[:500] or None,
+        origin="manual",
+        sort_order=_next_sort_order(db, cat_id),
+        user_note=(user_note or "")[:2000] or None,
+        analysis_status="none",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    logger.info("수동 학습 카드 생성 id=%s url=%s", row.id, meta["url"])
+    return serialize_study_card(row)
+
+
+def update_study_card(
+    db: Session,
+    card_id: int,
+    *,
+    title: str | None = None,
+    category_id: int | None = None,
+    user_note: str | None = None,
+) -> dict[str, Any]:
+    row = db.query(StudyCard).filter(StudyCard.id == card_id).first()
+    if not row:
+        raise ValueError("학습 카드를 찾을 수 없습니다.")
+
+    if title is not None:
+        t = title.strip()
+        if not t:
+            raise ValueError("제목을 입력하세요.")
+        row.title = t[:300]
+
+    if category_id is not None:
+        row.category_id = _resolve_category_id(db, category_id)
+
+    if user_note is not None:
+        row.user_note = user_note.strip()[:2000] or None
+
+    db.commit()
+    db.refresh(row)
+    return serialize_study_card(row)
+
+
+def move_study_card(
+    db: Session,
+    card_id: int,
+    *,
+    category_id: int,
+    sort_order: int | None = None,
+) -> dict[str, Any]:
+    row = db.query(StudyCard).filter(StudyCard.id == card_id).first()
+    if not row:
+        raise ValueError("학습 카드를 찾을 수 없습니다.")
+    cat_id = _resolve_category_id(db, category_id)
+    row.category_id = cat_id
+    if sort_order is not None:
+        row.sort_order = sort_order
+    else:
+        row.sort_order = _next_sort_order(db, cat_id)
+    db.commit()
+    db.refresh(row)
+    return serialize_study_card(row)
+
+
+def reorder_study_cards(db: Session, category_id: int, card_ids: list[int]) -> list[dict[str, Any]]:
+    _resolve_category_id(db, category_id)
+    rows = (
+        db.query(StudyCard)
+        .filter(StudyCard.category_id == category_id, StudyCard.id.in_(card_ids))
+        .all()
+    )
+    by_id = {r.id: r for r in rows}
+    for idx, cid in enumerate(card_ids):
+        row = by_id.get(cid)
+        if row:
+            row.sort_order = idx
+    db.commit()
+    return list_study_cards(db, category_id=category_id, limit=200)
+
+
+def _get_youtube_transcript(url: str) -> str | None:
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        from core.youtube_fetcher import extract_video_id
+
+        video_id = extract_video_id(url)
+        if not video_id:
+            return None
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["ko", "en"])
+        return " ".join(item["text"] for item in transcript)
+    except Exception:
+        return None
+
+
+def run_simple_analysis(db: Session, card_id: int, *, force: bool = False) -> dict[str, Any]:
+    settings = get_settings()
+    if not settings.gemini_api_key:
+        raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다.")
+
+    row = db.query(StudyCard).filter(StudyCard.id == card_id).first()
+    if not row:
+        raise ValueError("학습 카드를 찾을 수 없습니다.")
+    if not row.source_url:
+        raise ValueError("원본 URL이 없는 카드입니다.")
+
+    if row.simple_analysis and row.analysis_status == "done" and not force:
+        return serialize_study_card(row)
+
+    row.analysis_status = "pending"
+    db.commit()
+
+    try:
+        if row.content_id:
+            content = db.query(IntelContent).filter(IntelContent.id == row.content_id).first()
+            if content:
+                body = (content.source_document or content.summary or "")[:8000]
+                title = content.source_title or row.title
+                label = content.source_type or "문서"
+            else:
+                title, label, body = _gather_source_body_simple(db, row)
+        else:
+            title, label, body = _gather_source_body_simple(db, row)
+
+        if not body.strip():
+            raise ValueError("본문을 가져올 수 없습니다.")
+
+        client = GeminiClient(api_key=settings.gemini_api_key, model=settings.gemini_model)
+        prompt = SIMPLE_ANALYSIS_PROMPT.format(
+            label=label,
+            title=title,
+            source=row.source_url,
+            body=body[:8000],
+        )
+        data = client.generate_json(
+            prompt,
+            purpose="학습 간단분석",
+            system_instruction=SIMPLE_ANALYSIS_SYSTEM,
+        )
+        if not data:
+            raise ValueError("간단 분석 생성에 실패했습니다.")
+
+        result = {
+            "summary": data.get("summary") or "",
+            "key_points": data.get("key_points") or [],
+            "analyzed_at": datetime.utcnow().isoformat(),
+            "source_type": row.source_type,
+        }
+        row.simple_analysis = json.dumps(result, ensure_ascii=False)
+        row.analysis_status = "done"
+        if not row.summary and result["summary"]:
+            row.summary = result["summary"]
+        if result["key_points"] and not row.key_points:
+            row.key_points = json.dumps(result["key_points"], ensure_ascii=False)
+        db.commit()
+        db.refresh(row)
+        logger.info("간단 분석 완료 card=%s", card_id)
+        return serialize_study_card(row)
+    except Exception:
+        row.analysis_status = "failed"
+        db.commit()
+        raise
+
+
+def _gather_source_body_simple(db: Session, row: StudyCard) -> tuple[str, str, str]:
+    url = row.source_url or ""
+    title = row.source_title or row.title or ""
+
+    if row.source_type == "YOUTUBE" and url:
+        transcript = _get_youtube_transcript(url)
+        if transcript:
+            return title, "YouTube", transcript[:8000]
+        return title, "YouTube", f"[YouTube URL]\n{url}"
+
+    if url:
+        text = fetch_web_page_text(url, max_chars=8000)
+        return title, "웹페이지", text
+
+    raise ValueError("분석할 원본 내용이 없습니다.")

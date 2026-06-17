@@ -395,6 +395,7 @@ def _fetch_upper_limits(*, limit: int = 10) -> dict[str, list[dict[str, Any]]]:
 
 
 def _parse_deal_rank_tables(html: str, *, market: str) -> dict[str, list[dict[str, Any]]]:
+    """외국인·기관 순매수/순매도 상위 — 네이버 type_r1 (금액: 천원)."""
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.select("table.type_r1")
     buy: list[dict[str, Any]] = []
@@ -408,17 +409,19 @@ def _parse_deal_rank_tables(html: str, *, market: str) -> dict[str, list[dict[st
             name = a.get_text(strip=True)
             if not _is_common_stock(name):
                 continue
-            price = None
-            for td in tr.select("td"):
-                txt = td.get_text(strip=True).replace(",", "")
-                if txt.isdigit() and len(txt) >= 3:
-                    price = int(txt)
-                    break
+            tds = tr.select("td")
+            if len(tds) < 3:
+                continue
+            raw = tds[2].get_text(strip=True).replace(",", "")
+            net_amount_억: Optional[float] = None
+            if raw.lstrip("-").isdigit():
+                # 네이버: 천원 단위 → 억원 (1억 = 100,000천원)
+                net_amount_억 = round(int(raw) / 100_000, 1)
             rows.append(
                 {
                     "symbol": _symbol_from_href(a.get("href", "")),
                     "name": name,
-                    "close": price,
+                    "net_amount_억": net_amount_억,
                     "market": market,
                 }
             )

@@ -55,18 +55,24 @@ export function MoverRow({
     symbol: string;
     name: string;
     close?: number | null;
-    change_pct: number;
+    change_pct?: number | null;
+    net_amount_억?: number | null;
     market?: string;
   };
   onSelect?: (item: {
     symbol: string;
     name: string;
     close?: number | null;
-    change_pct: number;
+    change_pct?: number | null;
+    net_amount_억?: number | null;
     market?: string;
   }) => void;
 }) {
-  const up = item.change_pct >= 0;
+  const changePct = item.change_pct;
+  const showQuote = changePct != null;
+  const showNet = !showQuote && item.net_amount_억 != null;
+  const marketLabel =
+    item.market && item.market !== "MIXED" ? ` · ${item.market}` : "";
   const row = (
     <>
       <div className="min-w-0 flex-1">
@@ -75,19 +81,26 @@ export function MoverRow({
         </p>
         <p className="text-[10px] text-neutral-400">
           {item.symbol}
-          {item.market ? ` · ${item.market}` : ""}
+          {marketLabel}
         </p>
       </div>
       <div className="shrink-0 text-right">
-        {item.close != null && (
+        {showQuote && item.close != null && (
           <p className="text-xs tabular-nums text-neutral-700 dark:text-neutral-300">
             {item.close.toLocaleString("ko-KR")}
           </p>
         )}
-        <p className={`text-[11px] font-medium tabular-nums ${krChangeClass(item.change_pct)}`}>
-          {up ? "+" : ""}
-          {item.change_pct.toFixed(2)}%
-        </p>
+        {showQuote && (
+          <p className={`text-[11px] font-medium tabular-nums ${krChangeClass(changePct ?? 0)}`}>
+            {(changePct ?? 0) >= 0 ? "+" : ""}
+            {(changePct ?? 0).toFixed(2)}%
+          </p>
+        )}
+        {showNet && (
+          <p className="text-[11px] font-medium tabular-nums text-neutral-700 dark:text-neutral-300">
+            {item.net_amount_억!.toLocaleString("ko-KR")}억
+          </p>
+        )}
       </div>
     </>
   );

@@ -206,7 +206,7 @@ export default function SettingsPage() {
           </button>
           {apiStatus === "ok" && (
             <span className="flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
-              <CheckCircle2 size={15} /> 서버 연결됨 (localhost:8000)
+              <CheckCircle2 size={15} /> 서버 연결됨
             </span>
           )}
           {apiStatus === "error" && (

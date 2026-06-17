@@ -1,13 +1,18 @@
 "use client";
 
-import { ExternalLink, Loader2, TrendingDown, TrendingUp } from "lucide-react";
+import { ExternalLink, HelpCircle, Loader2, TrendingDown, TrendingUp } from "lucide-react";
 import type {
   HoldingsAnalysis,
   StockBasicsTableRow,
   StockFinanceTable,
   StockInvestorTrendRow,
+  StockInvestmentInfo,
 } from "@/lib/api";
 import { krSignedBoldClass } from "@/lib/krMarketColors";
+import { getValuationDefinition, getValuationHint } from "@/lib/valuationHints";
+import { VALUATION_LABEL_LESSONS } from "@/lib/studyTermGlossary";
+import { renderStudyTerms } from "@/lib/renderStudyTerms";
+import { StudyLessonChip } from "@/components/study-term-link";
 
 function InfoRow({ label, value }: { label: string; value?: string | null }) {
   if (!value) return null;
@@ -15,6 +20,55 @@ function InfoRow({ label, value }: { label: string; value?: string | null }) {
     <div className="flex gap-2 text-[11px] py-1 border-b border-[var(--border-subtle)] last:border-0">
       <span className="w-28 shrink-0 text-neutral-500">{label}</span>
       <span className="text-neutral-800 dark:text-neutral-200 break-words">{value}</span>
+    </div>
+  );
+}
+
+function ValuationInfoRow({
+  label,
+  value,
+  info,
+}: {
+  label: string;
+  value?: string | null;
+  info: StockInvestmentInfo;
+}) {
+  if (!value) return null;
+  const definition = getValuationDefinition(label);
+  const hint = getValuationHint(label, info);
+  const lessonId = VALUATION_LABEL_LESSONS[label];
+  const tooltip = definition ? (hint ? `${definition}\n\n${hint}` : definition) : hint;
+
+  return (
+    <div className="py-1.5 border-b border-[var(--border-subtle)] last:border-0">
+      <div className="flex gap-2 text-[11px]">
+        <span
+          className={`w-28 shrink-0 text-neutral-500 flex items-start gap-0.5 ${tooltip ? "group cursor-help" : ""}`}
+          title={tooltip ?? undefined}
+        >
+          <span className={definition ? "border-b border-dotted border-neutral-400/50" : ""}>
+            {renderStudyTerms(label, `label-${label}`)}
+          </span>
+          {definition && (
+            <HelpCircle
+              size={10}
+              className="shrink-0 mt-px text-neutral-400 opacity-70 group-hover:text-blue-500"
+              aria-hidden
+            />
+          )}
+        </span>
+        <span className="text-neutral-800 dark:text-neutral-200 break-words">{value}</span>
+      </div>
+      {hint && (
+        <p className="mt-1 ml-[7.5rem] text-[10px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+          {renderStudyTerms(hint, `hint-${label}`)}
+        </p>
+      )}
+      {lessonId && (
+        <div className="mt-1 ml-[7.5rem]">
+          <StudyLessonChip lessonId={lessonId} />
+        </div>
+      )}
     </div>
   );
 }
@@ -252,13 +306,35 @@ export function HoldingsAnalysisPanel({ data, loading, error }: HoldingsAnalysis
             }
           />
           <InfoRow label="컨센서스 기준일" value={info.consensus_date} />
-          <InfoRow label="PER · EPS" value={info.per_eps ?? (info.per && info.eps ? `${info.per} · ${info.eps}` : info.per)} />
-          <InfoRow label="추정 PER · EPS" value={info.forward_per_eps ?? (info.forward_per && info.forward_eps ? `${info.forward_per} · ${info.forward_eps}` : info.forward_per)} />
-          <InfoRow label="PBR · BPS" value={info.pbr_bps ?? (info.pbr && info.bps ? `${info.pbr} · ${info.bps}` : info.pbr)} />
+          <ValuationInfoRow
+            label="PER · EPS"
+            value={info.per_eps ?? (info.per && info.eps ? `${info.per} · ${info.eps}` : info.per)}
+            info={info}
+          />
+          <ValuationInfoRow
+            label="추정 PER · EPS"
+            value={
+              info.forward_per_eps ??
+              (info.forward_per && info.forward_eps
+                ? `${info.forward_per} · ${info.forward_eps}`
+                : info.forward_per)
+            }
+            info={info}
+          />
+          <ValuationInfoRow
+            label="PBR · BPS"
+            value={info.pbr_bps ?? (info.pbr && info.bps ? `${info.pbr} · ${info.bps}` : info.pbr)}
+            info={info}
+          />
           <InfoRow label="배당금" value={info.dividend_amount} />
           <InfoRow label="52주 최고·최저" value={info.week52_range ?? (info.week52_high && info.week52_low ? `${info.week52_high} · ${info.week52_low}` : null)} />
-          <InfoRow label="외국인 소진율" value={info.foreign_exhaustion_rate ?? info.foreign_holding_rate} />
-          <InfoRow label="동일업종 PER" value={info.industry_per} />
+          <ValuationInfoRow
+            label="외국인 소진율"
+            value={info.foreign_exhaustion_rate}
+            info={info}
+          />
+          <ValuationInfoRow label="외국인 보유율" value={info.foreign_holding_rate} info={info} />
+          <ValuationInfoRow label="동일업종 PER" value={info.industry_per} info={info} />
           <InfoRow label="동일업종 등락" value={info.industry_change_pct} />
           <InfoRow label="배당수익률" value={info.dividend_yield} />
           <InfoRow label="거래량" value={info.trading_volume} />

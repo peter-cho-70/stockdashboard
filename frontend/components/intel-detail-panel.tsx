@@ -11,6 +11,7 @@ import {
   normalizeUserHighlights,
   newSnippetId,
   type HighlightSnippet,
+  type KeyPointItem,
   type UserHighlights,
 } from "@/lib/intelHighlights";
 import {
@@ -23,6 +24,9 @@ import {
 } from "@/lib/highlightColors";
 import { renderAnalysisText, type SnippetMark } from "@/lib/renderAnalysisText";
 import { studyApi } from "@/lib/studyApi";
+import { useListenPanel } from "@/lib/useListenPanel";
+import { ListenExperience } from "@/components/audio-listen/ListenExperience";
+import { ListenPlayButton } from "@/components/audio-listen/ListenPlayButton";
 
 export interface IntelDetailData {
   id?: number;
@@ -253,6 +257,13 @@ export function IntelDetailPanel({
   const [studyLoading, setStudyLoading] = useState(false);
   const [studyError, setStudyError] = useState<string | null>(null);
   const [studyCardId, setStudyCardId] = useState<number | null>(null);
+  const listenSource = useMemo(() => ({ kind: "intel" as const, data }), [data]);
+  const listenPanel = useListenPanel(listenSource);
+
+  const startListen = useCallback(() => {
+    setEditMode(false);
+    listenPanel.start();
+  }, [listenPanel.start]);
 
   useEffect(() => {
     setHighlights(normalizeUserHighlights(data.user_highlights));
@@ -478,9 +489,11 @@ export function IntelDetailPanel({
               {saving ? "저장 중…" : dirty ? "저장" : "저장됨"}
             </button>
           )}
+          {!listenPanel.open && listenPanel.canListen && <ListenPlayButton onPlay={startListen} />}
           <button
             type="button"
             onClick={() => setEditMode((v) => !v)}
+            disabled={listenPanel.open}
             className={`flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium ${
               editMode
                 ? "border-amber-400 bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
@@ -504,6 +517,18 @@ export function IntelDetailPanel({
       )}
       {studyError && (
         <p className="text-[10px] text-red-600 bg-red-50 dark:bg-red-900/20 rounded-md px-2 py-1">{studyError}</p>
+      )}
+
+      {listenPanel.open && listenPanel.script && (
+        <ListenExperience
+          title={data.source_url ? "AI 분석" : "분석 듣기"}
+          script={listenPanel.script}
+          listen={listenPanel.listen}
+          hasDocument={!!(data.source_document || "").trim()}
+          scope={listenPanel.scope}
+          onScopeChange={listenPanel.changeScope}
+          onClose={listenPanel.close}
+        />
       )}
 
       {(highlights.snippets.length > 0 || highlights.user_key_points.length > 0) && tab === "analysis" && (
