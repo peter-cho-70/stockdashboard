@@ -19,6 +19,15 @@ from sqlalchemy.orm import Session
 from config.database import MacroSignal, UsMarketReport
 from config.settings import get_settings
 from core.gemini_client import GeminiClient
+from core.datetime_kst import (
+    KST,
+    format_kst_label,
+    format_utc_iso,
+    kst_now,
+    kst_today_str,
+    previous_us_session_date,
+    utc_now,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +71,6 @@ US_FUTURES_TICKERS: list[tuple[str, str, str]] = [
     ("러셀 2000 선물", "RTY=F", "futures"),
 ]
 
-KST = timezone(timedelta(hours=9))
 NEWS_MAX_AGE_HOURS = 72
 
 COMMODITY_TICKERS: list[tuple[str, str, str]] = [
@@ -105,11 +113,13 @@ INTERPRETATION_TOPICS = ("us_indices", "commodity", "fx", "treasury", "us_stocks
 REPORT_SYSTEM = """당신은 한국 투자자를 위한 미국 증시 아침 브리핑 작성자입니다.
 제공된 시세 수치와 뉴스 검색 결과만 근거로 해석하세요. 기사에 없는 사실은 만들지 마세요.
 각 해석에 사용한 뉴스는 source_indexes로 반드시 표시하세요.
-뉴스는 발행 시각이 최근 72시간 이내인 것만 인용하세요. 오래된 기사는 무시하고 source_indexes에 넣지 마세요."""
+뉴스는 발행 시각이 최근 72시간 이내인 것만 인용하세요. 오래된 기사는 무시하고 source_indexes에 넣지 마세요.
+응답은 반드시 완전한 JSON 한 덩어리로 끝내세요. 각 summary는 2~3문장, body_markdown은 10문장 이내, highlights 4~5개."""
 
 INTERPRETATION_SYSTEM = """당신은 한국 투자자를 위한 미국 증시 해석 작성자입니다.
 제공된 시세와 최신 뉴스만 근거로 각 섹션 해석을 작성하세요.
-72시간보다 오래된 기사는 사용하지 마세요. source_indexes에는 최신 기사만 넣으세요."""
+72시간보다 오래된 기사는 사용하지 마세요. source_indexes에는 최신 기사만 넣으세요.
+각 summary는 2~3문장으로 짧게, JSON은 반드시 완전히 닫으세요."""
 
 REPORT_PROMPT = """오늘(KST) 아침 브리핑 날짜: {report_date}
 미국 장 세션일(마감 기준): {session_date}
@@ -140,27 +150,27 @@ JSON으로 반환 (이 형식만):
   "title": "짧은 제목",
   "interpretations": {{
     "us_indices": {{
-      "summary": "2~4문장: S&P·나스닥·SOX·VIX 해석",
-      "bullets": ["핵심 포인트"],
+      "summary": "2~3문장: S&P·나스닥·SOX·VIX 해석",
+      "bullets": ["핵심 1줄"],
       "source_indexes": [0, 1]
     }},
-    "commodity": {{ "summary": "WTI 유가 해석", "bullets": [], "source_indexes": [] }},
-    "fx": {{ "summary": "달러·원·엔·위안 환율 해석", "bullets": [], "source_indexes": [] }},
-    "treasury": {{ "summary": "10Y·2Y·3M 국채 해석", "bullets": [], "source_indexes": [] }},
-    "us_stocks": {{ "summary": "빅테크·주요 종목 등락 해석", "bullets": [], "source_indexes": [] }}
+    "commodity": {{ "summary": "WTI 2~3문장", "bullets": [], "source_indexes": [] }},
+    "fx": {{ "summary": "환율 2~3문장", "bullets": [], "source_indexes": [] }},
+    "treasury": {{ "summary": "국채 2~3문장", "bullets": [], "source_indexes": [] }},
+    "us_stocks": {{ "summary": "빅테크 2~3문장", "bullets": [], "source_indexes": [] }}
   }},
-  "body_markdown": "전체 종합 마크다운 (한국 장 시사점·리스크 포함)",
-  "highlights": ["한 줄 요약 5~7개"]
+  "body_markdown": "10문장 이내 종합 (한국 장 시사점·리스크)",
+  "highlights": ["한 줄 요약 4~5개"]
 }}
 """
 
 
 def _kst_today() -> str:
-    return datetime.now(KST).strftime("%Y-%m-%d")
+    return kst_today_str()
 
 
 def _kst_now() -> datetime:
-    return datetime.now(KST)
+    return kst_now()
 
 
 def is_us_daytime_kst(now: Optional[datetime] = None) -> bool:
@@ -171,8 +181,7 @@ def is_us_daytime_kst(now: Optional[datetime] = None) -> bool:
 
 
 def _previous_us_session_date(report_date: str) -> str:
-    d = datetime.strptime(report_date, "%Y-%m-%d").date()
-    return (d - timedelta(days=1)).strftime("%Y-%m-%d")
+    return previous_us_session_date(report_date)
 
 
 def _format_as_of_kst(ts: datetime) -> str:
@@ -556,7 +565,8 @@ def serialize_report(row: UsMarketReport) -> dict[str, Any]:
         "status": row.status,
         "error_message": row.error_message,
         "model": row.model,
-        "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+        "generated_at": format_utc_iso(row.generated_at),
+        "generated_at_kst": format_kst_label(row.generated_at),
     })
 
 
@@ -566,7 +576,7 @@ def get_report(db: Session, report_date: str) -> Optional[dict[str, Any]]:
 
 
 def list_reports(db: Session, days: int = 7) -> list[dict[str, Any]]:
-    since = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+    since = (kst_now().date() - timedelta(days=days)).strftime("%Y-%m-%d")
     rows = (
         db.query(UsMarketReport)
         .filter(UsMarketReport.report_date >= since)
@@ -600,11 +610,11 @@ INTERPRETATION_PROMPT = """오늘(KST) 브리핑 날짜: {report_date}
 JSON만 반환:
 {{
   "interpretations": {{
-    "us_indices": {{ "summary": "2~4문장", "bullets": [], "source_indexes": [] }},
-    "commodity": {{ "summary": "", "bullets": [], "source_indexes": [] }},
-    "fx": {{ "summary": "", "bullets": [], "source_indexes": [] }},
-    "treasury": {{ "summary": "", "bullets": [], "source_indexes": [] }},
-    "us_stocks": {{ "summary": "", "bullets": [], "source_indexes": [] }}
+    "us_indices": {{ "summary": "2~3문장", "bullets": [], "source_indexes": [] }},
+    "commodity": {{ "summary": "2~3문장", "bullets": [], "source_indexes": [] }},
+    "fx": {{ "summary": "2~3문장", "bullets": [], "source_indexes": [] }},
+    "treasury": {{ "summary": "2~3문장", "bullets": [], "source_indexes": [] }},
+    "us_stocks": {{ "summary": "2~3문장", "bullets": [], "source_indexes": [] }}
   }}
 }}
 """
@@ -673,7 +683,7 @@ def refresh_us_report_news(
     )
     snapshot["interpretations"] = interpretations
     row.indices_json = json.dumps(snapshot, ensure_ascii=False)
-    row.generated_at = datetime.now(timezone.utc)
+    row.generated_at = utc_now()
     db.commit()
     db.refresh(row)
     logger.info("미국 리포트 기사·해석 갱신: %s (%d건)", report_date, len(articles))
@@ -719,7 +729,7 @@ def generate_us_morning_report(
         db.commit()
         raise ValueError(existing.error_message)
 
-    since = (date.today() - timedelta(days=5)).strftime("%Y-%m-%d")
+    since = (kst_now().date() - timedelta(days=5)).strftime("%Y-%m-%d")
     macro_ctx = _macro_context(db, since)
 
     client = GeminiClient(api_key=settings.gemini_api_key, model=settings.gemini_model)
@@ -742,7 +752,9 @@ def generate_us_morning_report(
             system_instruction=REPORT_SYSTEM,
         )
         if not data:
-            raise ValueError("리포트 생성 결과가 비어 있습니다")
+            raise ValueError(
+                "AI 리포트 JSON 생성에 실패했습니다. 잠시 후 다시 시도해 주세요."
+            )
 
         interpretations = data.get("interpretations") or {}
         snapshot["interpretations"] = interpretations
@@ -770,7 +782,7 @@ def generate_us_morning_report(
             existing.body_markdown = f"# {data['title']}\n\n{existing.body_markdown}"
         existing.status = "ready"
         existing.model = settings.gemini_model
-        existing.generated_at = datetime.now(timezone.utc)
+        existing.generated_at = utc_now()
         existing.error_message = None
         db.commit()
         db.refresh(existing)

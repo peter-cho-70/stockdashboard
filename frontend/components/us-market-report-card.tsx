@@ -15,6 +15,7 @@ import {
 import { getUsMarketQuoteTooltip } from "@/lib/usMarketTooltips";
 import { loadUsReportCache, saveUsReportCache } from "@/lib/marketCache";
 import { todayKst } from "@/lib/marketDisplay";
+import { formatDateTimeKst, parseUtcIsoMs } from "@/lib/dateTimeKst";
 import { krChangeClass } from "@/lib/krMarketColors";
 
 /** KST 08:30~22:59 — 미국 선물 표시 구간 */
@@ -34,8 +35,7 @@ function isUsDaytimeKst(now = new Date()): boolean {
 function formatArticleDate(article: UsMarketArticle): string | null {
   if (article.published_at) {
     try {
-      return new Date(article.published_at).toLocaleString("ko-KR", {
-        timeZone: "Asia/Seoul",
+      return formatDateTimeKst(article.published_at, {
         month: "numeric",
         day: "numeric",
         hour: "2-digit",
@@ -47,8 +47,7 @@ function formatArticleDate(article: UsMarketArticle): string | null {
   }
   if (article.published) {
     try {
-      return new Date(article.published).toLocaleString("ko-KR", {
-        timeZone: "Asia/Seoul",
+      return formatDateTimeKst(article.published, {
         month: "numeric",
         day: "numeric",
         hour: "2-digit",
@@ -352,7 +351,10 @@ export function UsMarketReportCard({
     }
     setReport(r);
     setDisplaySnapshot(normalizeUsSnapshot(r));
-    setLiveLabel(r.generated_at ? `저장 리포트 · ${r.report_date}` : null);
+    setLiveLabel(
+      r.generated_at_kst ??
+        (r.generated_at ? `저장 리포트 · ${formatDateTimeKst(r.generated_at)}` : `저장 리포트 · ${r.report_date}`),
+    );
     saveUsReportCache(r);
   }, []);
 
@@ -375,10 +377,9 @@ export function UsMarketReportCard({
         setLiveLabel(null);
       }
 
-      const isToday = r.report_date === todayKst();
-      const generatedAt = r.generated_at ? new Date(r.generated_at).getTime() : 0;
-      const stale = !generatedAt || Date.now() - generatedAt > 60 * 60 * 1000;
-      if (isToday && stale && opts?.refreshNews !== false) {
+      const generatedAt = r.generated_at ? parseUtcIsoMs(r.generated_at) : 0;
+      const stale = !generatedAt || Number.isNaN(generatedAt) || Date.now() - generatedAt > 60 * 60 * 1000;
+      if (stale && opts?.refreshNews !== false) {
         setRefreshingNews(true);
         try {
           const { report: refreshed } = await marketApi.refreshUsReportNews({
@@ -474,7 +475,13 @@ export function UsMarketReportCard({
             오늘의 미국 증시
           </h2>
           {report?.report_date && (
-            <span className="text-xs text-neutral-400">{report.report_date}</span>
+            <span className="text-xs text-neutral-400">
+              {report.report_date}
+              {report.report_date !== todayKst() ? " · 최신 저장본" : ""}
+            </span>
+          )}
+          {report?.generated_at_kst && (
+            <span className="text-[10px] text-neutral-400">{report.generated_at_kst}</span>
           )}
           {liveLabel && cacheOnly && (
             <span className="text-[10px] text-neutral-400">저장본</span>

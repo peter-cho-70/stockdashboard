@@ -22,6 +22,8 @@ CACHE_FILE = CACHE_DIR / "gemini_prompt_cache.json"
 # Google cached content requires ~1024+ tokens; our static prompts are smaller.
 MIN_CACHE_STATIC_CHARS = 4000
 MAX_RETRIES = 1
+JSON_PARSE_RETRIES = 2
+DEFAULT_JSON_MAX_OUTPUT_TOKENS = 8192
 RETRY_DELAY = 45
 
 
@@ -283,11 +285,12 @@ class GeminiClient:
         if cache_key and cache_static:
             cached_name = self._get_cached_content_name(cache_key, cache_static, use_model)
 
-        for attempt in range(1, MAX_RETRIES + 1):
+        for attempt in range(1, JSON_PARSE_RETRIES + 1):
             try:
                 config = types.GenerateContentConfig(
                     temperature=0.3,
                     response_mime_type="application/json",
+                    max_output_tokens=DEFAULT_JSON_MAX_OUTPUT_TOKENS,
                 )
                 if system_instruction:
                     config.system_instruction = system_instruction
@@ -300,11 +303,25 @@ class GeminiClient:
                     config=config,
                 )
                 raw = resp.text or ""
+                finish = getattr(resp, "candidates", None)
+                finish_reason = None
+                if finish and finish[0]:
+                    finish_reason = getattr(finish[0], "finish_reason", None)
                 result = _extract_json(raw)
                 if result:
                     self._log("info", "✅ Gemini JSON 완료")
                     return result
-                self._log("error", f"❌ Gemini JSON 파싱 실패: {raw[:200]}")
+                if attempt < JSON_PARSE_RETRIES:
+                    self._log(
+                        "warning",
+                        f"⚠️ Gemini JSON 파싱 재시도 ({attempt}/{JSON_PARSE_RETRIES}, "
+                        f"finish={finish_reason}, {len(raw)}자): {raw[:120]}",
+                    )
+                    continue
+                self._log(
+                    "error",
+                    f"❌ Gemini JSON 파싱 실패 (finish={finish_reason}, {len(raw)}자): {raw[:200]}",
+                )
                 return None
             except (GeminiQuotaError, GeminiAuthError):
                 raise
