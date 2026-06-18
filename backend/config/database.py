@@ -677,6 +677,35 @@ class WatchlistItem(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
+# ─────────────────────────────────────────────
+# 관계 묶어보기 — 사용자 지정 종목 그룹 (2단계: 수동)
+# ─────────────────────────────────────────────
+class StockGroup(Base):
+    __tablename__ = "stock_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    members = relationship(
+        "StockGroupMember", back_populates="group", cascade="all, delete-orphan"
+    )
+
+
+class StockGroupMember(Base):
+    __tablename__ = "stock_group_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("stock_groups.id"), nullable=False, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    stock_name = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    group = relationship("StockGroup", back_populates="members")
+
+    __table_args__ = (UniqueConstraint("group_id", "symbol", name="uq_group_symbol"),)
+
+
 def _migrate_intel_columns():
     """기존 DB에 새 컬럼 추가 (SQLite)"""
     from sqlalchemy import text

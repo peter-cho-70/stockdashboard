@@ -206,6 +206,7 @@ class Settings(BaseSettings):
     app_host: str = Field("0.0.0.0", env="APP_HOST")
     app_port: int = Field(8000, env="APP_PORT")
     debug: bool = Field(False, env="DEBUG")
+    cron_secret: str = Field("", env="CRON_SECRET")
 
     class Config:
         env_file = ".env"

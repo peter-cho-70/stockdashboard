@@ -13,6 +13,7 @@ const menuGroups = [
       { href: "/", label: "대시보드" },
       { href: "/portfolio", label: "종목 현황" },
       { href: "/chart", label: "차트 분석" },
+      { href: "/groups", label: "종목 그룹" },
     ],
   },
   {

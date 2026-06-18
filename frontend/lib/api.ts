@@ -63,6 +63,54 @@ export interface StockItem {
   target_sell_gap_pct?: number | null;
 }
 
+export interface SectorPeerStock {
+  symbol: string;
+  name: string;
+  market: string;
+  current_price: number;
+  change_rate: number;
+  is_holding: boolean;
+  is_watched: boolean;
+}
+
+export interface SectorPeersResponse {
+  sector: string | null;
+  peers: SectorPeerStock[];
+}
+
+export interface CoMentionedStock {
+  symbol: string | null;
+  name: string;
+  current_price: number | null;
+  change_rate: number | null;
+  mention_count: number;
+  latest_date: string;
+  sentiment: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | string;
+  is_holding: boolean;
+}
+
+export interface CoMentionedResponse {
+  symbol: string;
+  name: string;
+  days: number;
+  peers: CoMentionedStock[];
+}
+
+export interface StockGroupMember {
+  symbol: string;
+  name: string;
+  current_price: number | null;
+  change_rate: number | null;
+  is_holding: boolean;
+}
+
+export interface StockGroup {
+  id: number;
+  name: string;
+  created_at: string | null;
+  members: StockGroupMember[];
+}
+
 export interface StockCreatePayload {
   symbol: string;
   name: string;
@@ -174,6 +222,11 @@ export const api = {
     fetchApi<{ message: string; created: boolean; stock: StockItem }>(
       `/portfolio/stocks/${encodeURIComponent(symbol)}/ensure`,
       { method: "POST" },
+    ),
+  /** 같은 섹터의 다른 보유·관심 종목 묶어보기 */
+  getRelatedSectorStocks: (symbol: string, limit = 12) =>
+    fetchApi<SectorPeersResponse>(
+      `/portfolio/stocks/${encodeURIComponent(symbol)}/related-sector?limit=${limit}`,
     ),
 
   // ── 알림 ──────────────────────────────────────
@@ -695,6 +748,10 @@ export const signalApi = {
   getRelated: (symbol: string, date: string, windowDays = 7) =>
     fetchApi<{ symbol: string; name: string; event_date: string; total: number; related: RelatedAnalysisItem[] }>(
       `/intel/stocks/${symbol}/related?date=${encodeURIComponent(date)}&window_days=${windowDays}`,
+    ),
+  getCoMentioned: (symbol: string, days = 90, limit = 10) =>
+    fetchApi<CoMentionedResponse>(
+      `/intel/stocks/${symbol}/co-mentioned?days=${days}&limit=${limit}`,
     ),
   backfill: () => fetchApi<{ ok: boolean; result: Record<string, number> }>("/intel/signals/backfill", { method: "POST" }),
   getSignalAccuracy: () => fetchApi<SignalAccuracyResponse>("/intel/signal-accuracy"),
@@ -1542,6 +1599,28 @@ export const watchlistApi = {
   getDetail: (id: number, days = 90) =>
     fetchApi<WatchlistDetail>(`/watchlist/${id}/detail?days=${days}`),
   remove: (id: number) => fetchApi<{ ok: boolean }>(`/watchlist/${id}`, { method: "DELETE" }),
+};
+
+export const groupsApi = {
+  getAll: () => fetchApi<{ total: number; groups: StockGroup[] }>("/stock-groups"),
+  getBySymbol: (symbol: string) =>
+    fetchApi<{ symbol: string; groups: StockGroup[] }>(
+      `/stock-groups/by-symbol/${encodeURIComponent(symbol)}`,
+    ),
+  create: (body: { name: string; symbols?: string[] }) =>
+    fetchApi<StockGroup>("/stock-groups", { method: "POST", body: JSON.stringify(body) }),
+  rename: (id: number, name: string) =>
+    fetchApi<StockGroup>(`/stock-groups/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  addMember: (id: number, body: { symbol?: string; stock_name?: string }) =>
+    fetchApi<StockGroup>(`/stock-groups/${id}/members`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  removeMember: (id: number, symbol: string) =>
+    fetchApi<StockGroup>(`/stock-groups/${id}/members/${encodeURIComponent(symbol)}`, {
+      method: "DELETE",
+    }),
+  remove: (id: number) => fetchApi<{ ok: boolean }>(`/stock-groups/${id}`, { method: "DELETE" }),
 };
 
 /** AI 추천 → 지켜보기 (종목코드 자동 조회 후 등록) */

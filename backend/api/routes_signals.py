@@ -30,6 +30,7 @@ from config.database import (
 )
 from core.signal_extractor import backfill_all_signals
 from core.signal_related import find_related_analysis, get_shared_signals_for_stock
+from core.recommendations import get_co_mentioned_stocks
 from core.demo_mode import is_demo_mode, build_demo_stocks
 
 signals_router = APIRouter()
@@ -327,6 +328,22 @@ def get_stock_related_analysis(
         "total": len(items),
         "related": items,
     }
+
+
+# ── GET /api/intel/stocks/{symbol}/co-mentioned ─────────────────
+@signals_router.get("/intel/stocks/{symbol}/co-mentioned")
+def get_stock_co_mentioned(
+    symbol: str,
+    days: int = Query(90, ge=7, le=365),
+    limit: int = Query(10, ge=1, le=30),
+    db: Session = Depends(get_db),
+):
+    """관계 묶어보기 3단계 — 같은 영상·뉴스에서 함께 언급된 AI 연관 종목"""
+    stock = db.query(Stock).filter(Stock.symbol == symbol).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+    peers = get_co_mentioned_stocks(db, stock, days=days, limit=limit)
+    return {"symbol": symbol, "name": stock.name, "days": days, "peers": peers}
 
 
 # ── POST /api/intel/signals/backfill ────────────────────────────

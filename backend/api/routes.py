@@ -359,6 +359,17 @@ def ensure_stock_preview(symbol: str, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/portfolio/stocks/{symbol}/related-sector")
+def get_related_sector_stocks(symbol: str, limit: int = 12, db: Session = Depends(get_db)):
+    """같은 섹터의 다른 보유·관심 종목 묶어보기 (1단계: 섹터 기반 자동 매칭)"""
+    stock = get_stock_by_symbol(db, symbol)
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+    from core.sector_peers import find_sector_peers
+
+    return find_sector_peers(db, stock, limit=limit)
+
+
 @router.get("/portfolio/stocks/{symbol}/chart")
 def get_stock_chart(
     symbol: str,

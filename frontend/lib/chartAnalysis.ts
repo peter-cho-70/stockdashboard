@@ -583,15 +583,23 @@ function analyzeBollinger(data: ChartBar[]): ChartSignal {
   };
 }
 
-function analyzeSupportResistance(data: ChartBar[], avgPrice: number): ChartSignal {
-  const monthData = data.slice(-22);
-  const support = Math.min(...monthData.map((d) => d.low));
-  const resistance = Math.max(...monthData.map((d) => d.high));
+function srPeriodLabel(displayDays: number): string {
+  if (displayDays >= 252) return "1Y";
+  if (displayDays >= 132) return "6M";
+  if (displayDays >= 66) return "3M";
+  return "1M";
+}
+
+function analyzeSupportResistance(data: ChartBar[], avgPrice: number, displayDays = 22): ChartSignal {
+  const windowData = data.slice(-Math.min(displayDays, data.length));
+  const support = Math.min(...windowData.map((d) => d.low));
+  const resistance = Math.max(...windowData.map((d) => d.high));
   const close = data[data.length - 1].close;
   const range = resistance - support;
   const pos = range > 0 ? ((close - support) / range) * 100 : 50;
+  const periodTag = srPeriodLabel(displayDays);
 
-  let result = `1M 지지 ${fmt(support)}원 · 저항 ${fmt(resistance)}원 · 현재 ${pos.toFixed(0)}% 구간`;
+  let result = `${periodTag} 지지 ${fmt(support)}원 · 저항 ${fmt(resistance)}원 · 현재 ${pos.toFixed(0)}% 구간`;
   let sentiment: Sentiment = "neutral";
   let passed = true;
 
@@ -617,12 +625,12 @@ function analyzeSupportResistance(data: ChartBar[], avgPrice: number): ChartSign
     id: "sr",
     step: 6,
     category: "지지/저항",
-    title: "지지·저항 (1M)",
+    title: `지지·저항 (${periodTag})`,
     method: "52주 고저·라운드피겨·이전 고저점이 심리적 기준선입니다.",
     result,
     sentiment,
     passed,
-    applicable: monthData.length > 0,
+    applicable: windowData.length > 0,
   };
 }
 
@@ -1058,11 +1066,13 @@ export function analyzeChart(
   data: ChartBar[],
   avgPrice: number,
   _currentPrice: number,
-  supplyCheck?: KisSupplyCheck | null
+  supplyCheck?: KisSupplyCheck | null,
+  displayDays = 22,
 ): ChartAnalysisResult | null {
   if (!data || data.length < 5) return null;
 
   const { regime, label: regimeLabel, hint: regimeHint } = detectMarketRegime(data);
+  const windowDays = Math.min(displayDays, data.length);
 
   const signals: ChartSignal[] = [
     analyzeTrend(data),
@@ -1071,14 +1081,14 @@ export function analyzeChart(
     analyzeMacd(data),
     analyzeRsi(data, regime),
     analyzeBollinger(data),
-    analyzeSupportResistance(data, avgPrice),
+    analyzeSupportResistance(data, avgPrice, displayDays),
     analyzeVolume(data),
     analyzePullback(data, regime),
   ];
 
-  const monthData = data.slice(-22);
-  const support = Math.min(...monthData.map((d) => d.low));
-  const resistance = Math.max(...monthData.map((d) => d.high));
+  const windowData = data.slice(-windowDays);
+  const support = Math.min(...windowData.map((d) => d.low));
+  const resistance = Math.max(...windowData.map((d) => d.high));
   const close = data[data.length - 1].close;
   const ma60 = data[data.length - 1].ma60;
   const pct7 = close * 0.93;
@@ -1093,7 +1103,7 @@ export function analyzeChart(
     pct7: Math.round(pct7),
     text: stopParts.join(" · "),
   };
-  const visibleDates = monthData.map((d) => d.date);
+  const visibleDates = windowData.map((d) => d.date);
   const annotations = buildChartAnnotations(data, visibleDates, support, resistance, stopLoss);
 
   return {

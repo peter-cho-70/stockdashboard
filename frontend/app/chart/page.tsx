@@ -38,6 +38,8 @@ import {
   Target,
   Maximize2,
   Minimize2,
+  Link2,
+  Layers,
 } from "lucide-react";
 import {
   api,
@@ -60,11 +62,16 @@ import {
   type PriceTargetSearchArticle,
   type KisSupplyCheck,
   type HoldingsAnalysis,
+  type SectorPeerStock,
+  type CoMentionedStock,
+  type StockGroup,
+  groupsApi,
 } from "@/lib/api";
 import {
   krDirectionBorderPanel,
   krDirectionTextClass,
   krSignedBoldClass,
+  krChangeClass,
   KR_UP_HEX,
   KR_DOWN_HEX,
   KR_UP_HEX_STRONG,
@@ -862,6 +869,269 @@ function RelatedAnalysisPanel({
   );
 }
 
+function SectorPeersPanel({
+  sector,
+  peers,
+  loading,
+  onSelect,
+}: {
+  sector: string | null;
+  peers: SectorPeerStock[];
+  loading: boolean;
+  onSelect: (symbol: string) => void;
+}) {
+  if (!loading && !sector) return null;
+
+  return (
+    <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
+      <div className="flex items-center gap-2">
+        <Link2 size={15} className="text-violet-500" />
+        <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200">관련 종목</span>
+        {sector && <span className="text-xs text-neutral-400">같은 섹터 · {sector}</span>}
+        {loading && <Loader2 size={12} className="animate-spin text-neutral-400 ml-1" />}
+      </div>
+      {!loading && peers.length === 0 && (
+        <p className="mt-2 text-xs text-neutral-400">
+          같은 섹터의 다른 보유·관심 종목이 없습니다.
+        </p>
+      )}
+      {peers.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {peers.map((p) => (
+            <button
+              key={p.symbol}
+              type="button"
+              onClick={() => onSelect(p.symbol)}
+              className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-3 py-1.5 text-left transition-colors hover:border-violet-300 hover:bg-violet-50/50 dark:hover:border-violet-700 dark:hover:bg-violet-900/10"
+            >
+              <span className="text-xs font-medium text-neutral-800 dark:text-neutral-200">{p.name}</span>
+              <span className={`text-[11px] tabular-nums ${krChangeClass(p.change_rate)}`}>
+                {p.change_rate > 0 ? "+" : ""}
+                {p.change_rate.toFixed(2)}%
+              </span>
+              {p.is_holding && (
+                <span className="rounded bg-neutral-200 px-1 py-0.5 text-[9px] text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300">
+                  보유
+                </span>
+              )}
+              {p.is_watched && (
+                <span className="rounded bg-amber-100 px-1 py-0.5 text-[9px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                  관심
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CoMentionedPanel({
+  peers,
+  loading,
+  onSelect,
+}: {
+  peers: CoMentionedStock[];
+  loading: boolean;
+  onSelect: (symbol: string) => void;
+}) {
+  if (!loading && peers.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
+      <div className="flex items-center gap-2">
+        <Sparkles size={15} className="text-violet-500" />
+        <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200">AI 연관 종목</span>
+        <span className="text-xs text-neutral-400">같은 영상·뉴스에 함께 언급 · 최근 90일</span>
+        {loading && <Loader2 size={12} className="animate-spin text-neutral-400 ml-1" />}
+      </div>
+      {!loading && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {peers.map((p) => (
+            <button
+              key={p.symbol ?? p.name}
+              type="button"
+              onClick={() => p.symbol && onSelect(p.symbol)}
+              disabled={!p.symbol}
+              className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-3 py-1.5 text-left transition-colors hover:border-violet-300 hover:bg-violet-50/50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:border-violet-700 dark:hover:bg-violet-900/10"
+            >
+              <span className="text-xs font-medium text-neutral-800 dark:text-neutral-200">{p.name}</span>
+              {p.change_rate != null && (
+                <span className={`text-[11px] tabular-nums ${krChangeClass(p.change_rate)}`}>
+                  {p.change_rate > 0 ? "+" : ""}
+                  {p.change_rate.toFixed(2)}%
+                </span>
+              )}
+              <span className="rounded bg-violet-100 px-1 py-0.5 text-[9px] text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
+                {p.mention_count}회 언급
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MyGroupsPanel({
+  symbol,
+  groups,
+  loading,
+  onSelect,
+  onChanged,
+}: {
+  symbol: string;
+  groups: StockGroup[];
+  loading: boolean;
+  onSelect: (symbol: string) => void;
+  onChanged: () => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [allGroups, setAllGroups] = useState<StockGroup[] | null>(null);
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function openPicker() {
+    const next = !pickerOpen;
+    setPickerOpen(next);
+    if (next && !allGroups) {
+      const res = await groupsApi.getAll();
+      setAllGroups(res.groups);
+    }
+  }
+
+  async function addToExisting(groupId: number) {
+    setBusy(true);
+    try {
+      await groupsApi.addMember(groupId, { symbol });
+      setAllGroups(null);
+      onChanged();
+      setPickerOpen(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createWithCurrent() {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true);
+    try {
+      await groupsApi.create({ name, symbols: [symbol] });
+      setAllGroups(null);
+      onChanged();
+      setNewName("");
+      setPickerOpen(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Layers size={15} className="text-violet-500" />
+          <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200">내 그룹</span>
+          {loading && <Loader2 size={12} className="animate-spin text-neutral-400" />}
+        </div>
+        <button
+          type="button"
+          onClick={openPicker}
+          className="flex items-center gap-1 rounded-md border border-[var(--border-subtle)] px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+        >
+          <Plus size={11} /> 그룹에 추가
+        </button>
+      </div>
+
+      {pickerOpen && (
+        <div className="mt-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-elevated)] p-2 space-y-2">
+          {allGroups === null ? (
+            <p className="text-xs text-neutral-400">불러오는 중...</p>
+          ) : (
+            <>
+              {allGroups.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {allGroups.map((g) => {
+                    const already = g.members.some((m) => m.symbol === symbol);
+                    return (
+                      <button
+                        key={g.id}
+                        type="button"
+                        disabled={already || busy}
+                        onClick={() => addToExisting(g.id)}
+                        className="rounded-full border border-[var(--border-subtle)] px-2.5 py-1 text-[11px] disabled:opacity-40 hover:border-violet-300 hover:text-violet-600"
+                      >
+                        {g.name}
+                        {already ? " ✓" : ""}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && createWithCurrent()}
+                  placeholder="새 그룹 이름"
+                  className="w-36 rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-[11px]"
+                />
+                <button
+                  type="button"
+                  onClick={createWithCurrent}
+                  disabled={busy || !newName.trim()}
+                  className="rounded-md bg-neutral-900 px-2 py-1 text-[11px] text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+                >
+                  새로 만들기
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {!loading && groups.length === 0 && !pickerOpen && (
+        <p className="mt-2 text-xs text-neutral-400">아직 속한 그룹이 없습니다.</p>
+      )}
+
+      {groups.length > 0 && (
+        <div className="mt-2 space-y-2">
+          {groups.map((g) => (
+            <div key={g.id}>
+              <p className="text-[11px] text-neutral-400 mb-1">{g.name}</p>
+              <div className="flex flex-wrap gap-2">
+                {g.members.filter((m) => m.symbol !== symbol).map((m) => (
+                  <button
+                    key={m.symbol}
+                    type="button"
+                    onClick={() => onSelect(m.symbol)}
+                    className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-3 py-1.5 text-left transition-colors hover:border-violet-300 hover:bg-violet-50/50 dark:hover:border-violet-700 dark:hover:bg-violet-900/10"
+                  >
+                    <span className="text-xs font-medium text-neutral-800 dark:text-neutral-200">{m.name}</span>
+                    {m.change_rate != null && (
+                      <span className={`text-[11px] tabular-nums ${krChangeClass(m.change_rate)}`}>
+                        {m.change_rate > 0 ? "+" : ""}
+                        {m.change_rate.toFixed(2)}%
+                      </span>
+                    )}
+                  </button>
+                ))}
+                {g.members.length <= 1 && (
+                  <span className="text-[11px] text-neutral-400">
+                    아직 다른 종목이 없습니다 — /groups 에서 추가하세요.
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PriceEventsPanel({
   moves,
   activeEventId,
@@ -1180,6 +1450,13 @@ function ChartContent() {
   const [sharedSignals, setSharedSignals] = useState<SharedSignalsResponse | null>(null);
   const [relatedItems, setRelatedItems] = useState<RelatedAnalysisItem[]>([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
+  const [sectorPeers, setSectorPeers] = useState<SectorPeerStock[]>([]);
+  const [sectorPeersName, setSectorPeersName] = useState<string | null>(null);
+  const [sectorPeersLoading, setSectorPeersLoading] = useState(false);
+  const [coMentioned, setCoMentioned] = useState<CoMentionedStock[]>([]);
+  const [coMentionedLoading, setCoMentionedLoading] = useState(false);
+  const [myGroups, setMyGroups] = useState<StockGroup[]>([]);
+  const [myGroupsLoading, setMyGroupsLoading] = useState(false);
   const [explainingDate, setExplainingDate] = useState<string | null>(null);
   const [explainLogs, setExplainLogs] = useState<AnalysisLog[]>([]);
   const [explainProvider, setExplainProvider] = useState<"openai" | "gemini" | "claude">("gemini");
@@ -1554,6 +1831,56 @@ function ChartContent() {
     signalApi.getSharedSignals(selectedSymbol, 120).then(setSharedSignals).catch(() => setSharedSignals(null));
   }, [selectedSymbol]);
 
+  useEffect(() => {
+    if (!selectedSymbol) {
+      setSectorPeers([]);
+      setSectorPeersName(null);
+      return;
+    }
+    setSectorPeersLoading(true);
+    api
+      .getRelatedSectorStocks(selectedSymbol)
+      .then((res) => {
+        setSectorPeers(res.peers);
+        setSectorPeersName(res.sector);
+      })
+      .catch(() => {
+        setSectorPeers([]);
+        setSectorPeersName(null);
+      })
+      .finally(() => setSectorPeersLoading(false));
+  }, [selectedSymbol]);
+
+  useEffect(() => {
+    if (!selectedSymbol) {
+      setCoMentioned([]);
+      return;
+    }
+    setCoMentionedLoading(true);
+    signalApi
+      .getCoMentioned(selectedSymbol)
+      .then((res) => setCoMentioned(res.peers))
+      .catch(() => setCoMentioned([]))
+      .finally(() => setCoMentionedLoading(false));
+  }, [selectedSymbol]);
+
+  const loadMyGroups = useCallback(() => {
+    if (!selectedSymbol) {
+      setMyGroups([]);
+      return;
+    }
+    setMyGroupsLoading(true);
+    groupsApi
+      .getBySymbol(selectedSymbol)
+      .then((res) => setMyGroups(res.groups))
+      .catch(() => setMyGroups([]))
+      .finally(() => setMyGroupsLoading(false));
+  }, [selectedSymbol]);
+
+  useEffect(() => {
+    loadMyGroups();
+  }, [loadMyGroups]);
+
   const activeEventDate = useMemo(() => {
     if (!activeEventId) return null;
     const match = activeEventId.match(/^event-(\d{4}-\d{2}-\d{2})-/);
@@ -1770,13 +2097,15 @@ function ChartContent() {
 
   const analysisResult = useMemo(() => {
     if (!chartData?.data?.length) return null;
+    const displayDays = analysisMode ? PERIOD_DISPLAY_DAYS[period] : PERIOD_DISPLAY_DAYS["1M"];
     return analyzeChart(
       chartData.data,
       chartData.avg_price,
       chartData.current_price,
-      kisSupplyCheck
+      kisSupplyCheck,
+      displayDays,
     );
-  }, [chartData, kisSupplyCheck]);
+  }, [chartData, kisSupplyCheck, analysisMode, period]);
 
   const statsData = analysisMode ? displayPlotData : fullPlotData;
   const prices = statsData.map((d) => d.close).filter(Boolean);
@@ -1939,6 +2268,29 @@ function ChartContent() {
             </div>
           </div>
         </div>
+      )}
+
+      {selectedSymbol && (
+        <SectorPeersPanel
+          sector={sectorPeersName}
+          peers={sectorPeers}
+          loading={sectorPeersLoading}
+          onSelect={selectSymbol}
+        />
+      )}
+
+      {selectedSymbol && (
+        <MyGroupsPanel
+          symbol={selectedSymbol}
+          groups={myGroups}
+          loading={myGroupsLoading}
+          onSelect={selectSymbol}
+          onChanged={loadMyGroups}
+        />
+      )}
+
+      {selectedSymbol && (
+        <CoMentionedPanel peers={coMentioned} loading={coMentionedLoading} onSelect={selectSymbol} />
       )}
 
       {selectedSymbol && (

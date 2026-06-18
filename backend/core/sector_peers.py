@@ -75,3 +75,43 @@ def stock_name_in_mentioned(stock_name: str, mentioned: list | None) -> bool:
         if name in mstr or mstr in name:
             return True
     return False
+
+
+def find_sector_peers(db, stock, limit: int = 12) -> dict:
+    """같은 섹터의 다른 보유·관심 종목 (관계 묶어보기 1단계: 섹터 기반 자동 매칭).
+
+    내가 보유했거나 관심 등록한 종목 중에서만 찾는다 — 전체 시장 종목 중
+    섹터만 같은 무관한 종목까지 끌어오면 노이즈가 커지기 때문.
+    """
+    from config.database import Stock, WatchlistItem
+
+    sector = normalize_sector(stock.sector, stock.symbol)
+    if not sector:
+        return {"sector": None, "peers": []}
+
+    watched_symbols = {
+        w.symbol
+        for w in db.query(WatchlistItem).filter(WatchlistItem.symbol.isnot(None)).all()
+    }
+
+    candidates = db.query(Stock).filter(Stock.symbol != stock.symbol).all()
+    peers = []
+    for c in candidates:
+        is_holding = bool(c.qty and c.qty > 0 and c.is_active)
+        is_watched = c.symbol in watched_symbols
+        if not (is_holding or is_watched):
+            continue
+        if normalize_sector(c.sector, c.symbol) != sector:
+            continue
+        peers.append({
+            "symbol": c.symbol,
+            "name": c.name,
+            "market": c.market,
+            "current_price": c.current_price,
+            "change_rate": round(c.change_rate, 2) if c.change_rate else 0,
+            "is_holding": is_holding,
+            "is_watched": is_watched,
+        })
+
+    peers.sort(key=lambda p: (not p["is_holding"], not p["is_watched"], -abs(p["change_rate"])))
+    return {"sector": sector, "peers": peers[:limit]}

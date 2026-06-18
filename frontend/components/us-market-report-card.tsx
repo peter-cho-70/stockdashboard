@@ -32,6 +32,32 @@ function isUsDaytimeKst(now = new Date()): boolean {
   return totalMinutes >= 8 * 60 + 30 && totalMinutes < 23 * 60;
 }
 
+const US_REPORT_AUTO_REFRESH_DAYS = 3;
+const US_REPORT_REFRESH_SESSION_PREFIX = "stockmind-us-report-refresh-";
+
+function daysBetweenKstDates(fromYmd: string, toYmd: string): number {
+  const from = new Date(`${fromYmd}T12:00:00+09:00`).getTime();
+  const to = new Date(`${toYmd}T12:00:00+09:00`).getTime();
+  return Math.round((to - from) / 86_400_000);
+}
+
+/** 오늘 기준 최근 N일 이내 리포트만 자동 갱신 */
+function shouldAutoRefreshUsReport(report: UsMarketReport): boolean {
+  const today = todayKst();
+  const age = daysBetweenKstDates(report.report_date, today);
+  return age >= 0 && age <= US_REPORT_AUTO_REFRESH_DAYS;
+}
+
+function wasUsReportRefreshedThisSession(reportDate: string): boolean {
+  if (typeof window === "undefined") return false;
+  return Boolean(sessionStorage.getItem(`${US_REPORT_REFRESH_SESSION_PREFIX}${reportDate}`));
+}
+
+function markUsReportRefreshedThisSession(reportDate: string): void {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(`${US_REPORT_REFRESH_SESSION_PREFIX}${reportDate}`, String(Date.now()));
+}
+
 function formatArticleDate(article: UsMarketArticle): string | null {
   if (article.published_at) {
     try {
@@ -379,13 +405,19 @@ export function UsMarketReportCard({
 
       const generatedAt = r.generated_at ? parseUtcIsoMs(r.generated_at) : 0;
       const stale = !generatedAt || Number.isNaN(generatedAt) || Date.now() - generatedAt > 60 * 60 * 1000;
-      if (stale && opts?.refreshNews !== false) {
+      const canAutoRefresh =
+        stale &&
+        shouldAutoRefreshUsReport(r) &&
+        !wasUsReportRefreshedThisSession(r.report_date) &&
+        opts?.refreshNews !== false;
+      if (canAutoRefresh) {
         setRefreshingNews(true);
         try {
           const { report: refreshed } = await marketApi.refreshUsReportNews({
             date: r.report_date,
             refreshQuotes: isUsDaytimeKst(),
           });
+          markUsReportRefreshedThisSession(r.report_date);
           setReport(refreshed);
           const refreshedBase = normalizeUsSnapshot(refreshed);
           try {

@@ -6,5 +6,15 @@
   ],
   "routes": [
     { "src": "/(.*)", "dest": "handler.py" }
+  ],
+  "crons": [
+    {
+      "path": "/api/internal/cron/us-morning-report",
+      "schedule": "5 23 * * 0-4"
+    },
+    {
+      "path": "/api/internal/cron/domestic-market-close",
+      "schedule": "35 6 * * 1-5"
+    }
   ]
 }
