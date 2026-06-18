@@ -14,12 +14,28 @@ import { VALUATION_LABEL_LESSONS } from "@/lib/studyTermGlossary";
 import { renderStudyTerms } from "@/lib/renderStudyTerms";
 import { StudyLessonChip } from "@/components/study-term-link";
 
-function InfoRow({ label, value }: { label: string; value?: string | null }) {
+function InfoRow({
+  label,
+  value,
+  emphasizeValue = false,
+}: {
+  label: string;
+  value?: string | null;
+  emphasizeValue?: boolean;
+}) {
   if (!value) return null;
   return (
     <div className="flex gap-2 text-[11px] py-1 border-b border-[var(--border-subtle)] last:border-0">
       <span className="w-28 shrink-0 text-neutral-500">{label}</span>
-      <span className="text-neutral-800 dark:text-neutral-200 break-words">{value}</span>
+      <span
+        className={`break-words ${
+          emphasizeValue
+            ? "font-semibold text-neutral-900 dark:text-neutral-100"
+            : "text-neutral-800 dark:text-neutral-200"
+        }`}
+      >
+        {value}
+      </span>
     </div>
   );
 }
@@ -57,7 +73,7 @@ function ValuationInfoRow({
             />
           )}
         </span>
-        <span className="text-neutral-800 dark:text-neutral-200 break-words">{value}</span>
+        <span className="break-words font-semibold text-neutral-900 dark:text-neutral-100">{value}</span>
       </div>
       {hint && (
         <p className="mt-1 ml-[7.5rem] text-[10px] leading-relaxed text-neutral-500 dark:text-neutral-400">
@@ -73,16 +89,131 @@ function ValuationInfoRow({
   );
 }
 
-function TableRows({ rows, emptyLabel }: { rows?: StockBasicsTableRow[]; emptyLabel?: string }) {
-  if (!rows?.length) {
-    return emptyLabel ? <p className="text-[11px] text-neutral-400 py-1">{emptyLabel}</p> : null;
+function normalizeNaverLabel(label: string): string {
+  return label.replace(/\s+/g, "").replace(/[·|/()]/g, "").replace(/l/gi, "").toLowerCase();
+}
+
+function formatNaverDisplayLabel(raw: string): string {
+  return raw.split(" l ")[0].split(" | ")[0].trim();
+}
+
+function resolveValuationLabel(rawLabel: string): string | null {
+  const norm = normalizeNaverLabel(rawLabel);
+  if (norm.startsWith("per") && norm.includes("eps") && !norm.includes("추정")) return "PER · EPS";
+  if (norm.includes("추정per")) return "추정 PER · EPS";
+  if (norm.startsWith("pbr") && norm.includes("bps")) return "PBR · BPS";
+  if (norm.includes("외국인소진율")) return "외국인 소진율";
+  if (norm.includes("외국인보유율")) return "외국인 보유율";
+  if (norm.includes("동일업종per")) return "동일업종 PER";
+  return null;
+}
+
+function isImportantNaverLabel(rawLabel: string): boolean {
+  const n = normalizeNaverLabel(rawLabel);
+  if (n === "현재가") return true;
+  if (n.includes("시가총액") && !n.includes("순위")) return true;
+  if (n.includes("투자의견") || n.includes("목표주가")) return true;
+  if (n.includes("per") || n.includes("pbr") || n.includes("배당")) return true;
+  if (n.includes("52주")) return true;
+  if (n.includes("외국인")) return true;
+  if (n === "거래량" || n === "거래대금") return true;
+  return false;
+}
+
+function mergeNaverInvestmentRows(
+  investmentTable?: StockBasicsTableRow[],
+  quoteTable?: StockBasicsTableRow[],
+): StockBasicsTableRow[] {
+  const merged: StockBasicsTableRow[] = [];
+  const seen = new Set<string>();
+
+  for (const row of investmentTable ?? []) {
+    const key = normalizeNaverLabel(row.label);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
   }
+
+  for (const row of quoteTable ?? []) {
+    const key = normalizeNaverLabel(row.label);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+  }
+
+  return merged;
+}
+
+function NaverQuoteInvestmentSection({
+  quote,
+  info,
+  investmentTable,
+  quoteTable,
+}: {
+  quote?: HoldingsAnalysis["quote"];
+  info: StockInvestmentInfo;
+  investmentTable?: StockBasicsTableRow[];
+  quoteTable?: StockBasicsTableRow[];
+}) {
+  const fallbackRows = info.table_rows;
+  const rows = mergeNaverInvestmentRows(
+    investmentTable?.length ? investmentTable : fallbackRows,
+    quoteTable,
+  );
+  const hasQuoteHeader = Boolean(quote?.close_price);
+  const filteredRows = hasQuoteHeader
+    ? rows.filter((row) => normalizeNaverLabel(row.label) !== "현재가")
+    : rows;
+  const hasHeader = Boolean(quote?.close_price || quote?.exchange || quote?.market_status);
+  const hasConsensusDate =
+    info.consensus_date &&
+    !filteredRows.some((row) => normalizeNaverLabel(row.label).includes("컨센서스"));
+
+  if (!hasHeader && filteredRows.length === 0 && !hasConsensusDate) return null;
+
   return (
-    <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-3 py-2">
-      {rows.map((row) => (
-        <InfoRow key={row.label} label={row.label} value={row.value} />
-      ))}
-    </div>
+    <section>
+      <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">
+        투자·시세 (네이버 금융)
+      </h4>
+      <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-3 py-2">
+        {quote?.close_price && (
+          <InfoRow
+            label="현재가"
+            emphasizeValue
+            value={
+              quote.change_direction && quote.change
+                ? `${quote.close_price} (${quote.change_direction} ${quote.change}${quote.change_pct ? ` · ${quote.change_pct}%` : ""})`
+                : quote.close_price
+            }
+          />
+        )}
+        <InfoRow label="거래소" value={quote?.exchange} />
+        <InfoRow label="시장 상태" value={quote?.market_status} />
+        {filteredRows.map((row) => {
+          const valuationLabel = resolveValuationLabel(row.label);
+          if (valuationLabel) {
+            return (
+              <ValuationInfoRow
+                key={row.label}
+                label={valuationLabel}
+                value={row.value}
+                info={info}
+              />
+            );
+          }
+          return (
+            <InfoRow
+              key={row.label}
+              label={formatNaverDisplayLabel(row.label)}
+              value={row.value}
+              emphasizeValue={isImportantNaverLabel(row.label)}
+            />
+          );
+        })}
+        {hasConsensusDate && <InfoRow label="컨센서스 기준일" value={info.consensus_date} />}
+      </div>
+    </section>
   );
 }
 
@@ -258,96 +389,12 @@ export function HoldingsAnalysisPanel({ data, loading, error }: HoldingsAnalysis
         )}
       </div>
 
-      {(quote?.close_price || data.quote_table?.length || quote?.items?.length) && (
-        <section>
-          <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">시세 스냅샷</h4>
-          <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-3 py-2">
-            {quote?.close_price && (
-              <InfoRow
-                label="현재가"
-                value={
-                  quote.change_direction && quote.change
-                    ? `${quote.close_price} (${quote.change_direction} ${quote.change}${quote.change_pct ? ` · ${quote.change_pct}%` : ""})`
-                    : quote.close_price
-                }
-              />
-            )}
-            <InfoRow label="거래소" value={quote?.exchange} />
-            <InfoRow label="시장 상태" value={quote?.market_status} />
-            {(quote?.items ?? []).map((item) => (
-              <InfoRow key={item.label} label={item.label} value={item.value} />
-            ))}
-            {(data.quote_table ?? []).map((row) => (
-              <InfoRow key={`q-${row.label}`} label={row.label} value={row.value} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section>
-        <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">
-          투자정보 (네이버 금융)
-        </h4>
-        <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-3 py-2">
-          <InfoRow label="시가총액" value={info.market_cap} />
-          <InfoRow label="시총 순위" value={info.market_cap_rank} />
-          <InfoRow label="상장주식수" value={info.listed_shares} />
-          <InfoRow label="액면가·매매단위" value={info.face_value_trading_unit} />
-          <InfoRow label="외국인 한도" value={info.foreign_limit_shares} />
-          <InfoRow label="외국인 보유" value={info.foreign_held_shares} />
-          <InfoRow
-            label="투자의견·목표"
-            value={
-              info.consensus_rating && info.consensus_target_price
-                ? `${info.consensus_rating} · ${info.consensus_target_price}`
-                : info.consensus_rating_score && info.consensus_target_price_numeric
-                  ? `${info.consensus_rating_score} · ${info.consensus_target_price_numeric}`
-                  : info.consensus_opinion_line
-            }
-          />
-          <InfoRow label="컨센서스 기준일" value={info.consensus_date} />
-          <ValuationInfoRow
-            label="PER · EPS"
-            value={info.per_eps ?? (info.per && info.eps ? `${info.per} · ${info.eps}` : info.per)}
-            info={info}
-          />
-          <ValuationInfoRow
-            label="추정 PER · EPS"
-            value={
-              info.forward_per_eps ??
-              (info.forward_per && info.forward_eps
-                ? `${info.forward_per} · ${info.forward_eps}`
-                : info.forward_per)
-            }
-            info={info}
-          />
-          <ValuationInfoRow
-            label="PBR · BPS"
-            value={info.pbr_bps ?? (info.pbr && info.bps ? `${info.pbr} · ${info.bps}` : info.pbr)}
-            info={info}
-          />
-          <InfoRow label="배당금" value={info.dividend_amount} />
-          <InfoRow label="52주 최고·최저" value={info.week52_range ?? (info.week52_high && info.week52_low ? `${info.week52_high} · ${info.week52_low}` : null)} />
-          <ValuationInfoRow
-            label="외국인 소진율"
-            value={info.foreign_exhaustion_rate}
-            info={info}
-          />
-          <ValuationInfoRow label="외국인 보유율" value={info.foreign_holding_rate} info={info} />
-          <ValuationInfoRow label="동일업종 PER" value={info.industry_per} info={info} />
-          <InfoRow label="동일업종 등락" value={info.industry_change_pct} />
-          <InfoRow label="배당수익률" value={info.dividend_yield} />
-          <InfoRow label="거래량" value={info.trading_volume} />
-          <InfoRow label="거래대금" value={info.trading_value} />
-        </div>
-      </section>
-
-      {!!data.investment_table?.length && (
-        <section>
-          <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">투자정보 전체</h4>
-          <TableRows rows={data.investment_table} />
-        </section>
-      )}
+      <NaverQuoteInvestmentSection
+        quote={quote}
+        info={info}
+        investmentTable={data.investment_table}
+        quoteTable={data.quote_table}
+      />
 
       <InvestorTrendTable rows={data.investor_trends} />
 

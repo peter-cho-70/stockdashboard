@@ -46,28 +46,6 @@ INFO_CODE_MAP = {
     "lowPriceOf52Weeks": "week52_low",
 }
 
-TOTAL_INFO_LABELS = {
-    "lastClosePrice": "현재가(종가)",
-    "openPrice": "시가",
-    "highPrice": "고가",
-    "lowPrice": "저가",
-    "accumulatedTradingVolume": "거래량",
-    "accumulatedTradingValue": "거래대금",
-    "marketValue": "시가총액",
-    "foreignRate": "외국인 보유율",
-    "highPriceOf52Weeks": "52주 최고",
-    "lowPriceOf52Weeks": "52주 최저",
-    "per": "PER",
-    "eps": "EPS",
-    "cnsPer": "추정 PER",
-    "cnsEps": "추정 EPS",
-    "pbr": "PBR",
-    "bps": "BPS",
-    "dividendYieldRatio": "배당수익률",
-    "dividend": "배당금",
-}
-
-
 def _is_kr_symbol(symbol: str) -> bool:
     return bool(re.fullmatch(r"\d{6}", (symbol or "").strip()))
 
@@ -347,13 +325,10 @@ def _serialize_research_reports(integration: dict[str, Any], *, limit: int = 8) 
     return reports
 
 
-def _build_quote_snapshot(
-    basic: dict[str, Any],
-    quote_table: dict[str, str],
-    integration: dict[str, Any],
-) -> dict[str, Any]:
+def _build_quote_snapshot(basic: dict[str, Any]) -> dict[str, Any]:
+    """당일 시세 헤더 — basic API만 사용 (투자정보는 investment_table 기준)."""
     prev = basic.get("compareToPreviousPrice") or {}
-    quote: dict[str, Any] = {
+    return {
         "close_price": basic.get("closePrice"),
         "change": basic.get("compareToPreviousClosePrice"),
         "change_pct": basic.get("fluctuationsRatio"),
@@ -362,19 +337,6 @@ def _build_quote_snapshot(
         "traded_at": basic.get("localTradedAt"),
         "exchange": basic.get("stockExchangeName"),
     }
-    for label, value in quote_table.items():
-        quote[label.replace(" ", "_").lower()] = value
-
-    totals = {item.get("code"): item.get("value") for item in integration.get("totalInfos") or []}
-    for code, field in INFO_CODE_MAP.items():
-        if totals.get(code):
-            quote[field] = totals.get(code)
-    quote["items"] = [
-        {"label": TOTAL_INFO_LABELS.get(code, code), "value": val}
-        for code, val in totals.items()
-        if val
-    ]
-    return quote
 
 
 def _build_investment_info(
@@ -475,7 +437,7 @@ def fetch_stock_basics(symbol: str, *, use_cache: bool = True) -> dict[str, Any]
         "name": name,
         "source": "naver_finance",
         "fetched_at": datetime.utcnow().isoformat(),
-        "quote": _build_quote_snapshot(basic, quote_table, integration),
+        "quote": _build_quote_snapshot(basic),
         "investment_info": _build_investment_info(table, integration),
         "investment_table": _table_to_list(table),
         "quote_table": _table_to_list(quote_table),
