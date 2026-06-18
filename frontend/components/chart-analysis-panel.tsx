@@ -196,6 +196,7 @@ function StageBlock({
 interface ChartAnalysisPanelProps {
   analysis: ChartAnalysisResult;
   stockName: string;
+  periodLabel?: string;
   activeSignalId: string | null;
   onSignalSelect: (id: string | null) => void;
 }
@@ -203,6 +204,7 @@ interface ChartAnalysisPanelProps {
 export function ChartAnalysisPanel({
   analysis,
   stockName,
+  periodLabel = "1개월",
   activeSignalId,
   onSignalSelect,
 }: ChartAnalysisPanelProps) {
@@ -222,7 +224,7 @@ export function ChartAnalysisPanel({
           차트 분석 — {stockName}
         </h3>
         <p className="mt-0.5 text-[10px] text-neutral-400">
-          1개월 차트 기준 · 항목 클릭 시 차트에 해당 구간 표시 ·{" "}
+          {periodLabel} 차트 기준 · 항목 클릭 시 차트에 해당 구간 표시 ·{" "}
           <span className="border-b border-dotted border-blue-400/60 text-blue-600 dark:text-blue-400">
             파란 밑줄
           </span>

@@ -113,7 +113,30 @@ const PERIODS: { id: Period; label: string }[] = [
   { id: "1Y", label: "1년" },
 ];
 
-const ANALYSIS_DISPLAY_DAYS = 22;
+/** 분석 모드 차트 표시 거래일 수 (약 1·3·6·12개월) */
+const PERIOD_DISPLAY_DAYS: Record<Period, number> = {
+  "1M": 22,
+  "3M": 66,
+  "6M": 132,
+  "1Y": 252,
+};
+
+function periodLabel(id: Period): string {
+  return PERIODS.find((p) => p.id === id)?.label ?? id;
+}
+
+/** 분석 모드 지표(MA60 등) 계산용 — 표시 구간보다 넉넉히 조회 */
+function chartFetchPeriod(period: Period, analysisMode: boolean): Period {
+  if (!analysisMode) return period;
+  if (period === "1M" || period === "3M") return "6M";
+  return period;
+}
+
+function chartDateTick(period: Period, date: string): string {
+  if (period === "6M" || period === "1Y") return date.slice(2, 7);
+  return date.slice(5);
+}
+
 const CHART_SYMBOL_STORAGE = "stockmind-chart-symbol";
 const CHART_PERIOD_STORAGE = "stockmind-chart-period";
 
@@ -258,6 +281,7 @@ interface PriceChartProps {
   analystTargets?: { id: string; price: number; label: string; color: string; isConsensus?: boolean }[];
   /** true면 목표가까지 Y축 확장 (기본은 주가 구간만) */
   includeTargetsInYDomain?: boolean;
+  period?: Period;
 }
 
 function CrossDot(props: {
@@ -299,6 +323,7 @@ function PriceChart({
   targetBuyPrice = null,
   analystTargets = [],
   includeTargetsInYDomain = false,
+  period = "3M",
 }: PriceChartProps) {
   const annotations =
     analysisMode && analysis
@@ -350,7 +375,7 @@ function PriceChart({
       >
       <div className="mb-1">
         <p className="text-xs font-medium text-neutral-400 mb-2">
-          주가 (원){analysisMode ? " · 최근 1개월" : ""}
+          주가 (원){analysisMode ? ` · ${periodLabel(period)}` : ""}
         </p>
         <ResponsiveContainer width="100%" height={height}>
           <ComposedChart data={plotData} margin={{ top: 16, right: 8, bottom: 0, left: 8 }}>
@@ -360,7 +385,7 @@ function PriceChart({
               tick={{ fontSize: 11, fill: "var(--foreground)" }}
               tickLine={false}
               interval="preserveStartEnd"
-              tickFormatter={(v) => v.slice(5)}
+              tickFormatter={(v) => chartDateTick(period, v)}
             />
             <YAxis
               domain={yAxisDomain ?? ["auto", "auto"]}
@@ -1188,7 +1213,7 @@ function ChartContent() {
   const [holdingsAnalysisError, setHoldingsAnalysisError] = useState<string | null>(null);
   const [chartExpanded, setChartExpanded] = useState(false);
 
-  const fetchPeriod = analysisMode ? "6M" : period;
+  const fetchPeriod = chartFetchPeriod(period, analysisMode);
 
   const loadPriceTargets = useCallback(async () => {
     if (!selectedSymbol) {
@@ -1622,7 +1647,9 @@ function ChartContent() {
 
   const fullPlotData: EnrichedChartBar[] = useMemo(() => {
     if (!chartData?.data.length) return [];
-    if (analysisMode) return enrichChartBars(chartData.data, ANALYSIS_DISPLAY_DAYS);
+    if (analysisMode) {
+      return enrichChartBars(chartData.data, PERIOD_DISPLAY_DAYS[period]);
+    }
     return chartData.data.map((d) => ({
       ...d,
       vol_k: Math.round(d.volume / 1000),
@@ -1633,7 +1660,7 @@ function ChartContent() {
       crossMarker: null,
       pullback: false,
     }));
-  }, [chartData, analysisMode]);
+  }, [chartData, analysisMode, period]);
 
   const displayPlotData = fullPlotData;
 
@@ -1804,8 +1831,8 @@ function ChartContent() {
           <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">주가 차트</h1>
           <p className="mt-0.5 text-xs text-neutral-400">
             {analysisMode
-              ? "1개월 차트 + 실전 가이드 기반 분석"
-              : "보유 종목의 주가 추이와 이동평균을 확인하세요"}
+              ? `${periodLabel(period)} 차트 + 실전 가이드 기반 분석`
+              : "1·3·6·12개월 구간 · 이동평균과 수익률 확인"}
           </p>
         </div>
         <button
@@ -1838,11 +1865,12 @@ function ChartContent() {
           </select>
         </div>
 
-        {!analysisMode && (
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-1">
             {PERIODS.map(({ id, label }) => (
               <button
                 key={id}
+                type="button"
                 onClick={() => selectPeriod(id)}
                 className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                   period === id
@@ -1854,13 +1882,12 @@ function ChartContent() {
               </button>
             ))}
           </div>
-        )}
-
-        {analysisMode && (
-          <span className="flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-400">
-            1개월 분석 · 6M 데이터 기반 지표
-          </span>
-        )}
+          {analysisMode && (
+            <span className="text-[10px] text-emerald-700 dark:text-emerald-400">
+              지표 계산 · {periodLabel(chartFetchPeriod(period, true))} 데이터
+            </span>
+          )}
+        </div>
       </div>
 
       {chartData && currentStock && (
@@ -1905,9 +1932,7 @@ function ChartContent() {
             </div>
           </div>
           <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
-            <div className="text-xs text-neutral-400">
-              {analysisMode ? "1개월" : PERIODS.find(p => p.id === period)?.label} 수익률
-            </div>
+            <div className="text-xs text-neutral-400">{periodLabel(period)} 수익률</div>
             <div className={`mt-1 flex items-center gap-1 text-base font-bold ${krSignedBoldClass(periodReturn)}`}>
               {periodReturn >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
               {periodReturn >= 0 ? "+" : ""}{periodReturn.toFixed(2)}%
@@ -2167,6 +2192,7 @@ function ChartContent() {
                 targetBuyPrice={selectedWatchlist?.target_buy_price ?? null}
                 analystTargets={analystTargetLinesPreview}
                 includeTargetsInYDomain={false}
+                period={period}
               />
             </div>
           ) : null}
@@ -2317,6 +2343,7 @@ function ChartContent() {
                 <ChartAnalysisPanel
                   analysis={analysisResult}
                   stockName={chartData.name}
+                  periodLabel={periodLabel(period)}
                   activeSignalId={activeSignalId}
                   onSignalSelect={setActiveSignalId}
                 />
@@ -2660,6 +2687,7 @@ function ChartContent() {
                 targetBuyPrice={selectedWatchlist?.target_buy_price ?? null}
                 analystTargets={analystTargetLinesAll}
                 includeTargetsInYDomain={showTargetsOnExpanded}
+                period={period}
               />
             </div>
           </div>
