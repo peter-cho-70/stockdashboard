@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BarChart, Bell, Wallet } from "lucide-react";
+import { BarChart, Bell, Target, Wallet } from "lucide-react";
 import type { PortfolioSummary } from "@/lib/api";
 import { krChangeClass } from "@/lib/krMarketColors";
 
@@ -56,11 +56,24 @@ export function HoldingsMiniCard({ summary }: { summary: PortfolioSummary | null
             key={stock.symbol}
             href={`/chart?symbol=${stock.symbol}`}
             className={`flex items-center gap-2 px-3 py-2 transition-colors hover:bg-[var(--surface-elevated)] group ${
-              Math.abs(stock.change_rate) >= 5 ? "bg-amber-50/40 dark:bg-amber-900/10" : ""
+              stock.target_sell_hit
+                ? "bg-violet-50/60 dark:bg-violet-900/15"
+                : stock.target_buy_hit
+                  ? "bg-sky-50/60 dark:bg-sky-900/15"
+                  : Math.abs(stock.change_rate) >= 5
+                    ? "bg-amber-50/40 dark:bg-amber-900/10"
+                    : ""
             }`}
           >
-            {Math.abs(stock.change_rate) >= 5 && (
-              <Bell size={10} className="shrink-0 text-amber-500" />
+            {stock.target_buy_hit || stock.target_sell_hit ? (
+              <Target
+                size={10}
+                className={`shrink-0 ${stock.target_sell_hit ? "text-violet-500" : "text-sky-500"}`}
+              />
+            ) : (
+              Math.abs(stock.change_rate) >= 5 && (
+                <Bell size={10} className="shrink-0 text-amber-500" />
+              )
             )}
             <div className="min-w-0 flex-1">
               <p className="truncate text-xs font-medium text-neutral-900 dark:text-neutral-100 group-hover:text-blue-600 dark:group-hover:text-blue-400">

@@ -251,7 +251,7 @@ export default function DashboardPage() {
             <span className="rounded-full bg-red-500 px-2 py-0.5 text-xs font-bold text-white">
               {unreadCount}
             </span>
-            건 (±5% 이상 변동 종목)
+            건 (±5% 이상 변동 · 희망가 도달 종목)
           </span>
           <ArrowUpRight size={14} className="ml-auto text-neutral-400" />
         </Link>

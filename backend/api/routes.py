@@ -14,12 +14,14 @@ from config.database import (
     get_db, Stock, AlertHistory, IntelContent, StockIssue, PortfolioSnapshot,
     RealizedGain, PortfolioTrade, ChartDateMemo,
 )
+from core.datetime_kst import format_kst_label, format_utc_iso
 from core.portfolio_positions import (
     serialize_stock,
     get_stock_by_symbol,
     apply_position,
     execute_trade,
     mark_manual,
+    target_price_flags,
 )
 from config.settings import get_settings
 from core.kis_client import create_kis_client_from_settings
@@ -222,11 +224,13 @@ class PositionUpdate(BaseModel):
     name: Optional[str] = None
     sector: Optional[str] = None
     current_price: Optional[float] = None
+    target_buy_price: Optional[float] = None
+    target_sell_price: Optional[float] = None
 
 
 @router.patch("/portfolio/stocks/{symbol}")
 def update_stock_position(symbol: str, body: PositionUpdate, db: Session = Depends(get_db)):
-    """잔고 수동 수정 (수량·평단 등)"""
+    """잔고 수동 수정 (수량·평단·매수/매도 희망가 등)"""
     demo_write_blocked()
     stock = get_stock_by_symbol(db, symbol)
     if not stock:
@@ -238,6 +242,12 @@ def update_stock_position(symbol: str, body: PositionUpdate, db: Session = Depen
         stock.sector = body.sector or None
     if body.current_price is not None:
         stock.current_price = body.current_price
+    if body.target_buy_price is not None:
+        stock.target_buy_price = body.target_buy_price if body.target_buy_price > 0 else None
+        stock.target_buy_alerted = False
+    if body.target_sell_price is not None:
+        stock.target_sell_price = body.target_sell_price if body.target_sell_price > 0 else None
+        stock.target_sell_alerted = False
 
     if body.qty is not None or body.avg_price is not None:
         qty = body.qty if body.qty is not None else stock.qty
@@ -633,6 +643,7 @@ def get_portfolio_summary(db: Session = Depends(get_db)):
                 "profit_loss": round(s.profit_loss, 0),
                 "current_value": round(s.current_value, 0),
                 "currency": s.currency,
+                **target_price_flags(s),
             }
             for s in sorted(stocks, key=lambda x: x.change_rate, reverse=True)
         ],
@@ -720,7 +731,8 @@ def get_alerts(unread_only: bool = False, limit: int = 50, db: Session = Depends
             "message": a.message,
             "change_rate": a.change_rate,
             "is_read": a.is_read,
-            "created_at": a.created_at.isoformat(),
+            "created_at": format_utc_iso(a.created_at),
+            "created_at_kst": format_kst_label(a.created_at),
         }
         for a in alerts
     ]

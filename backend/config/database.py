@@ -49,6 +49,12 @@ class Stock(Base):
     memo = Column(Text, nullable=True)             # 투자 thesis / 메모
     position_source = Column(String(10), default="kis")  # kis | manual
     is_active = Column(Boolean, default=True)
+
+    # 매수/매도 희망가 알림
+    target_buy_price = Column(Float, nullable=True)    # 매수 희망가
+    target_sell_price = Column(Float, nullable=True)   # 매도 희망가
+    target_buy_alerted = Column(Boolean, default=False)   # 매수가 도달 알림 발송 여부 (재크로스 시 재알림)
+    target_sell_alerted = Column(Boolean, default=False)  # 매도가 도달 알림 발송 여부
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_synced_at = Column(DateTime, nullable=True)  # KIS 마지막 동기화 시각
@@ -665,6 +671,9 @@ class WatchlistItem(Base):
     source_id = Column(Integer, nullable=True)
     memo = Column(Text, nullable=True)
     target_buy_price = Column(Float, nullable=True)  # 매수 희망가
+    target_sell_price = Column(Float, nullable=True)  # 매도 희망가
+    target_buy_alerted = Column(Boolean, default=False)
+    target_sell_alerted = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
@@ -758,6 +767,27 @@ def _migrate_watchlist_columns():
             conn.commit()
         except Exception:
             pass
+
+
+def _migrate_target_price_columns():
+    """매수/매도 희망가 알림 컬럼 추가 (stocks + watchlist)"""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        for ddl in (
+            "ALTER TABLE stocks ADD COLUMN target_buy_price FLOAT",
+            "ALTER TABLE stocks ADD COLUMN target_sell_price FLOAT",
+            "ALTER TABLE stocks ADD COLUMN target_buy_alerted BOOLEAN DEFAULT 0",
+            "ALTER TABLE stocks ADD COLUMN target_sell_alerted BOOLEAN DEFAULT 0",
+            "ALTER TABLE watchlist ADD COLUMN target_sell_price FLOAT",
+            "ALTER TABLE watchlist ADD COLUMN target_buy_alerted BOOLEAN DEFAULT 0",
+            "ALTER TABLE watchlist ADD COLUMN target_sell_alerted BOOLEAN DEFAULT 0",
+        ):
+            try:
+                conn.execute(text(ddl))
+                conn.commit()
+            except Exception:
+                pass
 
 
 def _migrate_youtube_channel_columns():
@@ -911,6 +941,7 @@ def init_db():
     _migrate_price_target_columns()
     _migrate_user_highlights_column()
     _migrate_study_library_columns()
+    _migrate_target_price_columns()
     print("✅ 데이터베이스 초기화 완료")
 
 

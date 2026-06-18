@@ -16,6 +16,34 @@ def recompute_purchase(stock: Stock) -> None:
     stock.purchase_amount = stock.qty * stock.avg_price
 
 
+def target_price_flags(stock: Stock) -> dict:
+    """매수/매도 희망가 도달 여부·격차(%) 계산"""
+    current = stock.current_price
+    buy_target = stock.target_buy_price
+    sell_target = stock.target_sell_price
+
+    target_buy_hit = False
+    target_buy_gap_pct = None
+    if buy_target and buy_target > 0 and current and current > 0:
+        target_buy_gap_pct = round((current - buy_target) / buy_target * 100, 2)
+        target_buy_hit = current <= buy_target
+
+    target_sell_hit = False
+    target_sell_gap_pct = None
+    if sell_target and sell_target > 0 and current and current > 0:
+        target_sell_gap_pct = round((current - sell_target) / sell_target * 100, 2)
+        target_sell_hit = current >= sell_target
+
+    return {
+        "target_buy_price": buy_target,
+        "target_sell_price": sell_target,
+        "target_buy_hit": target_buy_hit,
+        "target_sell_hit": target_sell_hit,
+        "target_buy_gap_pct": target_buy_gap_pct,
+        "target_sell_gap_pct": target_sell_gap_pct,
+    }
+
+
 def serialize_stock(stock: Stock) -> dict:
     return {
         "id": stock.id,
@@ -34,6 +62,7 @@ def serialize_stock(stock: Stock) -> dict:
         "memo": stock.memo,
         "position_source": stock.position_source or "kis",
         "last_synced_at": stock.last_synced_at.isoformat() if stock.last_synced_at else None,
+        **target_price_flags(stock),
     }
 
 

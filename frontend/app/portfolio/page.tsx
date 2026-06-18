@@ -15,6 +15,7 @@ import {
   ChevronDown,
   Plus,
   MoreHorizontal,
+  Target,
 } from "lucide-react";
 import { api, type StockItem, type StockCreatePayload } from "@/lib/api";
 import { krChangeClass, krSignedMediumClass } from "@/lib/krMarketColors";
@@ -194,6 +195,8 @@ export default function PortfolioPage() {
   const [adjQty, setAdjQty] = useState("");
   const [adjAvg, setAdjAvg] = useState("");
   const [adjName, setAdjName] = useState("");
+  const [adjTargetBuy, setAdjTargetBuy] = useState("");
+  const [adjTargetSell, setAdjTargetSell] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -231,6 +234,8 @@ export default function PortfolioPage() {
     setAdjQty(String(stock.qty));
     setAdjAvg(String(stock.avg_price));
     setAdjName(stock.name);
+    setAdjTargetBuy(stock.target_buy_price ? String(stock.target_buy_price) : "");
+    setAdjTargetSell(stock.target_sell_price ? String(stock.target_sell_price) : "");
     setModal({ type: "adjust", stock });
     setMenuOpenSymbol(null);
   }
@@ -322,10 +327,14 @@ export default function PortfolioPage() {
     setSaving(true);
     setError(null);
     try {
+      const buy = Number(adjTargetBuy.replace(/,/g, ""));
+      const sell = Number(adjTargetSell.replace(/,/g, ""));
       const res = await api.updatePosition(modal.stock.symbol, {
         qty: Number(adjQty),
         avg_price: Number(adjAvg),
         name: adjName.trim() || undefined,
+        target_buy_price: adjTargetBuy.trim() === "" || !Number.isFinite(buy) || buy <= 0 ? 0 : buy,
+        target_sell_price: adjTargetSell.trim() === "" || !Number.isFinite(sell) || sell <= 0 ? 0 : sell,
       });
       if (res.stock.qty > 0) {
         setStocks((prev) => {
@@ -538,6 +547,7 @@ export default function PortfolioPage() {
                   <SortHeader label="평가손익" col="pnl" align="right" />
                   <SortHeader label="수익률" col="profit_rate" align="right" />
                   <SortHeader label="섹터" col="sector" />
+                  <th className="px-4 py-3 text-left font-medium">희망가</th>
                   <th className="px-4 py-3 text-left font-medium">메모</th>
                   <th className="px-4 py-3 text-center font-medium w-24">관리</th>
                 </tr>
@@ -553,7 +563,11 @@ export default function PortfolioPage() {
                     className={`transition-colors ${
                       editingSymbol === stock.symbol
                         ? "bg-[var(--surface-elevated)]"
-                        : "cursor-pointer hover:bg-[var(--surface-elevated)]"
+                        : stock.target_sell_hit
+                          ? "cursor-pointer bg-violet-50/60 hover:bg-violet-50 dark:bg-violet-900/15 dark:hover:bg-violet-900/20"
+                          : stock.target_buy_hit
+                            ? "cursor-pointer bg-sky-50/60 hover:bg-sky-50 dark:bg-sky-900/15 dark:hover:bg-sky-900/20"
+                            : "cursor-pointer hover:bg-[var(--surface-elevated)]"
                     }`}
                   >
                     <td className="px-4 py-3">
@@ -622,6 +636,37 @@ export default function PortfolioPage() {
                       ) : (
                         <span className="text-xs text-neutral-500">{stock.sector || "—"}</span>
                       )}
+                    </td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex flex-col gap-0.5 text-[11px]">
+                        {stock.target_buy_price ? (
+                          <span
+                            className={`inline-flex items-center gap-1 ${
+                              stock.target_buy_hit
+                                ? "font-semibold text-sky-600 dark:text-sky-400"
+                                : "text-neutral-400"
+                            }`}
+                          >
+                            매수 {fmt(stock.target_buy_price, stock.currency)}
+                            {stock.target_buy_hit && <Target size={10} />}
+                          </span>
+                        ) : null}
+                        {stock.target_sell_price ? (
+                          <span
+                            className={`inline-flex items-center gap-1 ${
+                              stock.target_sell_hit
+                                ? "font-semibold text-violet-600 dark:text-violet-400"
+                                : "text-neutral-400"
+                            }`}
+                          >
+                            매도 {fmt(stock.target_sell_price, stock.currency)}
+                            {stock.target_sell_hit && <Target size={10} />}
+                          </span>
+                        ) : null}
+                        {!stock.target_buy_price && !stock.target_sell_price && (
+                          <span className="text-neutral-300 dark:text-neutral-600">—</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 max-w-[180px]" onClick={(e) => e.stopPropagation()}>
                       {editingSymbol === stock.symbol ? (
@@ -899,7 +944,31 @@ export default function PortfolioPage() {
                 />
               </Field>
             </div>
-            <p className="text-[10px] text-neutral-400">수동 입력 종목으로 표시되며 KIS 동기화 시 수량·평단은 유지됩니다.</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="매수 희망가 (선택)">
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  placeholder="비우면 해제"
+                  className={inputCls}
+                  value={adjTargetBuy}
+                  onChange={(e) => setAdjTargetBuy(e.target.value)}
+                />
+              </Field>
+              <Field label="매도 희망가 (선택)">
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  placeholder="비우면 해제"
+                  className={inputCls}
+                  value={adjTargetSell}
+                  onChange={(e) => setAdjTargetSell(e.target.value)}
+                />
+              </Field>
+            </div>
+            <p className="text-[10px] text-neutral-400">수동 입력 종목으로 표시되며 KIS 동기화 시 수량·평단은 유지됩니다. 희망가 도달 시 알림이 발송됩니다.</p>
             <button
               type="submit"
               disabled={saving}

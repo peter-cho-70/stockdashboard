@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from config.database import Stock, PriceHistory, PortfolioSnapshot, AlertHistory
 from core.kis_client import KISClient, BalanceItem, fetch_merged_balance_from_settings
+from core.target_alerts import check_all_targets_for_stock
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +215,9 @@ class PortfolioManager:
                     "type": alert_type,
                 })
                 logger.warning(f"⚠️ 알림: {alert_msg}")
+
+            for hit in check_all_targets_for_stock(self.db, stock):
+                alerts.append({**hit, "change_rate": change_rate})
 
         self.db.commit()
         return alerts

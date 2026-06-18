@@ -147,12 +147,19 @@ def add_to_watchlist(
 
 def serialize_watchlist_item(item: WatchlistItem, stock: Optional[Stock] = None) -> dict:
     current = stock.current_price if stock and stock.current_price else None
-    target = item.target_buy_price
-    target_hit = False
-    target_gap_pct: Optional[float] = None
-    if target and target > 0 and current and current > 0:
-        target_gap_pct = round((current - target) / target * 100, 2)
-        target_hit = current <= target
+    buy_target = item.target_buy_price
+    sell_target = item.target_sell_price
+    target_buy_hit = False
+    target_buy_gap_pct: Optional[float] = None
+    if buy_target and buy_target > 0 and current and current > 0:
+        target_buy_gap_pct = round((current - buy_target) / buy_target * 100, 2)
+        target_buy_hit = current <= buy_target
+
+    target_sell_hit = False
+    target_sell_gap_pct: Optional[float] = None
+    if sell_target and sell_target > 0 and current and current > 0:
+        target_sell_gap_pct = round((current - sell_target) / sell_target * 100, 2)
+        target_sell_hit = current >= sell_target
 
     return {
         "id": item.id,
@@ -162,9 +169,12 @@ def serialize_watchlist_item(item: WatchlistItem, stock: Optional[Stock] = None)
         "source_type": item.source_type,
         "source_id": item.source_id,
         "memo": item.memo,
-        "target_buy_price": target,
-        "target_hit": target_hit,
-        "target_gap_pct": target_gap_pct,
+        "target_buy_price": buy_target,
+        "target_sell_price": sell_target,
+        "target_buy_hit": target_buy_hit,
+        "target_sell_hit": target_sell_hit,
+        "target_buy_gap_pct": target_buy_gap_pct,
+        "target_sell_gap_pct": target_sell_gap_pct,
         "current_price": current,
         "change_rate": stock.change_rate if stock else None,
         "created_at": item.created_at.isoformat() if item.created_at else None,

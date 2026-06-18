@@ -35,11 +35,13 @@ class WatchlistCreate(BaseModel):
     source_id: Optional[int] = None
     memo: Optional[str] = None
     target_buy_price: Optional[float] = None
+    target_sell_price: Optional[float] = None
 
 
 class WatchlistUpdate(BaseModel):
     memo: Optional[str] = None
     target_buy_price: Optional[float] = None
+    target_sell_price: Optional[float] = None
     sector: Optional[str] = None
 
 
@@ -47,6 +49,7 @@ class WatchlistBySymbol(BaseModel):
     symbol: str
     stock_name: Optional[str] = None
     target_buy_price: Optional[float] = None
+    target_sell_price: Optional[float] = None
     memo: Optional[str] = None
 
 
@@ -106,8 +109,12 @@ def create_watchlist_by_symbol(body: WatchlistBySymbol, db: Session = Depends(ge
     )
     if body.target_buy_price is not None and body.target_buy_price > 0:
         item.target_buy_price = body.target_buy_price
-        db.commit()
-        db.refresh(item)
+        item.target_buy_alerted = False
+    if body.target_sell_price is not None and body.target_sell_price > 0:
+        item.target_sell_price = body.target_sell_price
+        item.target_sell_alerted = False
+    db.commit()
+    db.refresh(item)
     stock = db.query(Stock).filter(Stock.symbol == sym).first()
     return serialize_watchlist_item(item, stock)
 
@@ -153,15 +160,19 @@ def create_watchlist_item(body: WatchlistCreate, db: Session = Depends(get_db)):
     )
     if body.target_buy_price is not None and body.target_buy_price > 0:
         item.target_buy_price = body.target_buy_price
-        db.commit()
-        db.refresh(item)
+        item.target_buy_alerted = False
+    if body.target_sell_price is not None and body.target_sell_price > 0:
+        item.target_sell_price = body.target_sell_price
+        item.target_sell_alerted = False
+    db.commit()
+    db.refresh(item)
     stock = db.query(Stock).filter(Stock.symbol == item.symbol).first() if item.symbol else None
     return serialize_watchlist_item(item, stock)
 
 
 @watchlist_router.patch("/watchlist/{item_id}")
 def update_watchlist_item(item_id: int, body: WatchlistUpdate, db: Session = Depends(get_db)):
-    """관심 종목 수정 (매수 희망가·메모)"""
+    """관심 종목 수정 (매수/매도 희망가·메모)"""
     item = db.query(WatchlistItem).filter(WatchlistItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="항목 없음")
@@ -169,6 +180,10 @@ def update_watchlist_item(item_id: int, body: WatchlistUpdate, db: Session = Dep
         item.memo = body.memo.strip() or None
     if body.target_buy_price is not None:
         item.target_buy_price = body.target_buy_price if body.target_buy_price > 0 else None
+        item.target_buy_alerted = False
+    if body.target_sell_price is not None:
+        item.target_sell_price = body.target_sell_price if body.target_sell_price > 0 else None
+        item.target_sell_alerted = False
     if body.sector is not None:
         item.sector = body.sector.strip() or None
     if item.symbol or item.stock_name:

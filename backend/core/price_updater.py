@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from config.database import Stock, PriceHistory, PortfolioSnapshot, AlertHistory
 from core.portfolio import format_price_alert_message, resolve_prev_close
+from core.target_alerts import check_all_targets_for_stock
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,8 @@ def update_prices_from_krx(db: Session, alert_threshold: float = 5.0) -> dict:
             alerts.append({"symbol": stock.symbol, "name": stock.name,
                            "change_rate": change_rate, "message": msg})
             logger.warning(f"⚠️ {msg}")
+
+        alerts.extend(check_all_targets_for_stock(db, stock))
 
     db.commit()
     logger.info(f"✅ KRX 시세 갱신 완료: {updated}개 / 알림: {len(alerts)}건")

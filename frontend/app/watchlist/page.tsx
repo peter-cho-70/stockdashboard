@@ -343,17 +343,22 @@ function WatchlistRow({
   onSelectDetail: () => void;
 }) {
   const router = useRouter();
-  const [targetInput, setTargetInput] = useState(
+  const [buyTargetInput, setBuyTargetInput] = useState(
     item.target_buy_price ? String(item.target_buy_price) : "",
+  );
+  const [sellTargetInput, setSellTargetInput] = useState(
+    item.target_sell_price ? String(item.target_sell_price) : "",
   );
   const [savingTarget, setSavingTarget] = useState(false);
 
   async function saveTarget() {
-    const n = Number(targetInput.replace(/,/g, ""));
+    const buy = Number(buyTargetInput.replace(/,/g, ""));
+    const sell = Number(sellTargetInput.replace(/,/g, ""));
     setSavingTarget(true);
     try {
       const updated = await watchlistApi.update(item.id, {
-        target_buy_price: targetInput.trim() === "" || !Number.isFinite(n) || n <= 0 ? null : n,
+        target_buy_price: buyTargetInput.trim() === "" || !Number.isFinite(buy) || buy <= 0 ? 0 : buy,
+        target_sell_price: sellTargetInput.trim() === "" || !Number.isFinite(sell) || sell <= 0 ? 0 : sell,
       });
       onUpdate(updated);
     } finally {
@@ -372,9 +377,11 @@ function WatchlistRow({
       className={`border-b border-[var(--border-subtle)] last:border-0 ${
         selected
           ? "bg-blue-50/60 dark:bg-blue-900/15 ring-1 ring-inset ring-blue-300 dark:ring-blue-700"
-          : item.target_hit
-            ? "bg-sky-50/80 dark:bg-sky-900/10"
-            : ""
+          : item.target_sell_hit
+            ? "bg-violet-50/80 dark:bg-violet-900/10"
+            : item.target_buy_hit
+              ? "bg-sky-50/80 dark:bg-sky-900/10"
+              : ""
       }`}
     >
       <div
@@ -402,9 +409,14 @@ function WatchlistRow({
                 {item.sector}
               </span>
             )}
-            {item.target_hit && (
+            {item.target_buy_hit && (
               <span className="inline-flex items-center gap-0.5 rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                <Target size={10} /> 희망가 도달
+                <Target size={10} /> 매수 희망가 도달
+              </span>
+            )}
+            {item.target_sell_hit && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                <Target size={10} /> 매도 희망가 도달
               </span>
             )}
           </div>
@@ -451,8 +463,17 @@ function WatchlistRow({
           매수 희망가
           <input
             type="number"
-            value={targetInput}
-            onChange={(e) => setTargetInput(e.target.value)}
+            value={buyTargetInput}
+            onChange={(e) => setBuyTargetInput(e.target.value)}
+            className="mt-0.5 block w-28 rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs"
+          />
+        </label>
+        <label className="text-[10px] text-neutral-400">
+          매도 희망가
+          <input
+            type="number"
+            value={sellTargetInput}
+            onChange={(e) => setSellTargetInput(e.target.value)}
             className="mt-0.5 block w-28 rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs"
           />
         </label>
@@ -513,7 +534,8 @@ export default function WatchlistPage() {
     [items, selectedId],
   );
 
-  const targetHitCount = useMemo(() => items.filter((i) => i.target_hit).length, [items]);
+  const buyTargetHitCount = useMemo(() => items.filter((i) => i.target_buy_hit).length, [items]);
+  const sellTargetHitCount = useMemo(() => items.filter((i) => i.target_sell_hit).length, [items]);
 
   function openRegister(rec: StockRecommendation) {
     const src = rec.sources?.[0];
@@ -541,11 +563,16 @@ export default function WatchlistPage() {
       <div>
         <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">관심 종목</h1>
         <p className="mt-0.5 text-xs text-neutral-400">
-          종목코드 등록 · 클릭 시 3개월 소개·주요 사항 · 매수 희망가 알림
+          종목코드 등록 · 클릭 시 3개월 소개·주요 사항 · 매수/매도 희망가 알림
         </p>
-        {targetHitCount > 0 && (
+        {buyTargetHitCount > 0 && (
           <p className="mt-1 text-xs font-medium text-sky-600 dark:text-sky-400">
-            🎯 매수 희망가 도달 {targetHitCount}종목
+            🎯 매수 희망가 도달 {buyTargetHitCount}종목
+          </p>
+        )}
+        {sellTargetHitCount > 0 && (
+          <p className="mt-1 text-xs font-medium text-violet-600 dark:text-violet-400">
+            💰 매도 희망가 도달 {sellTargetHitCount}종목
           </p>
         )}
       </div>

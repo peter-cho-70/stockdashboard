@@ -55,6 +55,12 @@ export interface StockItem {
   memo: string | null;
   position_source?: "kis" | "manual";
   last_synced_at: string | null;
+  target_buy_price?: number | null;
+  target_sell_price?: number | null;
+  target_buy_hit?: boolean;
+  target_sell_hit?: boolean;
+  target_buy_gap_pct?: number | null;
+  target_sell_gap_pct?: number | null;
 }
 
 export interface StockCreatePayload {
@@ -74,6 +80,8 @@ export interface PositionUpdatePayload {
   name?: string;
   sector?: string;
   current_price?: number;
+  target_buy_price?: number;
+  target_sell_price?: number;
 }
 
 export interface PortfolioTradePayload {
@@ -324,11 +332,12 @@ export interface StockChartResponse {
 export interface Alert {
   id: number;
   symbol: string;
-  type: "PRICE_SURGE" | "PRICE_DROP" | "NEWS";
+  type: "PRICE_SURGE" | "PRICE_DROP" | "NEWS" | "TARGET_BUY" | "TARGET_SELL";
   message: string;
   change_rate: number;
   is_read: boolean;
   created_at: string;
+  created_at_kst?: string | null;
 }
 
 export type AnalysisProvider = "claude" | "openai" | "gemini";
@@ -807,7 +816,13 @@ export interface StockInvestmentInfo {
   dividend_yield?: string | null;
   industry_per?: string | null;
   industry_change_pct?: string | null;
-  [key: string]: string | null | undefined;
+  consensus_date?: string | null;
+  consensus_opinion_line?: string | null;
+  dividend_amount?: string | null;
+  trading_volume?: string | null;
+  trading_value?: string | null;
+  table_rows?: StockBasicsTableRow[];
+  [key: string]: string | null | StockBasicsTableRow[] | undefined;
 }
 
 export interface StockBasicsNewsItem {
@@ -1112,6 +1127,7 @@ export interface UsMarketReport {
   error_message: string | null;
   model: string | null;
   generated_at: string | null;
+  generated_at_kst?: string | null;
 }
 
 export interface TradeMonthlyReport {
@@ -1368,8 +1384,11 @@ export interface WatchlistItem {
   source_id: number | null;
   memo: string | null;
   target_buy_price: number | null;
-  target_hit: boolean;
-  target_gap_pct: number | null;
+  target_sell_price: number | null;
+  target_buy_hit: boolean;
+  target_sell_hit: boolean;
+  target_buy_gap_pct: number | null;
+  target_sell_gap_pct: number | null;
   current_price: number | null;
   change_rate: number | null;
   created_at: string | null;
@@ -1497,6 +1516,7 @@ export const watchlistApi = {
     symbol: string;
     stock_name?: string;
     target_buy_price?: number;
+    target_sell_price?: number;
     memo?: string;
   }) =>
     fetchApi<WatchlistItem>("/watchlist/by-symbol", {
@@ -1511,9 +1531,12 @@ export const watchlistApi = {
     source_id?: number;
     memo?: string;
     target_buy_price?: number;
+    target_sell_price?: number;
   }) => fetchApi<WatchlistItem>("/watchlist", { method: "POST", body: JSON.stringify(body) }),
-  update: (id: number, body: { memo?: string; target_buy_price?: number | null; sector?: string }) =>
-    fetchApi<WatchlistItem>(`/watchlist/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  update: (
+    id: number,
+    body: { memo?: string; target_buy_price?: number; target_sell_price?: number; sector?: string },
+  ) => fetchApi<WatchlistItem>(`/watchlist/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   getInsight: (id: number, days = 30) =>
     fetchApi<WatchlistInsight>(`/watchlist/${id}/insight?days=${days}`),
   getDetail: (id: number, days = 90) =>

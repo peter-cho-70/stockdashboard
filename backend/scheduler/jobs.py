@@ -56,10 +56,12 @@ async def job_us_market_close():
     try:
         from config.database import Stock
         from core.kis_client import create_kis_client_from_settings
+        from core.target_alerts import check_all_targets_for_stock
 
         kis = create_kis_client_from_settings()
         overseas = kis.get_overseas_balance()
         updated = 0
+        target_alerts: list[dict] = []
         for item in overseas:
             stock = db.query(Stock).filter(Stock.symbol == item.symbol).first()
             if stock:
@@ -69,8 +71,12 @@ async def job_us_market_close():
                     stock.prev_price = prev
                     stock.change_rate = (item.current_price - prev) / prev * 100
                 updated += 1
+                target_alerts.extend(check_all_targets_for_stock(db, stock))
         db.commit()
-        logger.info("✅ 미국 장 마감 동기화 완료: %s개 종목", updated)
+        logger.info(
+            "✅ 미국 장 마감 동기화 완료: %s개 종목 / 희망가 알림: %s건",
+            updated, len(target_alerts),
+        )
     except Exception as e:
         logger.error("❌ 미국 장 마감 동기화 실패: %s", e)
     finally:

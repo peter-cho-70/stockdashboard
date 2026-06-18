@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Bell, CheckCheck, TrendingUp, TrendingDown, Newspaper } from "lucide-react";
+import { Bell, CheckCheck, TrendingUp, TrendingDown, Newspaper, Target } from "lucide-react";
 import { api, type Alert } from "@/lib/api";
+import { formatDateTimeKst } from "@/lib/dateTimeKst";
 
 function AlertTypeIcon({ type }: { type: Alert["type"] }) {
   if (type === "PRICE_SURGE") return <TrendingUp size={15} className="text-emerald-500" />;
   if (type === "PRICE_DROP") return <TrendingDown size={15} className="text-red-500" />;
+  if (type === "TARGET_BUY") return <Target size={15} className="text-sky-500" />;
+  if (type === "TARGET_SELL") return <Target size={15} className="text-violet-500" />;
   return <Newspaper size={15} className="text-blue-500" />;
 }
 
@@ -92,7 +95,7 @@ export default function AlertsPage() {
                   {alert.message}
                 </p>
                 <p className="mt-0.5 text-xs text-neutral-400">
-                  {new Date(alert.created_at).toLocaleString("ko-KR")}
+                  {alert.created_at_kst ?? formatDateTimeKst(alert.created_at)}
                 </p>
               </div>
               {!alert.is_read && (
