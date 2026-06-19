@@ -10,11 +10,71 @@ import logging
 from datetime import datetime, date
 from sqlalchemy.orm import Session
 
-from config.database import Stock, PriceHistory, PortfolioSnapshot, AlertHistory
-from core.kis_client import KISClient, BalanceItem, fetch_merged_balance_from_settings
+from config.database import Stock, PriceHistory, PortfolioSnapshot, AlertHistory, PortfolioTrade
+from core.kis_client import (
+    KISClient, BalanceItem, fetch_merged_balance_from_settings,
+    fetch_trade_history_from_settings,
+)
 from core.target_alerts import check_all_targets_for_stock
 
 logger = logging.getLogger(__name__)
+
+
+def sync_trade_history(db: Session, start, end=None) -> dict:
+    """
+    KIS API에서 일별 체결내역을 가져와 PortfolioTrade에 기록 (잔고는 변경하지 않음, 분석용 history만 추가)
+    반환: {"added": N, "skipped": N}
+    """
+    records = fetch_trade_history_from_settings(start, end)
+    year_counts: dict[str, int] = {}
+    for rec in records:
+        year = rec.traded_at[:4]
+        year_counts[year] = year_counts.get(year, 0) + 1
+    added, skipped = 0, 0
+
+    for rec in records:
+        existing = db.query(PortfolioTrade).filter(
+            PortfolioTrade.external_id == rec.external_id
+        ).first()
+        if existing:
+            skipped += 1
+            continue
+
+        stock = db.query(Stock).filter(Stock.symbol == rec.symbol).first()
+        if not stock:
+            stock = Stock(
+                symbol=rec.symbol,
+                name=rec.name or rec.symbol,
+                market=rec.market or "KRX",
+                currency="KRW" if (rec.market or "KRX") == "KRX" else "USD",
+                qty=0,
+                avg_price=0,
+                position_source="kis",
+                is_active=False,
+            )
+            db.add(stock)
+            db.flush()
+
+        db.add(PortfolioTrade(
+            stock_id=stock.id,
+            side=rec.side,
+            qty=rec.qty,
+            price=rec.price,
+            traded_at=rec.traded_at,
+            source="kis",
+            external_id=rec.external_id,
+        ))
+        added += 1
+
+    db.commit()
+    result = {
+        "added": added,
+        "skipped": skipped,
+        "fetched": len(records),
+        "years": year_counts,
+    }
+    logger.info(f"✅ 체결내역 동기화 완료: {result}")
+    return result
 
 
 def resolve_prev_close(

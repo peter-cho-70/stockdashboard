@@ -4,14 +4,15 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DemoBanner } from "@/components/demo-banner";
-import { TrendingUp } from "lucide-react";
+import { TrendingUp, Wallet } from "lucide-react";
 
-const menuGroups = [
+const stockMenuGroups = [
   {
     title: "포트폴리오",
     links: [
       { href: "/", label: "대시보드" },
       { href: "/portfolio", label: "종목 현황" },
+      { href: "/portfolio/trades", label: "체결내역" },
       { href: "/chart", label: "차트 분석" },
       { href: "/groups", label: "종목 그룹" },
     ],
@@ -43,57 +44,98 @@ const menuGroups = [
   },
 ];
 
+const hubTabs = [
+  { id: "stock", href: "/", label: "주식 허브", icon: TrendingUp },
+  { id: "finance", href: "/finance", label: "재정 보드", icon: Wallet },
+] as const;
+
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function isFinanceHub(pathname: string): boolean {
+  return pathname === "/finance" || pathname.startsWith("/finance/");
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const financeHub = isFinanceHub(pathname);
+  const shellWidth = financeHub ? "max-w-[1400px]" : "max-w-6xl";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="sticky top-0 z-40 border-b border-[var(--header-border)] bg-[var(--header-bg)] backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
+        <div className={`mx-auto flex flex-wrap items-center gap-3 px-4 py-3 ${shellWidth}`}>
           <Link
-            href="/"
+            href={financeHub ? "/finance" : "/"}
             className="flex items-center gap-2 font-semibold tracking-tight text-neutral-900 dark:text-neutral-100"
           >
             <TrendingUp size={18} className="text-emerald-500" />
             StockMind
           </Link>
-          <nav className="flex flex-1 flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-            {menuGroups.map((group) => (
-              <div key={group.title} className="flex flex-wrap items-center gap-1">
-                <span className="px-1 text-[11px] font-medium text-neutral-400">
-                  {group.title}
-                </span>
-                {group.links.map(({ href, label }) => {
-                  const active = isActive(pathname, href);
-                  return (
-                    <Link
-                      key={href}
-                      href={href}
-                      className={`rounded-md px-2.5 py-1.5 transition-colors ${
-                        active
-                          ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                          : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
-                      }`}
-                    >
-                      {label}
-                    </Link>
-                  );
-                })}
-              </div>
-            ))}
-          </nav>
+
+          <div
+            className="flex rounded-lg border border-neutral-200 bg-neutral-100/80 p-0.5 dark:border-neutral-700 dark:bg-neutral-800/80"
+            role="tablist"
+            aria-label="허브 선택"
+          >
+            {hubTabs.map(({ id, href, label, icon: Icon }) => {
+              const active = id === "finance" ? financeHub : !financeHub;
+              return (
+                <Link
+                  key={id}
+                  href={href}
+                  role="tab"
+                  aria-selected={active}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                    active
+                      ? "bg-white text-neutral-900 shadow-sm dark:bg-neutral-900 dark:text-neutral-100"
+                      : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-200"
+                  }`}
+                >
+                  <Icon size={14} className={id === "finance" ? "text-emerald-600" : "text-emerald-500"} />
+                  {label}
+                </Link>
+              );
+            })}
+          </div>
+
+          {!financeHub && (
+            <nav className="flex flex-1 flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+              {stockMenuGroups.map((group) => (
+                <div key={group.title} className="flex flex-wrap items-center gap-1">
+                  <span className="px-1 text-[11px] font-medium text-neutral-400">
+                    {group.title}
+                  </span>
+                  {group.links.map(({ href, label }) => {
+                    const active = isActive(pathname, href);
+                    return (
+                      <Link
+                        key={href}
+                        href={href}
+                        className={`rounded-md px-2.5 py-1.5 transition-colors ${
+                          active
+                            ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                            : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+                        }`}
+                      >
+                        {label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              ))}
+            </nav>
+          )}
+
           <div className="ml-auto shrink-0">
             <ThemeToggle />
           </div>
         </div>
       </header>
       <DemoBanner />
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+      <main className={`mx-auto w-full flex-1 px-4 py-6 ${shellWidth}`}>
         {children}
       </main>
     </div>

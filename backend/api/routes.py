@@ -8,24 +8,28 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 from config.database import (
     get_db, Stock, AlertHistory, IntelContent, StockIssue, PortfolioSnapshot,
-    RealizedGain, PortfolioTrade, ChartDateMemo,
+    RealizedGain, PortfolioTrade, ChartDateMemo, TradeWhatIf,
 )
+from core.trade_what_if import create_what_if, evaluate_what_if, list_recent_trades, resolve_price
 from core.datetime_kst import format_kst_label, format_utc_iso
 from core.portfolio_positions import (
     serialize_stock,
     get_stock_by_symbol,
     apply_position,
     execute_trade,
+    apply_mixed_trade,
+    record_trade,
+    list_all_trades,
     mark_manual,
     target_price_flags,
 )
 from config.settings import get_settings
 from core.kis_client import create_kis_client_from_settings
-from core.portfolio import PortfolioManager
+from core.portfolio import PortfolioManager, sync_trade_history
 from core.ai_analyzer import (
     create_analyzer,
     serialize_intel,
@@ -310,6 +314,77 @@ def create_stock_trade(symbol: str, body: TradeCreate, db: Session = Depends(get
     }
 
 
+class MixedTradeCreate(BaseModel):
+    sell_qty: float = 0
+    sell_price: float = 0
+    buy_qty: float = 0
+    buy_price: float = 0
+    traded_at: Optional[str] = None
+    memo: Optional[str] = None
+
+
+@router.post("/portfolio/stocks/{symbol}/trades/mixed")
+def create_mixed_trade(symbol: str, body: MixedTradeCreate, db: Session = Depends(get_db)):
+    """불타기·물타기 등 매도+매수 혼합 체결을 한 번에 반영"""
+    demo_write_blocked()
+    stock = get_stock_by_symbol(db, symbol)
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+
+    sell_avg_price_before = stock.avg_price if body.sell_qty > 0 else None
+    try:
+        realized_pnl = apply_mixed_trade(
+            stock,
+            sell_qty=body.sell_qty,
+            sell_price=body.sell_price,
+            buy_qty=body.buy_qty,
+            buy_price=body.buy_price,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    trades = []
+    if body.sell_qty > 0:
+        trades.append(
+            record_trade(
+                db,
+                stock,
+                side="SELL",
+                qty=body.sell_qty,
+                price=body.sell_price,
+                traded_at=body.traded_at,
+                memo=body.memo,
+                avg_price_before=sell_avg_price_before,
+            )
+        )
+    if body.buy_qty > 0:
+        trades.append(
+            record_trade(db, stock, side="BUY", qty=body.buy_qty, price=body.buy_price, traded_at=body.traded_at, memo=body.memo)
+        )
+
+    db.commit()
+    db.refresh(stock)
+    for t in trades:
+        db.refresh(t)
+
+    return {
+        "message": "혼합 매매 반영 완료",
+        "stock": serialize_stock(stock),
+        "realized_pnl": realized_pnl,
+        "trades": [
+            {
+                "id": t.id,
+                "side": t.side,
+                "qty": t.qty,
+                "price": t.price,
+                "traded_at": t.traded_at,
+                "memo": t.memo,
+            }
+            for t in trades
+        ],
+    }
+
+
 @router.get("/portfolio/stocks/{symbol}/trades")
 def list_stock_trades(symbol: str, limit: int = 30, db: Session = Depends(get_db)):
     """종목별 매매 이력"""
@@ -339,6 +414,89 @@ def list_stock_trades(symbol: str, limit: int = 30, db: Session = Depends(get_db
             for t in trades
         ],
     }
+
+
+# ─────────────────────────────────────────────
+# 매도 후 기회비용 분석 (가상 매도/교체매수, 또는 실제 체결 내역 선택)
+# ─────────────────────────────────────────────
+class TradeWhatIfCreate(BaseModel):
+    kind: str = "sell_opportunity"
+    sell_symbol: Optional[str] = None
+    sell_qty: Optional[float] = None
+    sell_price: Optional[float] = None
+    sell_date: Optional[str] = None
+    sell_trade_id: Optional[int] = None
+    sell_trade_ids: Optional[list[int]] = None
+    buy_symbol: Optional[str] = None
+    buy_qty: Optional[float] = None
+    buy_price: Optional[float] = None
+    buy_date: Optional[str] = None
+    buy_trade_id: Optional[int] = None
+    memo: Optional[str] = None
+
+
+@router.get("/portfolio/trade-what-ifs/recent-trades")
+def get_recent_trades_for_what_if(
+    side: str = "SELL",
+    limit: int = 500,
+    symbol: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """선택 UI용 — 실제 매도/매수 내역 목록 (전 종목 또는 종목·기간 필터)"""
+    if side.upper() not in ("SELL", "BUY"):
+        raise HTTPException(status_code=400, detail="side는 SELL 또는 BUY 여야 합니다.")
+    return {
+        "trades": list_recent_trades(
+            db, side, limit=min(limit, 2000), symbol=symbol, start=start, end=end,
+        ),
+    }
+
+
+@router.post("/portfolio/trade-what-ifs")
+def create_trade_what_if(body: TradeWhatIfCreate, db: Session = Depends(get_db)):
+    """가상 매도(+교체매수) 기록 생성, 또는 실제 체결 내역을 선택해 분석 기록 생성"""
+    demo_write_blocked()
+    try:
+        wif = create_what_if(db, **body.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"message": "기록 저장 완료", "trade": evaluate_what_if(wif)}
+
+
+@router.get("/portfolio/trade-what-ifs")
+def list_trade_what_ifs(as_of: Optional[str] = None, db: Session = Depends(get_db)):
+    """저장된 분석 기록 목록 (as_of 지정 시 그 날짜 종가 기준, 미지정 시 현재가 기준)"""
+    rows = db.query(TradeWhatIf).order_by(TradeWhatIf.created_at.desc()).all()
+    results = []
+    for wif in rows:
+        try:
+            results.append(evaluate_what_if(wif, as_of))
+        except ValueError as e:
+            results.append({"id": wif.id, "error": str(e)})
+    return {"trades": results}
+
+
+@router.delete("/portfolio/trade-what-ifs/{what_if_id}")
+def delete_trade_what_if(what_if_id: int, db: Session = Depends(get_db)):
+    demo_write_blocked()
+    wif = db.query(TradeWhatIf).filter(TradeWhatIf.id == what_if_id).first()
+    if not wif:
+        raise HTTPException(status_code=404, detail="기록을 찾을 수 없습니다.")
+    db.delete(wif)
+    db.commit()
+    return {"message": "삭제 완료"}
+
+
+@router.get("/portfolio/stocks/{symbol}/price-on-date")
+def get_price_on_date(symbol: str, date: Optional[str] = None, db: Session = Depends(get_db)):
+    """특정 날짜(YYYY-MM-DD) 종가 조회 (미지정 시 현재가) — 매수 시나리오 계산기용"""
+    try:
+        price = resolve_price(symbol, date)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"symbol": symbol, "date": date, "price": price}
 
 
 # ─────────────────────────────────────────────
@@ -698,6 +856,52 @@ def sync_portfolio_now(db: Session = Depends(get_db)):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/portfolio/sync/trades")
+def sync_portfolio_trade_history(
+    days: int = 90,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """KIS API 일별 체결내역 동기화 (잔고는 변경하지 않음, 매도 후 기회비용 분석용 history 추가).
+    start/end(YYYY-MM-DD)를 지정하면 해당 기간을, 없으면 days(기본 90일)를 사용한다."""
+    demo_write_blocked()
+    try:
+        end_date = datetime.strptime(end, "%Y-%m-%d").date() if end else date.today()
+        start_date = datetime.strptime(start, "%Y-%m-%d").date() if start else end_date - timedelta(days=days)
+        result = sync_trade_history(db, start_date, end_date)
+        return {
+            "message": (
+                f"체결내역 동기화 완료 ({start_date}~{end_date}, "
+                f"신규 {result['added']}건, 기존 {result['skipped']}건)"
+            ),
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+            **result,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/portfolio/trades")
+def get_all_trades(
+    side: Optional[str] = None,
+    symbol: Optional[str] = None,
+    source: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    limit: int = 500,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """전 종목 매매내역 (체결내역 페이지) — 날짜·종목·매수/매도·출처 필터"""
+    items, total = list_all_trades(
+        db, side=side, symbol=symbol, source=source, start=start, end=end,
+        limit=limit, offset=offset,
+    )
+    return {"trades": items, "total": total}
 
 
 # ─────────────────────────────────────────────

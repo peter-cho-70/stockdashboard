@@ -5,6 +5,7 @@ core/kis_client.py
 """
 import logging
 import time
+from datetime import date, timedelta
 from typing import Optional
 from dataclasses import dataclass
 
@@ -12,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 BALANCE_FETCH_DELAY_SEC = 0.6
 ACCOUNT_FETCH_DELAY_SEC = 1.0
+KIS_FILL_CHUNK_DAYS = 89
+KIS_FILL_CHUNK_DELAY_SEC = 0.5
+KIS_FILL_MAX_RETRIES = 4
 
 OVERSEAS_COUNTRIES = ("US", "HK", "JP", "VN", "CN")
 CURRENCY_MAP = {
@@ -36,6 +40,19 @@ class BalanceItem:
     eval_amount: float
     profit_loss: float
     profit_rate: float
+
+
+@dataclass
+class FillRecord:
+    """일별 체결내역 데이터 클래스"""
+    symbol: str
+    name: str
+    market: str
+    side: str  # BUY | SELL
+    qty: float
+    price: float
+    traded_at: str  # YYYY-MM-DD
+    external_id: str  # 계좌+지점+주문번호+일자 dedup 키
 
 
 @dataclass
@@ -266,6 +283,175 @@ class KISClient:
             logger.error("❌ 해외주식 현재가 조회 실패 (%s/%s): %s", symbol, market, e)
             return None
 
+    def _order_to_fill(self, order, range_start: date, range_end: date) -> Optional[FillRecord]:
+        # pykis는 ccld_yn=Y를 canceled=True로 매핑하지만 KIS 응답에서는 '체결됨' 의미인 경우가 많다.
+        if getattr(order, "rejected", False):
+            return None
+        qty = _to_float(getattr(order, "executed_qty", None))
+        if qty <= 0:
+            qty = _to_float(getattr(order, "executed_quantity", None))
+        if qty <= 0:
+            return None
+        price = _to_float(getattr(order, "price", None)) or _to_float(getattr(order, "unit_price", None))
+        if price <= 0:
+            return None
+        traded_day = order.time_kst.date()
+        if traded_day < range_start or traded_day > range_end:
+            return None
+        traded_at = traded_day.strftime("%Y-%m-%d")
+        branch = getattr(order, "branch", "") or ""
+        number = getattr(order, "number", "") or ""
+        return FillRecord(
+            symbol=str(getattr(order, "symbol", "")),
+            name=str(getattr(order, "name", "") or ""),
+            market=str(getattr(order, "market", "") or "KRX"),
+            side="BUY" if order.type == "buy" else "SELL",
+            qty=qty,
+            price=price,
+            traded_at=traded_at,
+            external_id=f"{self.account_no}:{traded_at}:{branch}:{number}",
+        )
+
+    def _resolve_account_number(self, account):
+        from pykis.client.account import KisAccountNumber
+
+        if isinstance(account, KisAccountNumber):
+            return account
+        if hasattr(account, "account_number"):
+            return account.account_number
+        return KisAccountNumber(account)
+
+    def _fetch_domestic_orders(self, account, start: date, end: date, is_recent: bool) -> list:
+        """국내 체결 — 신규 TR 우선, 구 TR 폴백. 과거 API는 월 단위 조회 권장."""
+        from pykis.api.account.daily_order import KisDomesticDailyOrders
+        from pykis.client.page import KisPage
+
+        account = self._resolve_account_number(account)
+
+        tr_ids = DOMESTIC_FILL_TR_IDS[(not self.is_mock, is_recent)]
+        last_error: Exception | None = None
+
+        for tr_id in tr_ids:
+            for attempt in range(KIS_FILL_MAX_RETRIES):
+                try:
+                    page = KisPage.first().to(100)
+                    first = None
+                    while True:
+                        result = self._kis.fetch(
+                            "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+                            api=tr_id,
+                            params={
+                                "INQR_STRT_DT": start.strftime("%Y%m%d"),
+                                "INQR_END_DT": end.strftime("%Y%m%d"),
+                                "SLL_BUY_DVSN_CD": "00",
+                                "INQR_DVSN": "00",
+                                "PDNO": "",
+                                "CCLD_DVSN": "01",
+                                "ORD_GNO_BRNO": "",
+                                "ODNO": "",
+                                "INQR_DVSN_3": "00",
+                                "INQR_DVSN_1": "",
+                            },
+                            form=[account, page],
+                            continuous=not page.is_first,
+                            response_type=KisDomesticDailyOrders(account_number=account),
+                        )
+                        if first is None:
+                            first = result
+                        else:
+                            first.orders.extend(result.orders)
+                        if result.is_last:
+                            break
+                        page = result.next_page
+                    logger.info(
+                        "국내 체결 %s (%s~%s, recent=%s): %s건",
+                        tr_id,
+                        start,
+                        end,
+                        is_recent,
+                        len(first.orders) if first else 0,
+                    )
+                    return first.orders if first else []
+                except Exception as e:
+                    last_error = e
+                    msg = str(e)
+                    if "호출 횟수" in msg or "EGW00201" in msg:
+                        wait = KIS_FILL_CHUNK_DELAY_SEC * (attempt + 2)
+                        logger.warning(
+                            "국내 체결 rate limit (%s~%s), %ss 후 재시도 (%s/%s)",
+                            start,
+                            end,
+                            wait,
+                            attempt + 1,
+                            KIS_FILL_MAX_RETRIES,
+                        )
+                        time.sleep(wait)
+                        continue
+                    logger.warning("국내 체결 %s 실패 (%s~%s): %s", tr_id, start, end, e)
+                    break
+
+        if last_error:
+            raise last_error
+        return []
+
+    def get_daily_fills(self, start, end=None) -> list[FillRecord]:
+        """일별 체결내역 조회 (국내+해외 통합).
+
+        3개월 이전은 CTSC9215R(월 단위), 이내는 TTTC0081R 사용. pykis daily_orders는 사용하지 않는다.
+        """
+        from pykis.api.account.daily_order import foreign_daily_orders
+
+        end = end or date.today()
+        if start > end:
+            start, end = end, start
+
+        account = self._account()
+        if not account or not self._kis:
+            logger.warning("KIS API 미연결. connect() 먼저 호출 필요")
+            return []
+
+        account_no = self._resolve_account_number(account)
+        records: list[FillRecord] = []
+        seen_ids: set[str] = set()
+
+        for sub_start, sub_end, is_recent in _iter_kis_domestic_ranges(start, end):
+            try:
+                orders = self._fetch_domestic_orders(account_no, sub_start, sub_end, is_recent)
+                for order in orders:
+                    rec = self._order_to_fill(order, sub_start, sub_end)
+                    if rec and rec.external_id not in seen_ids:
+                        seen_ids.add(rec.external_id)
+                        records.append(rec)
+            except Exception as e:
+                logger.error(
+                    "❌ 국내 체결내역 조회 실패 (%s~%s): %s",
+                    sub_start,
+                    sub_end,
+                    e,
+                )
+
+            time.sleep(KIS_FILL_CHUNK_DELAY_SEC)
+
+            try:
+                frn = foreign_daily_orders(self._kis, account_no, sub_start, sub_end)
+                for order in frn.orders:
+                    rec = self._order_to_fill(order, sub_start, sub_end)
+                    if rec and rec.external_id not in seen_ids:
+                        seen_ids.add(rec.external_id)
+                        records.append(rec)
+            except Exception as e:
+                logger.error(
+                    "❌ 해외 체결내역 조회 실패 (%s~%s): %s",
+                    sub_start,
+                    sub_end,
+                    e,
+                )
+
+            time.sleep(KIS_FILL_CHUNK_DELAY_SEC)
+
+        logger.info("✅ 체결내역 조회 완료: %s건 (%s~%s)", len(records), start, end)
+        return records
+
 
 def _resolve_kis_mock(cfg, settings) -> bool:
     if cfg.is_mock is not None:
@@ -360,3 +546,107 @@ def fetch_merged_balance_from_settings() -> list[BalanceItem]:
     result = list(merged.values())
     logger.info("✅ KIS 합산 잔고: %s개 계좌 → %s개 종목", len(configs), len(result))
     return result
+
+
+def _recent_window_start(today: date | None = None) -> date:
+    """KIS 국내 '최근 3개월' API( TTTC0081R )와 과거 API( CTSC9215R ) 경계."""
+    today = today or date.today()
+    month = today.month - 3
+    year = today.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    return date(year, month, 1)
+
+
+DOMESTIC_FILL_TR_IDS = {
+    (True, True): ("TTTC0081R", "TTTC8001R"),
+    (True, False): ("CTSC9215R", "CTSC9115R"),
+    (False, True): ("VTTC0081R", "VTTC8001R"),
+    (False, False): ("VTSC9215R", "VTSC9115R"),
+}
+
+
+def _month_last_day(d: date) -> date:
+    if d.month == 12:
+        return date(d.year, 12, 31)
+    return date(d.year, d.month + 1, 1) - timedelta(days=1)
+
+
+def _split_recent_historical(start: date, end: date, today: date | None = None):
+    """국내 체결 API recent/과거 경계에서 구간을 나눈다 (pykis split 버그 회피)."""
+    recent_start = _recent_window_start(today)
+    if end < recent_start:
+        yield start, end
+        return
+    if start >= recent_start:
+        yield start, end
+        return
+    hist_end = min(end, recent_start - timedelta(days=1))
+    if start <= hist_end:
+        yield start, hist_end
+    if end >= recent_start:
+        yield max(start, recent_start), end
+
+
+def _iter_kis_domestic_ranges(start: date, end: date, today: date | None = None):
+    """KIS 국내 체결 API 규칙: 3개월 이전은 월 단위(CTSC9215R), 이내는 일 단위(TTTC0081R)."""
+    today = today or date.today()
+    recent_start = _recent_window_start(today)
+    for part_start, part_end in _split_recent_historical(start, end, today):
+        if part_end < recent_start:
+            cursor = part_start
+            while cursor <= part_end:
+                chunk_end = min(part_end, _month_last_day(cursor))
+                yield cursor, chunk_end, False
+                cursor = chunk_end + timedelta(days=1)
+        else:
+            cursor = part_start
+            while cursor <= part_end:
+                chunk_end = min(part_end, cursor + timedelta(days=KIS_FILL_CHUNK_DAYS))
+                yield cursor, chunk_end, True
+                cursor = chunk_end + timedelta(days=1)
+
+
+def fetch_trade_history_from_settings(start, end=None) -> list[FillRecord]:
+    """설정된 모든 KIS 계좌의 일별 체결내역 조회 (계좌별 API 키 사용)."""
+    from config.settings import get_settings
+
+    if end is None:
+        end = date.today()
+
+    s = get_settings()
+    configs = s.get_kis_accounts()
+    if not configs:
+        return []
+
+    all_records: list[FillRecord] = []
+    seen_ids: set[str] = set()
+    for i, cfg in enumerate(configs):
+        if i > 0:
+            time.sleep(ACCOUNT_FETCH_DELAY_SEC)
+        client = KISClient(
+            app_key=cfg.app_key,
+            app_secret=cfg.app_secret,
+            account_no=cfg.account_no,
+            is_mock=_resolve_kis_mock(cfg, s),
+            hts_id=s.kis_hts_id or None,
+        )
+        if not client.connect():
+            logger.warning("KIS 연결 실패 — 계좌 %s", cfg.account_no)
+            continue
+        records = client.get_daily_fills(start, end)
+        logger.info(
+            "계좌 %s (%s~%s): 체결내역 %s건",
+            cfg.account_no,
+            start,
+            end,
+            len(records),
+        )
+        for rec in records:
+            if rec.external_id in seen_ids:
+                continue
+            seen_ids.add(rec.external_id)
+            all_records.append(rec)
+
+    return all_records

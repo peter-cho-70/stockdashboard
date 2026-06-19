@@ -25,6 +25,7 @@ from api.routes_market import market_router
 from api.routes_morning import morning_router
 from api.routes_system import system_router
 from api.routes_study import study_router
+from api.routes_finance import finance_router
 from api.routes_cron import cron_router
 from scheduler.jobs import create_scheduler
 
@@ -119,6 +120,7 @@ app.include_router(market_router, prefix="/api")
 app.include_router(morning_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(study_router, prefix="/api")
+app.include_router(finance_router, prefix="/api")
 app.include_router(cron_router, prefix="/api")
 
 

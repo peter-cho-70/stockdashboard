@@ -140,6 +140,84 @@ export interface PortfolioTradePayload {
   memo?: string;
 }
 
+export interface MixedTradePayload {
+  sell_qty?: number;
+  sell_price?: number;
+  buy_qty?: number;
+  buy_price?: number;
+  traded_at?: string;
+  memo?: string;
+}
+
+export interface TradeWhatIfCreatePayload {
+  sell_symbol?: string;
+  sell_qty?: number;
+  sell_price?: number;
+  sell_date?: string;
+  sell_trade_id?: number;
+  sell_trade_ids?: number[];
+  buy_symbol?: string;
+  buy_qty?: number;
+  buy_price?: number;
+  buy_date?: string;
+  buy_trade_id?: number;
+  memo?: string;
+}
+
+export interface TradeWhatIfItem {
+  id: number;
+  source: "virtual" | "real";
+  sell_symbol: string;
+  sell_name: string | null;
+  sell_qty: number;
+  sell_price: number;
+  sell_avg_price: number | null;
+  sell_date: string;
+  sell_trade_ids?: number[] | null;
+  sell_trade_count?: number | null;
+  sell_compare_price: number;
+  holding_opportunity: number;
+  realized_if_sold?: number;
+  buy_symbol?: string | null;
+  buy_name?: string | null;
+  buy_qty?: number | null;
+  buy_price?: number | null;
+  buy_date?: string | null;
+  buy_compare_price?: number;
+  buy_pnl?: number;
+  switch_advantage?: number;
+  memo: string | null;
+  created_at: string | null;
+  as_of: string;
+  error?: string;
+}
+
+export interface AllTradeItem {
+  id: number;
+  symbol: string;
+  name: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  price: number;
+  amount: number;
+  traded_at: string;
+  source: string;
+  memo: string | null;
+  realized_pnl: number | null;
+  realized_pnl_estimated: boolean;
+  realized_avg_price: number | null;
+}
+
+export interface RecentTradeForWhatIf {
+  trade_id: number;
+  symbol: string;
+  name: string;
+  qty: number;
+  price: number;
+  traded_at: string;
+  memo: string | null;
+}
+
 export interface PortfolioTradeItem {
   id: number;
   side: string;
@@ -174,10 +252,54 @@ export interface ChartDateMemoItem {
   updated_at: string | null;
 }
 
+export interface FinanceHubState {
+  cashAssets: import("@/lib/finance/types").CashAsset[];
+  illiquidAssets: import("@/lib/finance/types").IlliquidAsset[];
+  realEstateAssets: import("@/lib/finance/types").RealEstateAsset[];
+  liabilities: import("@/lib/finance/types").Liability[];
+  fixedExpenses: import("@/lib/finance/types").FixedExpense[];
+  incomes: import("@/lib/finance/types").Income[];
+  fundingNeeds: import("@/lib/finance/types").FundingNeed[];
+}
+
+export interface FinanceLedgerState {
+  transactions: import("@/lib/finance/types").Transaction[];
+  budgets: import("@/lib/finance/types").Budget[];
+  settings: import("@/lib/finance/types").LedgerSettings;
+}
+
+export interface FinanceStockSnapshot {
+  total_value: number;
+  total_purchase: number;
+  total_profit: number;
+  total_profit_rate: number;
+  stock_count: number;
+  updated_at: string;
+}
+
 export const api = {
   getPortfolioSummary: () => fetchApi<PortfolioSummary>("/portfolio/summary"),
   getStocks: () => fetchApi<StockItem[]>("/portfolio/stocks"),
   syncNow: () => fetchApi<unknown>("/portfolio/sync/now", { method: "POST" }),
+  syncTradeHistory: (opts: number | { days?: number; start?: string; end?: string } = 90) => {
+    const params = typeof opts === "number" ? { days: opts } : opts;
+    const qs = new URLSearchParams();
+    if (params.start) qs.set("start", params.start);
+    if (params.end) qs.set("end", params.end);
+    if (!params.start && params.days) qs.set("days", String(params.days));
+    return fetchApi<{
+      message: string;
+      added: number;
+      skipped: number;
+      fetched?: number;
+      years?: Record<string, number>;
+      start?: string;
+      end?: string;
+    }>(
+      `/portfolio/sync/trades?${qs.toString()}`,
+      { method: "POST" },
+    );
+  },
   refreshPrices: () => fetchApi<{ message: string; updated: number; alerts: unknown[] }>("/portfolio/refresh-prices", { method: "POST" }),
   getHistory: (days?: number) => fetchApi<PortfolioSnapshot[]>(`/portfolio/history${days ? `?days=${days}` : ""}`),
   updateMemo: (symbol: string, memo: string, sector?: string) =>
@@ -204,9 +326,64 @@ export const api = {
       `/portfolio/stocks/${symbol}/trades`,
       { method: "POST", body: JSON.stringify(body) },
     ),
+  createMixedTrade: (symbol: string, body: MixedTradePayload) =>
+    fetchApi<{ message: string; stock: StockItem; realized_pnl: number; trades: PortfolioTradeItem[] }>(
+      `/portfolio/stocks/${symbol}/trades/mixed`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   getStockTrades: (symbol: string, limit = 30) =>
     fetchApi<{ symbol: string; trades: PortfolioTradeItem[] }>(
       `/portfolio/stocks/${symbol}/trades?limit=${limit}`,
+    ),
+  getRecentTradesForWhatIf: (
+    side: "SELL" | "BUY",
+    opts: {
+      limit?: number;
+      symbol?: string;
+      start?: string;
+      end?: string;
+    } = {},
+  ) => {
+    const qs = new URLSearchParams({ side });
+    if (opts.limit) qs.set("limit", String(opts.limit));
+    if (opts.symbol) qs.set("symbol", opts.symbol);
+    if (opts.start) qs.set("start", opts.start);
+    if (opts.end) qs.set("end", opts.end);
+    return fetchApi<{ trades: RecentTradeForWhatIf[] }>(
+      `/portfolio/trade-what-ifs/recent-trades?${qs.toString()}`,
+    );
+  },
+  createTradeWhatIf: (body: TradeWhatIfCreatePayload) =>
+    fetchApi<{ message: string; trade: TradeWhatIfItem }>("/portfolio/trade-what-ifs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getTradeWhatIfs: (asOf?: string) =>
+    fetchApi<{ trades: TradeWhatIfItem[] }>(
+      `/portfolio/trade-what-ifs${asOf ? `?as_of=${asOf}` : ""}`,
+    ),
+  deleteTradeWhatIf: (id: number) =>
+    fetchApi<{ message: string }>(`/portfolio/trade-what-ifs/${id}`, { method: "DELETE" }),
+  getAllTrades: (params: {
+    side?: "BUY" | "SELL";
+    symbol?: string;
+    source?: string;
+    start?: string;
+    end?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+    return fetchApi<{ trades: AllTradeItem[]; total: number }>(
+      `/portfolio/trades${qs.toString() ? `?${qs.toString()}` : ""}`,
+    );
+  },
+  getPriceOnDate: (symbol: string, date?: string) =>
+    fetchApi<{ symbol: string; date: string | null; price: number }>(
+      `/portfolio/stocks/${symbol}/price-on-date${date ? `?date=${date}` : ""}`,
     ),
   getChartMemos: (symbol: string) =>
     fetchApi<ChartDateMemoItem[]>(`/portfolio/stocks/${symbol}/chart-memos`),
@@ -283,6 +460,26 @@ export const api = {
 
   getStockChart: (symbol: string, period: string) =>
     fetchApi<StockChartResponse>(`/portfolio/stocks/${symbol}/chart?period=${period}`),
+
+  // ── 재정허브 ──────────────────────────────────
+  getFinanceState: () => fetchApi<FinanceHubState>("/finance/state"),
+  saveFinanceState: (body: FinanceHubState) =>
+    fetchApi<FinanceHubState>("/finance/state", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  resetFinanceState: () =>
+    fetchApi<FinanceHubState>("/finance/state", { method: "DELETE" }),
+  getLedgerState: () => fetchApi<FinanceLedgerState>("/finance/ledger"),
+  saveLedgerState: (body: FinanceLedgerState) =>
+    fetchApi<FinanceLedgerState>("/finance/ledger", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  resetLedgerState: () =>
+    fetchApi<FinanceLedgerState>("/finance/ledger", { method: "DELETE" }),
+  getFinanceStockSnapshot: () =>
+    fetchApi<FinanceStockSnapshot>("/finance/stock-snapshot"),
 
   // ── 헬스 ──────────────────────────────────────
   health: () => fetchApi<{ status: string; demo_mode?: boolean }>("/health"),

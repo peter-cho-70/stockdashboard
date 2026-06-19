@@ -94,12 +94,46 @@ class PortfolioTrade(Base):
     side = Column(String(4), nullable=False)  # BUY | SELL
     qty = Column(Float, nullable=False)
     price = Column(Float, nullable=False)
+    avg_price_before = Column(Float, nullable=True)  # 매도 직전 평균단가 스냅샷
     traded_at = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD
     memo = Column(Text, nullable=True)
     source = Column(String(10), default="manual")
+    external_id = Column(String(64), nullable=True, index=True)  # KIS 체결 dedup 키
     created_at = Column(DateTime, default=datetime.utcnow)
 
     stock = relationship("Stock", back_populates="trades")
+
+
+# ─────────────────────────────────────────────
+# 매도 후 기회비용 분석 (가상 매도/교체매수, 또는 실제 체결 내역 기반)
+# ─────────────────────────────────────────────
+class TradeWhatIf(Base):
+    __tablename__ = "trade_what_ifs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    kind = Column(String(20), nullable=False, default="sell_opportunity")  # sell_opportunity | mixed | buydate
+    source = Column(String(10), nullable=False, default="virtual")  # virtual | real
+
+    sell_symbol = Column(String(20), nullable=True, index=True)
+    sell_name = Column(String(100), nullable=True)
+    sell_qty = Column(Float, nullable=True)
+    sell_price = Column(Float, nullable=True)
+    sell_avg_price = Column(Float, nullable=True)   # 평단가 스냅샷 (가상매도·불타기물타기 실현손익 계산용)
+    sell_date = Column(String(10), nullable=True)
+    sell_trade_id = Column(Integer, ForeignKey("portfolio_trades.id"), nullable=True)
+    sell_trade_ids = Column(Text, nullable=True)  # JSON array — 복수 실제 매도 체결 id
+
+    buy_symbol = Column(String(20), nullable=True)
+    buy_name = Column(String(100), nullable=True)
+    buy_qty = Column(Float, nullable=True)
+    buy_price = Column(Float, nullable=True)
+    buy_date = Column(String(10), nullable=True)
+    buy_trade_id = Column(Integer, ForeignKey("portfolio_trades.id"), nullable=True)
+
+    position_qty_before = Column(Float, nullable=True)  # 불타기·물타기 기록 시점의 보유수량 스냅샷
+
+    memo = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 # ─────────────────────────────────────────────
@@ -706,6 +740,18 @@ class StockGroupMember(Base):
     __table_args__ = (UniqueConstraint("group_id", "symbol", name="uq_group_symbol"),)
 
 
+# ─────────────────────────────────────────────
+# 재정허브 — JSON 상태 저장
+# ─────────────────────────────────────────────
+class FinanceJsonStore(Base):
+    __tablename__ = "finance_json_store"
+
+    id = Column(Integer, primary_key=True, index=True)
+    store_key = Column(String(50), unique=True, nullable=False, index=True)
+    data_json = Column(Text, nullable=False, default="{}")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 def _migrate_intel_columns():
     """기존 DB에 새 컬럼 추가 (SQLite)"""
     from sqlalchemy import text
@@ -937,6 +983,21 @@ def _migrate_price_target_columns():
                 pass
 
 
+def _migrate_portfolio_trade_columns():
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        for ddl in (
+            "ALTER TABLE portfolio_trades ADD COLUMN external_id VARCHAR(64)",
+            "ALTER TABLE portfolio_trades ADD COLUMN avg_price_before FLOAT",
+        ):
+            try:
+                conn.execute(text(ddl))
+                conn.commit()
+            except Exception:
+                pass
+
+
 def _migrate_study_library_columns():
     from sqlalchemy import text
 
@@ -957,9 +1018,80 @@ def _migrate_study_library_columns():
                 pass
 
 
+def _migrate_trade_what_if_schema():
+    """trade_what_ifs: kind/position_qty_before 추가 + sell_* nullable 전환 (SQLite는 컬럼 제약 변경이 불가해 테이블을 재생성).
+    시나리오 계산기(불타기·물타기/매수 시나리오)와 매도 후 기회비용 분석을 한 모달로 통합하면서 필요해졌다."""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(trade_what_ifs)")).fetchall()}
+        if not cols or "kind" in cols:
+            return
+        try:
+            conn.execute(text("""
+                CREATE TABLE trade_what_ifs_new (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    kind VARCHAR(20) NOT NULL DEFAULT 'sell_opportunity',
+                    source VARCHAR(10) NOT NULL,
+                    sell_symbol VARCHAR(20),
+                    sell_name VARCHAR(100),
+                    sell_qty FLOAT,
+                    sell_price FLOAT,
+                    sell_avg_price FLOAT,
+                    sell_date VARCHAR(10),
+                    sell_trade_id INTEGER,
+                    buy_symbol VARCHAR(20),
+                    buy_name VARCHAR(100),
+                    buy_qty FLOAT,
+                    buy_price FLOAT,
+                    buy_date VARCHAR(10),
+                    buy_trade_id INTEGER,
+                    position_qty_before FLOAT,
+                    memo TEXT,
+                    created_at DATETIME,
+                    FOREIGN KEY(sell_trade_id) REFERENCES portfolio_trades (id),
+                    FOREIGN KEY(buy_trade_id) REFERENCES portfolio_trades (id)
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO trade_what_ifs_new (
+                    id, kind, source, sell_symbol, sell_name, sell_qty, sell_price, sell_avg_price,
+                    sell_date, sell_trade_id, buy_symbol, buy_name, buy_qty, buy_price, buy_date,
+                    buy_trade_id, memo, created_at
+                )
+                SELECT id, 'sell_opportunity', source, sell_symbol, sell_name, sell_qty, sell_price, sell_avg_price,
+                    sell_date, sell_trade_id, buy_symbol, buy_name, buy_qty, buy_price, buy_date,
+                    buy_trade_id, memo, created_at
+                FROM trade_what_ifs
+            """))
+            conn.execute(text("DROP TABLE trade_what_ifs"))
+            conn.execute(text("ALTER TABLE trade_what_ifs_new RENAME TO trade_what_ifs"))
+            conn.execute(text("CREATE INDEX ix_trade_what_ifs_id ON trade_what_ifs (id)"))
+            conn.execute(text("CREATE INDEX ix_trade_what_ifs_sell_symbol ON trade_what_ifs (sell_symbol)"))
+            conn.commit()
+        except Exception as e:
+            print(f"trade_what_ifs 스키마 마이그레이션 실패: {e}")
+
+
+def _migrate_trade_what_if_sell_trade_ids():
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(trade_what_ifs)")).fetchall()}
+        if not cols or "sell_trade_ids" in cols:
+            return
+        try:
+            conn.execute(text("ALTER TABLE trade_what_ifs ADD COLUMN sell_trade_ids TEXT"))
+            conn.commit()
+        except Exception as e:
+            print(f"trade_what_ifs sell_trade_ids 마이그레이션 실패: {e}")
+
+
 def init_db():
     """테이블 생성"""
     Base.metadata.create_all(bind=engine)
+    _migrate_trade_what_if_schema()
+    _migrate_trade_what_if_sell_trade_ids()
     _migrate_intel_columns()
     _migrate_stock_columns()
     _migrate_stock_issue_columns()
@@ -971,6 +1103,7 @@ def init_db():
     _migrate_user_highlights_column()
     _migrate_study_library_columns()
     _migrate_target_price_columns()
+    _migrate_portfolio_trade_columns()
     print("✅ 데이터베이스 초기화 완료")
 
 
