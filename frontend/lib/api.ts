@@ -277,6 +277,36 @@ export interface FinanceStockSnapshot {
   updated_at: string;
 }
 
+export interface FinanceHubBackup {
+  version: number;
+  app: string;
+  exportedAt: string;
+  finance: FinanceHubState;
+  ledger: FinanceLedgerState;
+}
+
+export interface FinanceBackupSummary {
+  transactions: number;
+  budgets: number;
+  categories: number;
+  cashAssets: number;
+  illiquidAssets: number;
+  realEstateAssets: number;
+  liabilities: number;
+  fixedExpenses: number;
+  incomes: number;
+  fundingNeeds: number;
+}
+
+export interface FinanceBackupRestoreResult {
+  ok: boolean;
+  restoredAt: string;
+  sourceExportedAt?: string;
+  summary: FinanceBackupSummary;
+  finance: FinanceHubState;
+  ledger: FinanceLedgerState;
+}
+
 export const api = {
   getPortfolioSummary: () => fetchApi<PortfolioSummary>("/portfolio/summary"),
   getStocks: () => fetchApi<StockItem[]>("/portfolio/stocks"),
@@ -480,6 +510,12 @@ export const api = {
     fetchApi<FinanceLedgerState>("/finance/ledger", { method: "DELETE" }),
   getFinanceStockSnapshot: () =>
     fetchApi<FinanceStockSnapshot>("/finance/stock-snapshot"),
+  exportFinanceBackup: () => fetchApi<FinanceHubBackup>("/finance/backup"),
+  restoreFinanceBackup: (body: FinanceHubBackup | Record<string, unknown>) =>
+    fetchApi<FinanceBackupRestoreResult>("/finance/backup/restore", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   // ── 헬스 ──────────────────────────────────────
   health: () => fetchApi<{ status: string; demo_mode?: boolean }>("/health"),

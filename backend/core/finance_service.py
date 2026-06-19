@@ -171,3 +171,117 @@ def get_stock_snapshot(db: Session) -> dict[str, Any]:
         "stock_count": len(stocks),
         "updated_at": datetime.utcnow().isoformat() + "Z",
     }
+
+
+BACKUP_VERSION = 1
+BACKUP_APP = "stockmind-financehub"
+LEGACY_BACKUP_APPS = {"financehub", "stockmind-financehub"}
+
+
+def _normalize_cash_assets(cash_assets: list[Any]) -> list[Any]:
+    normalized: list[Any] = []
+    for asset in cash_assets:
+        if not isinstance(asset, dict):
+            continue
+        row = dict(asset)
+        if not row.get("accountType"):
+            label = f"{row.get('name', '')}{row.get('institution', '')}"
+            row["accountType"] = "securities" if "증권" in label else "bank"
+        normalized.append(row)
+    return normalized
+
+
+def _normalize_finance_import(data: dict[str, Any]) -> dict[str, Any]:
+    clean = deepcopy(DEFAULT_FINANCE_STATE)
+    for key in clean:
+        if key in data and isinstance(data[key], list):
+            clean[key] = data[key]
+    clean["cashAssets"] = _normalize_cash_assets(clean["cashAssets"])
+    return clean
+
+
+def _normalize_ledger_import(data: dict[str, Any]) -> dict[str, Any]:
+    clean = deepcopy(DEFAULT_LEDGER_STATE)
+    if isinstance(data.get("transactions"), list):
+        clean["transactions"] = data["transactions"]
+    if isinstance(data.get("budgets"), list):
+        clean["budgets"] = data["budgets"]
+    if isinstance(data.get("settings"), dict):
+        settings = data["settings"]
+        clean["settings"] = {
+            **DEFAULT_LEDGER_SETTINGS,
+            **settings,
+            "categories": settings.get("categories") or DEFAULT_LEDGER_SETTINGS["categories"],
+            "cardIssuers": settings.get("cardIssuers") or DEFAULT_LEDGER_SETTINGS["cardIssuers"],
+            "users": settings.get("users") if "users" in settings else DEFAULT_LEDGER_SETTINGS["users"],
+        }
+    return clean
+
+
+def export_backup(db: Session) -> dict[str, Any]:
+    """FinanceHub 호환 JSON 백업 생성"""
+    return {
+        "version": BACKUP_VERSION,
+        "app": BACKUP_APP,
+        "exportedAt": datetime.utcnow().isoformat() + "Z",
+        "ledger": get_ledger_state(db),
+        "finance": get_finance_state(db),
+    }
+
+
+def backup_summary(finance: dict[str, Any], ledger: dict[str, Any]) -> dict[str, int]:
+    return {
+        "transactions": len(ledger.get("transactions") or []),
+        "budgets": len(ledger.get("budgets") or []),
+        "categories": len((ledger.get("settings") or {}).get("categories") or []),
+        "cashAssets": len(finance.get("cashAssets") or []),
+        "illiquidAssets": len(finance.get("illiquidAssets") or []),
+        "realEstateAssets": len(finance.get("realEstateAssets") or []),
+        "liabilities": len(finance.get("liabilities") or []),
+        "fixedExpenses": len(finance.get("fixedExpenses") or []),
+        "incomes": len(finance.get("incomes") or []),
+        "fundingNeeds": len(finance.get("fundingNeeds") or []),
+    }
+
+
+def restore_backup(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """FinanceHub JSON 백업 복구 (financehub / stockmind-financehub 형식)"""
+    if not isinstance(payload, dict):
+        raise ValueError("백업 파일 형식이 올바르지 않습니다.")
+
+    finance_raw = payload.get("finance")
+    ledger_raw = payload.get("ledger")
+
+    # 구형: finance/ledger 키 없이 최상위에 state만 있는 경우
+    if finance_raw is None and any(k in payload for k in DEFAULT_FINANCE_STATE):
+        finance_raw = {k: payload.get(k) for k in DEFAULT_FINANCE_STATE}
+    if ledger_raw is None and any(k in payload for k in ("transactions", "budgets", "settings")):
+        ledger_raw = {
+            "transactions": payload.get("transactions"),
+            "budgets": payload.get("budgets"),
+            "settings": payload.get("settings"),
+        }
+
+    if not isinstance(finance_raw, dict) and not isinstance(ledger_raw, dict):
+        raise ValueError("finance 또는 ledger 데이터가 필요합니다.")
+
+    app_name = payload.get("app")
+    if app_name and app_name not in LEGACY_BACKUP_APPS:
+        logger.warning("알 수 없는 백업 app=%s — 복구를 계속합니다.", app_name)
+
+    finance_state = get_finance_state(db)
+    ledger_state = get_ledger_state(db)
+
+    if isinstance(finance_raw, dict):
+        finance_state = save_finance_state(db, _normalize_finance_import(finance_raw))
+    if isinstance(ledger_raw, dict):
+        ledger_state = save_ledger_state(db, _normalize_ledger_import(ledger_raw))
+
+    return {
+        "ok": True,
+        "restoredAt": datetime.utcnow().isoformat() + "Z",
+        "sourceExportedAt": payload.get("exportedAt"),
+        "summary": backup_summary(finance_state, ledger_state),
+        "finance": finance_state,
+        "ledger": ledger_state,
+    }

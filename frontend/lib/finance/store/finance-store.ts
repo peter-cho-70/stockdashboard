@@ -10,6 +10,10 @@ import {
 } from "@/lib/finance/types";
 import type { RealEstateValuation } from "@/lib/finance/types";
 import { api } from "@/lib/api";
+import {
+  computePaymentCoverage,
+  type PaymentCoverageResult,
+} from "@/lib/finance/payment-coverage";
 
 interface FinanceState {
   cashAssets: CashAsset[];
@@ -66,10 +70,57 @@ interface FinanceState {
 
   resetData: () => Promise<void>;
 
+  getAssetBreakdown: () => AssetBreakdown;
   getTotalAssets: () => number;
   getLiquidNetWorth: () => number;
   getTotalLiabilities: () => number;
   getMonthlyNetCashflow: () => number;
+  getPaymentCoverage: (windowDays?: number) => PaymentCoverageResult;
+}
+
+export interface AssetBreakdown {
+  bankCash: number;
+  securitiesCash: number;
+  stockHoldings: number;
+  stockValue: number;
+  usesStockSnapshot: boolean;
+  illiquid: number;
+  realEstate: number;
+  liquidTotal: number;
+  total: number;
+}
+
+function computeAssetBreakdown(state: Pick<
+  FinanceState,
+  "cashAssets" | "illiquidAssets" | "realEstateAssets" | "stockSnapshot"
+>): AssetBreakdown {
+  const bankCash = state.cashAssets
+    .filter((a) => a.accountType !== "securities")
+    .reduce((sum, a) => sum + a.amount, 0);
+  const securitiesCash = state.cashAssets
+    .filter((a) => a.accountType === "securities")
+    .reduce((sum, a) => sum + a.amount, 0);
+  const illiquid = state.illiquidAssets.reduce((sum, a) => sum + a.amount, 0);
+  const realEstate = state.realEstateAssets.reduce(
+    (sum, a) => sum + a.estimatedValue,
+    0
+  );
+  const usesStockSnapshot = (state.stockSnapshot?.total_value ?? 0) > 0;
+  const stockHoldings = usesStockSnapshot ? state.stockSnapshot!.total_value : 0;
+  const stockValue = usesStockSnapshot ? stockHoldings : securitiesCash;
+  const liquidTotal = bankCash + (usesStockSnapshot ? stockHoldings + securitiesCash : securitiesCash);
+
+  return {
+    bankCash,
+    securitiesCash,
+    stockHoldings,
+    stockValue,
+    usesStockSnapshot,
+    illiquid,
+    realEstate,
+    liquidTotal,
+    total: liquidTotal + illiquid + realEstate,
+  };
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -122,8 +173,19 @@ export const useFinanceStore = create<FinanceState>()((set, get) => ({
         api.getFinanceState(),
         api.getFinanceStockSnapshot(),
       ]);
+      const cashAssets = (state.cashAssets ?? []).map((a) =>
+        a.accountType
+          ? a
+          : {
+              ...a,
+              accountType: (/증권/.test(`${a.name}${a.institution}`)
+                ? "securities"
+                : "bank") as CashAsset["accountType"],
+            }
+      );
       set({
         ...state,
+        cashAssets,
         stockSnapshot: snapshot,
         ready: true,
         error: null,
@@ -291,36 +353,19 @@ export const useFinanceStore = create<FinanceState>()((set, get) => ({
     set({ ...state, error: null });
   },
 
-  getTotalAssets: () => {
-    const { cashAssets, illiquidAssets, realEstateAssets, stockSnapshot } =
-      get();
-    const bankCash = cashAssets
-      .filter((a) => a.accountType !== "securities")
-      .reduce((sum, a) => sum + a.amount, 0);
-    const securitiesCash = cashAssets
-      .filter((a) => a.accountType === "securities")
-      .reduce((sum, a) => sum + a.amount, 0);
-    const illiquidTotal = illiquidAssets.reduce((sum, a) => sum + a.amount, 0);
-    const realEstateTotal = realEstateAssets.reduce(
-      (sum, a) => sum + a.estimatedValue,
-      0
-    );
-    const stockTotal = stockSnapshot?.total_value ?? securitiesCash;
-    return bankCash + illiquidTotal + realEstateTotal + stockTotal;
-  },
+  getAssetBreakdown: () => computeAssetBreakdown(get()),
+
+  getTotalAssets: () => computeAssetBreakdown(get()).total,
 
   getTotalLiabilities: () => {
     return get().liabilities.reduce((sum, l) => sum + l.principal, 0);
   },
 
   getLiquidNetWorth: () => {
-    const { cashAssets, liabilities, stockSnapshot } = get();
-    const bankCash = cashAssets
-      .filter((a) => a.accountType !== "securities")
-      .reduce((sum, a) => sum + a.amount, 0);
-    const stockValue = stockSnapshot?.total_value ?? 0;
+    const { liabilities } = get();
+    const { liquidTotal } = computeAssetBreakdown(get());
     const debtTotal = liabilities.reduce((sum, l) => sum + l.principal, 0);
-    return bankCash + stockValue - debtTotal;
+    return liquidTotal - debtTotal;
   },
 
   getMonthlyNetCashflow: () => {
@@ -335,4 +380,11 @@ export const useFinanceStore = create<FinanceState>()((set, get) => ({
     );
     return incomeTotal - expenseTotal;
   },
+
+  getPaymentCoverage: (windowDays = 45) =>
+    computePaymentCoverage(
+      get().fixedExpenses,
+      get().cashAssets,
+      windowDays
+    ),
 }));

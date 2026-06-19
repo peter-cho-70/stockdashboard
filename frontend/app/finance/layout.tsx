@@ -39,7 +39,9 @@ export default function FinanceLayout({
   const ready = useFinanceReady();
   const financeError = useFinanceStore((s) => s.error);
   const ledgerError = useLedgerStore((s) => s.error);
-  const saving = useFinanceStore((s) => s.saving) || useLedgerStore((s) => s.saving);
+  const financeSaving = useFinanceStore((s) => s.saving);
+  const ledgerSaving = useLedgerStore((s) => s.saving);
+  const saving = financeSaving || ledgerSaving;
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-4 px-1 pb-8">
@@ -80,13 +82,19 @@ export default function FinanceLayout({
         <p className="text-xs text-neutral-500">저장 중…</p>
       )}
 
-      {!ready ? (
-        <div className="py-16 text-center text-sm text-neutral-500">
-          재정 데이터 불러오는 중…
+      <div className="relative">
+        {!ready && (
+          <div className="absolute inset-0 z-10 flex items-start justify-center bg-[var(--background)]/80 pt-16 backdrop-blur-[1px]">
+            <p className="text-sm text-neutral-500">재정 데이터 불러오는 중…</p>
+          </div>
+        )}
+        <div
+          className={ready ? undefined : "pointer-events-none select-none opacity-40"}
+          aria-busy={!ready}
+        >
+          {children}
         </div>
-      ) : (
-        children
-      )}
+      </div>
     </div>
   );
 }

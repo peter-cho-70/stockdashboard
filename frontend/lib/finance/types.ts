@@ -68,6 +68,8 @@ export interface FixedExpense {
   nextDueDate: string;
   dueDay?: number;
   linkedLiabilityId?: string;
+  /** 출금 은행 계좌 (CashAsset.id, accountType: bank) */
+  paymentAccountId?: string;
 }
 
 export interface Income {

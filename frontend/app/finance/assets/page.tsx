@@ -52,7 +52,15 @@ export default function AssetsPage() {
   };
 
   const handleEdit = (asset: CashAsset) => {
-    setFormData({ name: asset.name, institution: asset.institution, accountType: asset.accountType, amount: asset.amount.toString() });
+    const accountType: CashAccountType =
+      asset.accountType ??
+      (/증권/.test(`${asset.name}${asset.institution}`) ? 'securities' : 'bank');
+    setFormData({
+      name: asset.name,
+      institution: asset.institution,
+      accountType,
+      amount: asset.amount.toString(),
+    });
     setEditingId(asset.id);
     setIsFormOpen(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -275,7 +283,9 @@ export default function AssetsPage() {
               </div>
               <div>
                 <h3 className="text-sm font-semibold text-gray-900">유동 자산</h3>
-                <p className="text-gray-400 text-xs mt-0.5">증권사·은행 계좌 현황</p>
+                <p className="text-gray-400 text-xs mt-0.5">
+                  증권사·은행 계좌 현황 · StockMind 연동 시 증권 계좌에는 예수금만 입력
+                </p>
               </div>
             </div>
             <span className="text-emerald-600 font-semibold text-sm">{formatKRW(totalCash)}</span>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2,
   TrendingUp, TrendingDown, Minus, BookOpen, SlidersHorizontal,
@@ -131,6 +131,12 @@ export default function LedgerPage() {
   // ─ 예산 편집 ─
   const [budgetEditCategory, setBudgetEditCategory] = useState<string | null>(null);
   const [budgetEditValue, setBudgetEditValue] = useState('');
+  const amountInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!formOpen) return;
+    requestAnimationFrame(() => amountInputRef.current?.focus());
+  }, [formOpen]);
 
   // ─ 이번 달 데이터 ─
   const monthTxns = useMemo(
@@ -420,6 +426,7 @@ export default function LedgerPage() {
               <div>
                 <label className="block text-xs text-gray-500 mb-1">금액 (원)</label>
                 <input
+                  ref={amountInputRef}
                   type="text"
                   inputMode="numeric"
                   placeholder="0"

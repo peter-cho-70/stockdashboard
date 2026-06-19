@@ -5,18 +5,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from config.database import get_db
 from core.demo_mode import demo_write_blocked
 from core.finance_service import (
+    export_backup,
     get_finance_state,
     get_ledger_state,
     get_stock_snapshot,
     reset_finance_state,
     reset_ledger_state,
+    restore_backup,
     save_finance_state,
     save_ledger_state,
 )
@@ -77,3 +79,29 @@ def clear_ledger_state(db: Session = Depends(get_db)):
 @finance_router.get("/stock-snapshot")
 def read_stock_snapshot(db: Session = Depends(get_db)):
     return get_stock_snapshot(db)
+
+
+@finance_router.get("/backup")
+def read_backup(db: Session = Depends(get_db)):
+    """FinanceHub 호환 JSON 백업 다운로드"""
+    return export_backup(db)
+
+
+class FinanceBackupRestoreBody(BaseModel):
+    model_config = {"extra": "allow"}
+
+    version: int | None = None
+    app: str | None = None
+    exportedAt: str | None = None
+    finance: dict[str, Any] | None = None
+    ledger: dict[str, Any] | None = None
+
+
+@finance_router.post("/backup/restore")
+def restore_from_backup(body: FinanceBackupRestoreBody, db: Session = Depends(get_db)):
+    """JSON 백업 파일로 재정·가계부 데이터 복구"""
+    demo_write_blocked()
+    try:
+        return restore_backup(db, body.model_dump(exclude_none=False))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

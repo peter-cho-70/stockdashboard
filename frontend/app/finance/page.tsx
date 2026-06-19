@@ -1,6 +1,9 @@
 'use client';
 
+import { useEffect } from 'react';
+import Link from 'next/link';
 import { useFinanceStore } from '@/lib/finance/store/finance-store';
+import { coverageStatusLabel } from '@/lib/finance/payment-coverage';
 import {
   ArrowUpRight,
   ArrowDownRight,
@@ -12,16 +15,22 @@ import {
   AlertTriangle,
   ChevronRight,
   Info,
+  CheckCircle2,
 } from 'lucide-react';
 
 export default function DashboardPage() {
   const store = useFinanceStore();
+  const refreshStockSnapshot = useFinanceStore((s) => s.refreshStockSnapshot);
 
+  useEffect(() => {
+    void refreshStockSnapshot();
+  }, [refreshStockSnapshot]);
 
   const totalAssets = store.getTotalAssets();
   const liquidNetWorth = store.getLiquidNetWorth();
   const totalLiabilities = store.getTotalLiabilities();
   const monthlyCashflow = store.getMonthlyNetCashflow();
+  const breakdown = store.getAssetBreakdown();
 
   const formatKRW = (amount: number) =>
     new Intl.NumberFormat('ko-KR', {
@@ -37,21 +46,15 @@ export default function DashboardPage() {
   const now = new Date();
   const lastUpdated = `${now.getMonth() + 1}월 ${now.getDate()}일 ${now.getHours()}시 ${String(now.getMinutes()).padStart(2, '0')}분`;
 
-  const totalCashAssets = store.cashAssets.reduce((s, a) => s + a.amount, 0);
-  const stockValue = store.stockSnapshot?.total_value ?? 0;
+
   const securitiesAssets = store.cashAssets.filter((a) => a.accountType === 'securities');
   const bankAssets = store.cashAssets.filter((a) => a.accountType !== 'securities');
-  const totalIlliquid = store.illiquidAssets.reduce((s, a) => s + a.amount, 0);
-  const totalRealEstate = store.realEstateAssets.reduce((s, a) => s + a.estimatedValue, 0);
+  const totalIlliquid = breakdown.illiquid;
+  const totalRealEstate = breakdown.realEstate;
 
   const today = new Date();
-  const upcomingExpenses = store.fixedExpenses
-    .filter((e) => {
-      const d = new Date(e.nextDueDate);
-      const diff = Math.ceil((d.getTime() - today.getTime()) / (1000 * 3600 * 24));
-      return diff >= 0 && diff <= 45;
-    })
-    .sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime());
+  const paymentCoverage = store.getPaymentCoverage();
+  const upcomingExpenses = paymentCoverage.payments.map((p) => p.expense);
 
   // 재무 건강도 동적 계산
   const debtRatioScore = (() => {
@@ -64,6 +67,15 @@ export default function DashboardPage() {
     if (r > 3) return 25; if (r > 2) return 20; if (r > 1) return 12; if (r > 0) return 5; return 0;
   })();
   const healthScore = Math.min(100, debtRatioScore + cashflowScore + liquidityScore);
+
+  const coverageBadgeClass = (status: string) => {
+    switch (status) {
+      case 'ok': return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+      case 'tight': return 'text-amber-700 bg-amber-50 border-amber-200';
+      case 'shortfall': return 'text-rose-700 bg-rose-50 border-rose-200';
+      default: return 'text-gray-500 bg-gray-100 border-gray-200';
+    }
+  };
 
   const urgentFunding = store.fundingNeeds.filter((n) => {
     const diff = Math.ceil((new Date(n.neededByDate).getTime() - today.getTime()) / (1000 * 3600 * 24));
@@ -79,10 +91,13 @@ export default function DashboardPage() {
           <p className="text-gray-400 text-sm mt-0.5">최종 갱신: {lastUpdated}</p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium rounded-md hover:bg-emerald-500 transition-all shadow-sm">
+          <Link
+            href="/finance/assets"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium rounded-md hover:bg-emerald-500 transition-all shadow-sm"
+          >
             <Plus size={12} />
             자산 등록
-          </button>
+          </Link>
         </div>
       </div>
 
@@ -109,7 +124,7 @@ export default function DashboardPage() {
           icon={<Landmark size={16} />}
           color="gray"
           compact
-          tooltip="유동 현금 자산 + 비유동 투자 + 부동산 자산 (부채 차감 전 총액)"
+          tooltip="은행·현금 + 증권 예수금 + StockMind 주식 + 비유동 + 부동산"
         />
         <SummaryCard
           label="유동 순자산"
@@ -119,7 +134,7 @@ export default function DashboardPage() {
           color="emerald"
           highlight
           compact
-          tooltip="은행 예수금 + StockMind 주식 평가 - 총 부채. 비유동·부동산은 제외"
+          tooltip="은행·현금 + 증권 예수금 + StockMind 주식 평가 - 총 부채. 비유동·부동산은 제외"
         />
         <SummaryCard
           label="총 부채"
@@ -155,32 +170,56 @@ export default function DashboardPage() {
           </div>
 
           <div className="p-6 space-y-5">
-            {stockValue > 0 && (
+            {breakdown.usesStockSnapshot && breakdown.stockValue > 0 && (
               <AssetBar
                 label="보유 주식 (StockMind)"
                 sublabel={`${store.stockSnapshot?.stock_count ?? 0}종목 · 실시간 평가`}
-                value={stockValue}
+                value={breakdown.stockValue}
                 total={totalAssets}
                 color="bg-blue-500"
-                formattedValue={formatKRWFull(stockValue)}
+                formattedValue={formatKRWFull(breakdown.stockValue)}
               />
             )}
-            <AssetBar
-              label="유동 현금 자산"
-              sublabel="은행·증권 예수금 (수동 입력)"
-              value={totalCashAssets}
-              total={totalAssets}
-              color="bg-emerald-500"
-              formattedValue={formatKRWFull(totalCashAssets)}
-            />
-            <AssetBar
-              label="비유동 투자"
-              sublabel="비상장 투자·기타 고정 자산"
-              value={totalIlliquid}
-              total={totalAssets}
-              color="bg-slate-400"
-              formattedValue={formatKRWFull(totalIlliquid)}
-            />
+            {breakdown.usesStockSnapshot && breakdown.securitiesCash > 0 && (
+              <AssetBar
+                label="증권·예수금"
+                sublabel="증권사 계좌 현금 (자산 페이지 입력)"
+                value={breakdown.securitiesCash}
+                total={totalAssets}
+                color="bg-indigo-500"
+                formattedValue={formatKRWFull(breakdown.securitiesCash)}
+              />
+            )}
+            {!breakdown.usesStockSnapshot && breakdown.stockValue > 0 && (
+              <AssetBar
+                label="증권·예수금"
+                sublabel="증권사 계좌 (수동 입력)"
+                value={breakdown.stockValue}
+                total={totalAssets}
+                color="bg-blue-500"
+                formattedValue={formatKRWFull(breakdown.stockValue)}
+              />
+            )}
+            {breakdown.bankCash > 0 && (
+              <AssetBar
+                label="은행·현금"
+                sublabel="은행·페이 등 유동 현금"
+                value={breakdown.bankCash}
+                total={totalAssets}
+                color="bg-emerald-500"
+                formattedValue={formatKRWFull(breakdown.bankCash)}
+              />
+            )}
+            {totalIlliquid > 0 && (
+              <AssetBar
+                label="비유동 투자"
+                sublabel="비상장 투자·기타 고정 자산"
+                value={totalIlliquid}
+                total={totalAssets}
+                color="bg-slate-400"
+                formattedValue={formatKRWFull(totalIlliquid)}
+              />
+            )}
             {totalRealEstate > 0 && (
               <AssetBar
                 label="부동산 자산"
@@ -200,7 +239,14 @@ export default function DashboardPage() {
             </div>
             {securitiesAssets.length > 0 && (
               <div>
-                <p className="px-6 pt-2.5 pb-1 text-[11px] font-semibold text-blue-600">증권사 계좌</p>
+                <p className="px-6 pt-2.5 pb-1 text-[11px] font-semibold text-blue-600">
+                  증권사 계좌
+                  {breakdown.usesStockSnapshot && (
+                    <span className="ml-2 font-normal text-gray-400">
+                      (예수금 · 주식 평가는 StockMind에서 자동 반영)
+                    </span>
+                  )}
+                </p>
                 <table className="w-full text-sm">
                   <tbody>
                     {securitiesAssets.map((asset, i) => (
@@ -241,6 +287,28 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+
+          {/* Illiquid assets table */}
+          {store.illiquidAssets.length > 0 && (
+            <div className="border-t border-gray-100">
+              <div className="px-6 py-3 bg-gray-50 flex items-center justify-between">
+                <p className="text-xs font-medium text-gray-500">비유동 자산별 현황</p>
+                <span className="text-xs font-semibold text-slate-600 tabular-nums">{formatKRWFull(totalIlliquid)}</span>
+              </div>
+              <table className="w-full text-sm">
+                <tbody className="divide-y divide-gray-100">
+                  {store.illiquidAssets.map((asset) => (
+                    <tr key={asset.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-6 py-3 text-gray-800 font-medium">{asset.name}</td>
+                      <td className="px-6 py-3 text-right font-semibold text-gray-800 tabular-nums">
+                        {formatKRWFull(asset.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* Real estate assets table */}
           {store.realEstateAssets.length > 0 && (
@@ -286,28 +354,65 @@ export default function DashboardPage() {
           {/* Upcoming payments */}
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
             <div className="px-5 py-4 border-b border-gray-100">
-              <h3 className="text-sm font-semibold text-gray-900">다가오는 결제</h3>
-              <p className="text-gray-400 text-xs mt-0.5">45일 이내 납부 예정</p>
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-900">다가오는 결제</h3>
+                  <p className="text-gray-400 text-xs mt-0.5">45일 이내 · 결제 계좌 잔액 확인</p>
+                </div>
+                {paymentCoverage.shortfallCount > 0 && (
+                  <span className="text-[10px] font-medium text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <AlertTriangle size={10} />
+                    부족 {paymentCoverage.shortfallCount}건
+                  </span>
+                )}
+              </div>
             </div>
+            {paymentCoverage.accounts.length > 0 && (
+              <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 space-y-1.5">
+                {paymentCoverage.accounts.map((acct) => (
+                  <div key={acct.accountId} className="flex items-center justify-between text-[11px]">
+                    <span className="text-gray-600 truncate mr-2">{acct.accountName}</span>
+                    <span className={`shrink-0 font-medium px-1.5 py-0.5 rounded border ${coverageBadgeClass(acct.status)}`}>
+                      잔액 {formatKRW(acct.balance)}
+                      {acct.shortfall > 0 ? ` · 부족 ${formatKRW(acct.shortfall)}` : ` · ${coverageStatusLabel(acct.status)}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="divide-y divide-gray-100">
               {upcomingExpenses.length === 0 ? (
                 <div className="px-5 py-6 text-center text-xs text-gray-400">납부 예정 항목이 없습니다</div>
               ) : (
-                upcomingExpenses.map((expense) => {
-                  const dueDate = new Date(expense.nextDueDate);
-                  const daysDiff = Math.ceil((dueDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
+                paymentCoverage.payments.map((check) => {
+                  const expense = check.expense;
+                  const daysDiff = check.daysUntil;
                   return (
-                    <div key={expense.id} className="px-5 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors">
-                      <div>
+                    <div key={expense.id} className="px-5 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors gap-3">
+                      <div className="min-w-0 flex-1">
                         <p className="text-sm text-gray-800 font-medium">{expense.name}</p>
                         <p className="text-xs text-gray-400 mt-0.5">
                           {expense.nextDueDate.replace(/-/g, '.')}
+                          {expense.cardIssuer && <span> · {expense.cardIssuer}</span>}
                           <span className={`ml-1.5 font-semibold ${daysDiff <= 7 ? 'text-rose-500' : daysDiff <= 14 ? 'text-amber-500' : 'text-gray-500'}`}>
                             D-{daysDiff}
                           </span>
                         </p>
+                        {check.accountName ? (
+                          <p className="text-[11px] text-gray-400 mt-0.5 truncate">{check.accountName}</p>
+                        ) : (
+                          <p className="text-[11px] text-amber-600 mt-0.5">결제 계좌 미지정</p>
+                        )}
                       </div>
-                      <span className="text-sm font-semibold text-gray-800 tabular-nums">{formatKRW(expense.amount)}</span>
+                      <div className="text-right shrink-0">
+                        <span className="text-sm font-semibold text-gray-800 tabular-nums block">{formatKRW(expense.amount)}</span>
+                        <span className={`inline-flex items-center gap-0.5 mt-1 text-[10px] font-medium px-1.5 py-0.5 rounded border ${coverageBadgeClass(check.status)}`}>
+                          {check.status === 'ok' && <CheckCircle2 size={9} />}
+                          {check.status === 'shortfall' && <AlertTriangle size={9} />}
+                          {coverageStatusLabel(check.status)}
+                          {check.shortfall ? ` ${formatKRW(check.shortfall)}` : ''}
+                        </span>
+                      </div>
                     </div>
                   );
                 })

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useFinanceStore } from "@/lib/finance/store/finance-store";
 import { useLedgerStore } from "@/lib/finance/store/ledger-store";
 
@@ -9,13 +9,13 @@ export function useFinanceReady() {
   const ledgerReady = useLedgerStore((s) => s.ready);
   const loadFinance = useFinanceStore((s) => s.load);
   const loadLedger = useLedgerStore((s) => s.load);
-  const [started, setStarted] = useState(false);
+  const initRef = useRef(false);
 
   useEffect(() => {
-    if (started) return;
-    setStarted(true);
+    if (initRef.current) return;
+    initRef.current = true;
     void Promise.all([loadFinance(), loadLedger()]);
-  }, [started, loadFinance, loadLedger]);
+  }, [loadFinance, loadLedger]);
 
   return financeReady && ledgerReady;
 }
