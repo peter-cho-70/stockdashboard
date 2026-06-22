@@ -6,8 +6,8 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend,
 } from 'recharts';
-import { PieChart as PieIcon, BarChart3, Radar as RadarIcon } from 'lucide-react';
-import type { CategoryInfo, Budget } from '@/lib/finance/types';
+import { PieChart as PieIcon, BarChart3, Radar as RadarIcon, Users } from 'lucide-react';
+import type { CategoryInfo, Budget, Transaction, TransactionType } from '@/lib/finance/types';
 import { chartColor } from '@/lib/finance/category-colors';
 
 export type BreakdownItem = {
@@ -20,6 +20,14 @@ export type BreakdownItem = {
 
 type AnalysisType = 'expense' | 'income';
 type ChartType = 'donut' | 'bar' | 'radar';
+type GroupBy = 'category' | 'user';
+
+const COMMON_USER_LABEL = '공통';
+const COMMON_USER_COLOR = '#9ca3af';
+const USER_PALETTE = [
+  '#3b82f6', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6',
+  '#ef4444', '#14b8a6', '#6366f1', '#f43f5e', '#84cc16',
+];
 
 function fmtCompact(n: number) {
   if (n >= 100000000) return (n / 100000000).toFixed(1) + '억';
@@ -31,17 +39,20 @@ function fmt(n: number) {
   return n.toLocaleString('ko-KR') + '원';
 }
 
-function buildBreakdown(
+function buildCategoryBreakdown(
   categories: CategoryInfo[],
   incomeOk: boolean,
   total: number,
-  getAmount: (cat: string) => number,
+  txns: Transaction[],
+  type: TransactionType,
   budgets: Budget[],
 ): BreakdownItem[] {
   return categories
     .filter(c => c.incomeOk === incomeOk)
     .map(c => {
-      const amount = getAmount(c.name);
+      const amount = txns
+        .filter(t => t.type === type && t.category === c.name)
+        .reduce((s, t) => s + t.amount, 0);
       const budget = budgets.find(b => b.category === c.name)?.monthlyLimit;
       return {
         category: c.name,
@@ -49,6 +60,28 @@ function buildBreakdown(
         pct: total > 0 ? Math.round((amount / total) * 100) : 0,
         fill: chartColor(c.color),
         budget,
+      };
+    })
+    .filter(x => x.amount > 0)
+    .sort((a, b) => b.amount - a.amount);
+}
+
+function buildUserBreakdown(
+  users: string[],
+  total: number,
+  txns: Transaction[],
+  type: TransactionType,
+): BreakdownItem[] {
+  return [...users, COMMON_USER_LABEL]
+    .map((label, i) => {
+      const amount = txns
+        .filter(t => t.type === type && (t.user || COMMON_USER_LABEL) === label)
+        .reduce((s, t) => s + t.amount, 0);
+      return {
+        category: label,
+        amount,
+        pct: total > 0 ? Math.round((amount / total) * 100) : 0,
+        fill: label === COMMON_USER_LABEL ? COMMON_USER_COLOR : USER_PALETTE[i % USER_PALETTE.length],
       };
     })
     .filter(x => x.amount > 0)
@@ -230,35 +263,36 @@ function LegendList({ data }: { data: BreakdownItem[] }) {
 interface CategoryBreakdownPanelProps {
   categories: CategoryInfo[];
   budgets: Budget[];
-  viewYear: number;
-  viewMonth: number;
+  users: string[];
+  transactions: Transaction[];
   monthExpenses: number;
   monthIncome: number;
-  getCategorySpending: (year: number, month: number, category: string) => number;
-  getCategoryIncome: (year: number, month: number, category: string) => number;
 }
 
 export function CategoryBreakdownPanel({
   categories,
   budgets,
-  viewYear,
-  viewMonth,
+  users,
+  transactions,
   monthExpenses,
   monthIncome,
-  getCategorySpending,
-  getCategoryIncome,
 }: CategoryBreakdownPanelProps) {
   const [analysisType, setAnalysisType] = useState<AnalysisType>('expense');
   const [chartType, setChartType] = useState<ChartType>('donut');
+  const [groupBy, setGroupBy] = useState<GroupBy>('category');
 
   const expenseData = useMemo(
-    () => buildBreakdown(categories, false, monthExpenses, c => getCategorySpending(viewYear, viewMonth, c), budgets),
-    [categories, monthExpenses, viewYear, viewMonth, getCategorySpending, budgets],
+    () => groupBy === 'category'
+      ? buildCategoryBreakdown(categories, false, monthExpenses, transactions, 'expense', budgets)
+      : buildUserBreakdown(users, monthExpenses, transactions, 'expense'),
+    [groupBy, categories, monthExpenses, transactions, budgets, users],
   );
 
   const incomeData = useMemo(
-    () => buildBreakdown(categories, true, monthIncome, c => getCategoryIncome(viewYear, viewMonth, c), budgets),
-    [categories, monthIncome, viewYear, viewMonth, getCategoryIncome, budgets],
+    () => groupBy === 'category'
+      ? buildCategoryBreakdown(categories, true, monthIncome, transactions, 'income', budgets)
+      : buildUserBreakdown(users, monthIncome, transactions, 'income'),
+    [groupBy, categories, monthIncome, transactions, budgets, users],
   );
 
   const data = analysisType === 'expense' ? expenseData : incomeData;
@@ -275,8 +309,30 @@ export function CategoryBreakdownPanel({
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-        <h3 className="text-xs font-semibold text-gray-600">카테고리별 분석</h3>
+        <h3 className="text-xs font-semibold text-gray-600">
+          {groupBy === 'category' ? '카테고리별 분석' : '사용자별 분석'}
+        </h3>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* 카테고리 / 사용자 구분 탭 */}
+          <div className="flex rounded-lg border border-gray-200 p-0.5 bg-gray-50">
+            {([
+              { id: 'category' as GroupBy, label: '카테고리별' },
+              { id: 'user' as GroupBy, label: '사용자별' },
+            ]).map(({ id, label }) => (
+              <button
+                key={id}
+                onClick={() => setGroupBy(id)}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
+                  groupBy === id
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {id === 'user' && <Users size={12} />}
+                {label}
+              </button>
+            ))}
+          </div>
           {/* 지출 / 수입 탭 */}
           <div className="flex rounded-lg border border-gray-200 p-0.5 bg-gray-50">
             {(['expense', 'income'] as const).map(t => (

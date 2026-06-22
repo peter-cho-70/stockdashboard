@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import Link from 'next/link';
 import { useFinanceStore } from '@/lib/finance/store/finance-store';
 import { coverageStatusLabel } from '@/lib/finance/payment-coverage';
+import { AssetTrendChart } from '@/components/finance/dashboard/asset-trend-chart';
 import {
   ArrowUpRight,
   ArrowDownRight,
@@ -156,6 +157,8 @@ export default function DashboardPage() {
           tooltip="월 정기 수입(cycle: monthly) 합계 - 월 고정지출(cycle: monthly) 합계"
         />
       </div>
+
+      <AssetTrendChart />
 
       {/* Main content */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

@@ -3,6 +3,7 @@
 import { useFinanceStore } from '@/lib/finance/store/finance-store';
 import { useLedgerStore } from '@/lib/finance/store/ledger-store';
 import { coverageStatusLabel } from '@/lib/finance/payment-coverage';
+import { MonthlyCashflowAnalysis } from '@/components/finance/cashflow/monthly-cashflow-analysis';
 import { useState } from 'react';
 import { Plus, TrendingUp, TrendingDown, User, CreditCard, Zap, Trash2, Calendar, Pencil, X, Wallet, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { IncomeType, ExpenseCategory, Income, FixedExpense } from '@/lib/finance/types';
@@ -274,6 +275,9 @@ export default function CashflowPage() {
           </form>
         </div>
       )}
+
+      {/* 카드사별 결제 현황 + AI 의견 */}
+      <MonthlyCashflowAnalysis />
 
       {/* Payment coverage summary */}
       {paymentCoverage.payments.length > 0 && (

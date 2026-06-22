@@ -638,6 +638,58 @@ class StockPriceTarget(Base):
     fetched_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
+class StockTargetSetting(Base):
+    """종목별 목표가 평균·가중치·익절 설정 (매수적절가 계산용)"""
+    __tablename__ = "stock_target_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(20), unique=True, nullable=False, index=True)
+    avg_window_days = Column(Integer, default=30)       # 평균 산정 기간: 30/45/60일
+    weight_pct = Column(Float, default=75)                # 가중치(%) — 매수적절가 = 평균목표가 × 가중치
+    custom_profit_pct = Column(Float, default=10)        # 익절 목표치(%) — 5/10/15/20 외 사용자 지정값
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
+# 자동매매 (전용 KIS 계좌 — 매수적절가/익절 사다리 조건 기반)
+# ─────────────────────────────────────────────
+class AutoTradeRule(Base):
+    """종목별 자동매매 규칙 — 매수적절가 도달 시 매수, 익절 5단 사다리(1/5씩) 도달 시 매도"""
+    __tablename__ = "autotrade_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    name = Column(String(100), nullable=True)
+    account_no = Column(String(30), nullable=False)        # 전용 자동매매 KIS 계좌 (대시보드 계좌와 분리)
+    execution_mode = Column(String(10), default="semi")     # manual | semi | auto (Phase1은 semi만 사용)
+    enabled = Column(Boolean, default=True)
+    buy_qty = Column(Integer, nullable=False)               # 조건 충족 시 매수할 수량
+    buy_triggered = Column(Boolean, default=False)          # 매수 조건 1회성 발동 dedup
+    position_qty = Column(Integer, default=0)               # 이 규칙으로 보유 중인 수량 (매도 진행에 따라 감소)
+    executed_buy_price = Column(Float, nullable=True)        # 실제 매수 체결가 — 익절 사다리는 이 값 기준으로 고정 계산
+    sell_leg_done = Column(String(30), default="")           # 완료된 익절 레그 CSV, 예 "5,10"
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AutoTradeEvent(Base):
+    """자동매매 조건 충족 이벤트 — 반자동 모드에서는 승인 대기 상태로 생성됨"""
+    __tablename__ = "autotrade_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    rule_id = Column(Integer, ForeignKey("autotrade_rules.id"), nullable=False, index=True)
+    event_type = Column(String(10), nullable=False)         # BUY | SELL
+    leg_pct = Column(Float, nullable=True)                  # SELL일 때 5/10/15/20/커스텀
+    status = Column(String(20), default="PENDING_APPROVAL", index=True)
+    # PENDING_APPROVAL | APPROVED | REJECTED | EXECUTED | FAILED
+    trigger_price = Column(Float, nullable=False)
+    qty = Column(Integer, nullable=False)
+    order_id = Column(String(50), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    resolved_at = Column(DateTime, nullable=True)
+
+
 # ─────────────────────────────────────────────
 # 미국 증시 아침 리포트
 # ─────────────────────────────────────────────
@@ -750,6 +802,166 @@ class FinanceJsonStore(Base):
     store_key = Column(String(50), unique=True, nullable=False, index=True)
     data_json = Column(Text, nullable=False, default="{}")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class FinanceAssetSnapshot(Base):
+    """날짜별 총자산·유동성자산 스냅샷 (재정보드를 열 때마다 그날 값을 upsert)"""
+    __tablename__ = "finance_asset_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(String(10), nullable=False, unique=True, index=True)
+    total_assets = Column(Float, default=0)        # 총자산
+    liquid_assets = Column(Float, default=0)        # 유동성 자산(부채 차감 전)
+    illiquid_assets = Column(Float, default=0)      # 비유동자산
+    real_estate_assets = Column(Float, default=0)   # 부동산자산
+    total_liabilities = Column(Float, default=0)    # 총부채
+    liquid_net_worth = Column(Float, default=0)      # 유동순자산(유동성자산 - 총부채)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
+# 경매허브 (AuctionHub) — 물건(사건) 관리
+# ─────────────────────────────────────────────
+
+class AuctionCase(Base):
+    """경매 물건(사건) 기본 정보"""
+    __tablename__ = "auction_cases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    case_number = Column(String(50), nullable=False, index=True)
+    address = Column(String(300), nullable=False)
+    list_title = Column(String(200), nullable=True)
+    property_type = Column(String(50), nullable=True)
+    built_year = Column(String(20), nullable=True)
+    floor = Column(String(50), nullable=True)
+    household_count = Column(Integer, nullable=True)
+    land_area_sqm = Column(Float, nullable=True)
+    building_area_sqm = Column(Float, nullable=True)
+    parking_unit_count = Column(Integer, nullable=True)
+    appraisal_price = Column(Float, nullable=True)
+    min_price = Column(Float, nullable=True)
+    expected_bid_price = Column(Float, nullable=True)
+    bid_date = Column(String(20), nullable=True)
+    current_round = Column(Integer, default=1)
+    status = Column(String(30), default="watching", index=True)
+    priority_level = Column(Integer, default=1)
+    memo = Column(Text, nullable=True)
+    # 월세·주변시세 메모 — 국토부/네이버 API 연동 전까지 수동 입력
+    market_notes = Column(Text, nullable=True)
+    extracted_text = Column(Text, nullable=True)
+    address_meta_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    source_documents = relationship(
+        "AuctionSourceDocument", back_populates="case", cascade="all, delete-orphan"
+    )
+    thumbnail = relationship(
+        "AuctionCaseThumbnail", back_populates="case", uselist=False, cascade="all, delete-orphan"
+    )
+    tenant_records = relationship(
+        "AuctionTenantRecord", back_populates="case", cascade="all, delete-orphan"
+    )
+    sale_comparables = relationship(
+        "AuctionSaleComparable", back_populates="case", cascade="all, delete-orphan"
+    )
+    bid_analysis = relationship(
+        "AuctionBidAnalysis", back_populates="case", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class AuctionSourceDocument(Base):
+    """물건 등록 시 첨부한 PDF 원문"""
+    __tablename__ = "auction_source_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("auction_cases.id"), nullable=False, index=True)
+    kind = Column(String(40), default="pdf")
+    stored_name = Column(String(255), nullable=False)
+    original_name = Column(String(255), nullable=True)
+    mime_type = Column(String(80), default="application/pdf")
+    file_size = Column(Integer, nullable=True)
+    page_count = Column(Integer, nullable=True)
+    extracted_text = Column(Text, nullable=True)
+    structured_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    case = relationship("AuctionCase", back_populates="source_documents")
+
+
+class AuctionCaseThumbnail(Base):
+    """물건 표지 캡처(원본) + 목록용 썸네일"""
+    __tablename__ = "auction_case_thumbnails"
+
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("auction_cases.id"), unique=True, nullable=False, index=True)
+    cover_stored_name = Column(String(255), nullable=True)
+    list_stored_name = Column(String(255), nullable=True)
+    mime_type = Column(String(80), default="image/jpeg")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    case = relationship("AuctionCase", back_populates="thumbnail")
+
+
+class AuctionTenantRecord(Base):
+    """세입자 분석 — 호실별 임차인 기록"""
+    __tablename__ = "auction_tenant_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("auction_cases.id"), nullable=False, index=True)
+    unit = Column(String(50), nullable=True)
+    occupant_name = Column(String(100), nullable=True)
+    deposit = Column(Float, nullable=True)
+    monthly_rent = Column(Float, nullable=True)
+    move_in_date = Column(String(20), nullable=True)
+    confirmed_date = Column(String(20), nullable=True)
+    dividend_request_date = Column(String(20), nullable=True)
+    has_opposing_power = Column(Boolean, nullable=True)
+    dividend_amount = Column(Float, nullable=True)
+    undivided_amount = Column(Float, nullable=True)
+    dividend_status = Column(String(20), default="unknown")
+    inquiry_notes = Column(Text, nullable=True)
+    memo = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    case = relationship("AuctionCase", back_populates="tenant_records")
+
+
+class AuctionSaleComparable(Base):
+    """입찰가 판단용 — 인근 경매 매각 비교사례 (수동 입력)"""
+    __tablename__ = "auction_sale_comparables"
+
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("auction_cases.id"), nullable=False, index=True)
+    case_number = Column(String(50), nullable=True)
+    address = Column(String(300), nullable=True)
+    appraisal_price = Column(Float, nullable=True)
+    winning_bid_price = Column(Float, nullable=True)
+    bid_rate_pct = Column(Float, nullable=True)
+    sold_round = Column(Integer, nullable=True)
+    bid_date = Column(String(20), nullable=True)
+    memo = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    case = relationship("AuctionCase", back_populates="sale_comparables")
+
+
+class AuctionBidAnalysis(Base):
+    """입찰가 통합 분석 결과 (비교사례 기반 제안가 캐시)"""
+    __tablename__ = "auction_bid_analyses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(Integer, ForeignKey("auction_cases.id"), unique=True, nullable=False, index=True)
+    peer_count = Column(Integer, default=0)
+    median_bid_rate_pct = Column(Float, nullable=True)
+    suggested_bid_won = Column(Float, nullable=True)
+    suggested_bid_rate_pct = Column(Float, nullable=True)
+    range_low_won = Column(Float, nullable=True)
+    range_high_won = Column(Float, nullable=True)
+    narrative = Column(Text, nullable=True)
+    computed_at = Column(DateTime, default=datetime.utcnow)
+
+    case = relationship("AuctionCase", back_populates="bid_analysis")
 
 
 def _migrate_intel_columns():

@@ -86,6 +86,13 @@ function SummaryTable({ rows }: { rows: Record<string, unknown>[] }) {
   );
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function MarkdownBody({ text }: { text: string }) {
   const blocks = text.split(/\n\n+/);
   return (
@@ -100,7 +107,7 @@ function MarkdownBody({ text }: { text: string }) {
             </h3>
           );
         }
-        const html = line
+        const html = escapeHtml(line)
           .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
           .replace(/\n/g, "<br/>");
         return (

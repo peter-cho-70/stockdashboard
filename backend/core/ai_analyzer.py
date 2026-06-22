@@ -462,6 +462,120 @@ class AIAnalyzer:
                 return None
         return None
 
+    def _call_claude_vision(self, prompt: str, images_b64: list[str]) -> Optional[dict]:
+        if not self._anthropic:
+            self._log("error", "❌ Claude 미초기화 — ANTHROPIC_API_KEY 확인")
+            return None
+        self._log("info", f"🤖 Claude 비전 분석 요청 ({self.anthropic_model}, 이미지 {len(images_b64)}장)")
+        content: list[dict] = [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img}}
+            for img in images_b64
+        ]
+        content.append({"type": "text", "text": prompt})
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                resp = self._anthropic.messages.create(
+                    model=self.anthropic_model,
+                    max_tokens=4096,
+                    system="문서 이미지에서 표 데이터를 추출하는 전문가. 반드시 유효한 JSON만 출력.",
+                    messages=[{"role": "user", "content": content}],
+                    temperature=0.2,
+                )
+                raw = resp.content[0].text if resp.content else ""
+                result = _extract_json(raw)
+                if result:
+                    self._log("info", "✅ Claude 비전 분석 완료")
+                    return result
+                self._log("error", f"❌ Claude 비전 JSON 파싱 실패: {raw[:200]}")
+                return None
+            except Exception as e:
+                err = str(e)
+                if "429" in err or "rate_limit" in err.lower() or "overloaded" in err.lower():
+                    if attempt < MAX_RETRIES:
+                        self._log("warn", f"⏳ Claude Rate limit — {RETRY_DELAY}초 후 재시도 ({attempt}/{MAX_RETRIES})")
+                        time.sleep(RETRY_DELAY)
+                        continue
+                    raise ProviderQuotaError("claude", RETRY_DELAY)
+                self._log("error", f"❌ Claude 비전 실패: {err[:200]}")
+                return None
+        return None
+
+    def _call_gpt_vision(self, prompt: str, images_b64: list[str]) -> Optional[dict]:
+        if not self._openai:
+            self._log("error", "❌ OpenAI 미초기화 — OPENAI_API_KEY 확인")
+            return None
+        self._log("info", f"🤖 GPT 비전 분석 요청 ({self.openai_model}, 이미지 {len(images_b64)}장)")
+        content: list[dict] = [{"type": "text", "text": prompt}]
+        for img in images_b64:
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}})
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                resp = self._openai.chat.completions.create(
+                    model=self.openai_model,
+                    messages=[
+                        {"role": "system", "content": "문서 이미지에서 표 데이터를 추출하는 전문가. 반드시 유효한 JSON만 출력."},
+                        {"role": "user", "content": content},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                )
+                raw = resp.choices[0].message.content or ""
+                result = _extract_json(raw)
+                if result:
+                    self._log("info", "✅ GPT 비전 분석 완료")
+                    return result
+                self._log("error", f"❌ GPT 비전 JSON 파싱 실패: {raw[:200]}")
+                return None
+            except Exception as e:
+                err = str(e)
+                if "429" in err or "rate_limit" in err.lower():
+                    if attempt < MAX_RETRIES:
+                        self._log("warn", f"⏳ GPT Rate limit — {RETRY_DELAY}초 후 재시도 ({attempt}/{MAX_RETRIES})")
+                        time.sleep(RETRY_DELAY)
+                        continue
+                    raise ProviderQuotaError("openai", RETRY_DELAY)
+                self._log("error", f"❌ GPT 비전 실패: {err[:200]}")
+                return None
+        return None
+
+    def analyze_images_json_prompt(
+        self,
+        prompt: str,
+        images_b64: list[str],
+        provider: Optional[str] = None,
+        log_label: str = "이미지 분석",
+    ) -> Optional[dict]:
+        """
+        이미지(base64 PNG) + 프롬프트 → JSON. claude/openai/gemini 비전을 순서대로 시도한다.
+        사용자가 명시적으로 트리거하는 1회성 추출 작업이므로, 전역 ai_fallback 설정과 무관하게
+        한 provider가 quota/오류로 실패하면 다음 provider로 자동 전환한다.
+        """
+        preferred = normalize_provider(provider, self.default_provider)
+        chain = [preferred] + [p for p in ("claude", "openai", "gemini") if p != preferred]
+        for p in chain:
+            if not self._provider_ready(p):
+                continue
+            self._log("info", f"🤖 {log_label} ({p})")
+            try:
+                if p == "claude":
+                    result = self._call_claude_vision(prompt, images_b64)
+                elif p == "openai":
+                    result = self._call_gpt_vision(prompt, images_b64)
+                else:
+                    result = self._gemini.generate_json_with_images(
+                        prompt,
+                        images_b64,
+                        purpose=log_label,
+                        model=self.gemini_model,
+                        system_instruction="문서 이미지에서 표 데이터를 추출하는 전문가. 반드시 유효한 JSON만 출력.",
+                    )
+            except (ProviderQuotaError, GeminiQuotaError, GeminiAuthError) as e:
+                self._log("warn", f"↪️ {p} 사용 불가 ({e}) → 다음 provider로 전환")
+                continue
+            if result:
+                return result
+        return None
+
     def _call_provider(
         self,
         provider: AnalysisProvider,

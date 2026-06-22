@@ -123,6 +123,30 @@ function computeAssetBreakdown(state: Pick<
   };
 }
 
+let lastSnapshotDate: string | null = null;
+
+function recordTodayAssetSnapshot(get: () => FinanceState) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (lastSnapshotDate === today) return;
+  lastSnapshotDate = today;
+
+  const state = get();
+  const breakdown = computeAssetBreakdown(state);
+  const totalLiabilities = state.liabilities.reduce((sum, l) => sum + l.principal, 0);
+  api
+    .recordFinanceAssetSnapshot({
+      total_assets: breakdown.total,
+      liquid_assets: breakdown.liquidTotal,
+      illiquid_assets: breakdown.illiquid,
+      real_estate_assets: breakdown.realEstate,
+      total_liabilities: totalLiabilities,
+      liquid_net_worth: breakdown.liquidTotal - totalLiabilities,
+    })
+    .catch(() => {
+      lastSnapshotDate = null; // 실패하면 다음 load()에서 재시도
+    });
+}
+
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 function pickPersisted(state: FinanceState) {
@@ -190,6 +214,7 @@ export const useFinanceStore = create<FinanceState>()((set, get) => ({
         ready: true,
         error: null,
       });
+      recordTodayAssetSnapshot(get);
     } catch (err) {
       set({
         ready: true,

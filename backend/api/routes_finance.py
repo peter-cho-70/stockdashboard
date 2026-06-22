@@ -10,12 +10,21 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from config.database import get_db
+from config.settings import get_settings
+from core.ai_analyzer import (
+    ProviderQuotaError,
+    ensure_analysis_available,
+    handle_provider_runtime_error,
+)
 from core.demo_mode import demo_write_blocked
 from core.finance_service import (
     export_backup,
+    generate_cashflow_opinion,
     get_finance_state,
     get_ledger_state,
     get_stock_snapshot,
+    list_asset_snapshots,
+    record_asset_snapshot,
     reset_finance_state,
     reset_ledger_state,
     restore_backup,
@@ -76,9 +85,52 @@ def clear_ledger_state(db: Session = Depends(get_db)):
     return reset_ledger_state(db)
 
 
+class CashflowOpinionBody(BaseModel):
+    year: int
+    month: int
+    analysis_provider: str | None = None
+
+
+@finance_router.post("/ledger/cashflow-opinion")
+def cashflow_opinion(body: CashflowOpinionBody, db: Session = Depends(get_db)):
+    """이번 달 수입 대비 지출에 대한 AI 의견 생성"""
+    settings = get_settings()
+    try:
+        ensure_analysis_available(settings, body.analysis_provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        return generate_cashflow_opinion(db, body.year, body.month, body.analysis_provider)
+    except ProviderQuotaError as e:
+        handle_provider_runtime_error(e)
+    except RuntimeError as e:
+        handle_provider_runtime_error(e)
+
+
 @finance_router.get("/stock-snapshot")
 def read_stock_snapshot(db: Session = Depends(get_db)):
     return get_stock_snapshot(db)
+
+
+class AssetSnapshotBody(BaseModel):
+    date: str | None = None
+    total_assets: float = 0
+    liquid_assets: float = 0
+    illiquid_assets: float = 0
+    real_estate_assets: float = 0
+    total_liabilities: float = 0
+    liquid_net_worth: float = 0
+
+
+@finance_router.post("/asset-snapshot")
+def write_asset_snapshot(body: AssetSnapshotBody, db: Session = Depends(get_db)):
+    """대시보드를 열 때마다 그날의 총자산·유동성자산 값을 upsert (날짜별 추이 차트용)"""
+    return record_asset_snapshot(db, body.model_dump())
+
+
+@finance_router.get("/asset-snapshot")
+def read_asset_snapshots(days: int = 180, db: Session = Depends(get_db)):
+    return {"items": list_asset_snapshots(db, days)}
 
 
 @finance_router.get("/backup")

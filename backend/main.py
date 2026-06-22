@@ -26,7 +26,9 @@ from api.routes_morning import morning_router
 from api.routes_system import system_router
 from api.routes_study import study_router
 from api.routes_finance import finance_router
+from api.routes_auction import auction_router
 from api.routes_cron import cron_router
+from api.routes_autotrade import autotrade_router
 from scheduler.jobs import create_scheduler
 
 # 로깅 설정
@@ -121,7 +123,9 @@ app.include_router(morning_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(study_router, prefix="/api")
 app.include_router(finance_router, prefix="/api")
+app.include_router(auction_router, prefix="/api")
 app.include_router(cron_router, prefix="/api")
+app.include_router(autotrade_router, prefix="/api")
 
 
 @app.get("/")

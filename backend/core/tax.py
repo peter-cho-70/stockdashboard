@@ -9,7 +9,17 @@ core/tax.py
 SELL_TAX_RATE = 0.0018
 FEE_RATE = 0.00015
 
+# 배당소득세: 소득세 14% + 지방소득세 1.4% = 15.4% (국내 상장주식 기준, 원천징수).
+# 금융소득종합과세(연 2천만원 초과) 대상이거나 해외주식 배당은 실제 세율이 달라질 수 있어
+# 자동계산값은 추정치이며, 사용자가 직접 수정할 수 있다.
+DIVIDEND_TAX_RATE = 0.154
+
 
 def net_sell_proceeds(qty: float, price: float) -> float:
     """매도 시 세금·수수료를 제외한 실수령액"""
     return qty * price * (1 - SELL_TAX_RATE - FEE_RATE)
+
+
+def dividend_tax(gross_amount: float) -> float:
+    """배당소득세 추정액 (원천징수 15.4% 기준)"""
+    return round(gross_amount * DIVIDEND_TAX_RATE)

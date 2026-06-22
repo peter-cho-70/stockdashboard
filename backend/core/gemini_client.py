@@ -336,3 +336,65 @@ class GeminiClient:
                 self._log("error", f"❌ Gemini 실패: {err[:200]}")
                 return None
         return None
+
+    def generate_json_with_images(
+        self,
+        prompt: str,
+        images_b64: list[str],
+        *,
+        purpose: str = "이미지 JSON 분석",
+        model: Optional[str] = None,
+        system_instruction: Optional[str] = None,
+    ) -> Optional[dict]:
+        """이미지(base64 PNG) + 텍스트 프롬프트 → JSON (비전)."""
+        if not self._client:
+            self._log("error", "❌ Gemini Client 미초기화")
+            return None
+
+        use_model = model or self.model
+        self._log("info", f"📡 Gemini 비전 JSON ({purpose}, {use_model}, 이미지 {len(images_b64)}장)")
+
+        import base64
+
+        parts = [
+            types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
+            for b64 in images_b64
+        ]
+        parts.append(prompt)
+
+        for attempt in range(1, JSON_PARSE_RETRIES + 1):
+            try:
+                config = types.GenerateContentConfig(
+                    temperature=0.2,
+                    response_mime_type="application/json",
+                    max_output_tokens=DEFAULT_JSON_MAX_OUTPUT_TOKENS,
+                )
+                if system_instruction:
+                    config.system_instruction = system_instruction
+
+                resp = self._client.models.generate_content(
+                    model=use_model, contents=parts, config=config
+                )
+                raw = resp.text or ""
+                result = _extract_json(raw)
+                if result:
+                    self._log("info", "✅ Gemini 비전 JSON 완료")
+                    return result
+                if attempt < JSON_PARSE_RETRIES:
+                    self._log("warning", f"⚠️ Gemini 비전 JSON 파싱 재시도 ({attempt}/{JSON_PARSE_RETRIES})")
+                    continue
+                self._log("error", f"❌ Gemini 비전 JSON 파싱 실패: {raw[:200]}")
+                return None
+            except (GeminiQuotaError, GeminiAuthError):
+                raise
+            except Exception as e:
+                err = str(e)
+                outcome = self._handle_error(err, attempt)
+                if outcome is None:
+                    continue
+                if isinstance(outcome, Exception):
+                    self._log("error", f"❌ {outcome}")
+                    raise outcome
+                self._log("error", f"❌ Gemini 비전 실패: {err[:200]}")
+                return None
+        return None

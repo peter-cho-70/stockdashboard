@@ -11,6 +11,7 @@ from datetime import datetime
 
 from config.database import get_db, RealizedGain, AppConfig
 from core.demo_mode import is_demo_mode, demo_write_blocked
+from core.tax import dividend_tax
 
 gains_router = APIRouter(prefix="/gains", tags=["gains"])
 
@@ -152,7 +153,11 @@ def add_gain(body: GainCreate, db: Session = Depends(get_db)):
     demo_write_blocked()
     if body.gain_type not in ("CAPITAL", "DIVIDEND"):
         raise HTTPException(status_code=400, detail="gain_type은 CAPITAL 또는 DIVIDEND 여야 합니다.")
-    g = RealizedGain(**body.model_dump())
+    data = body.model_dump()
+    # KIS는 계좌별 배당 지급내역을 제공하지 않아 세금을 가져올 수 없다 — tax_amount 미입력(0) 시 15.4% 원천징수로 추정.
+    if body.gain_type == "DIVIDEND" and not data.get("tax_amount"):
+        data["tax_amount"] = dividend_tax(body.amount)
+    g = RealizedGain(**data)
     db.add(g)
     db.commit()
     db.refresh(g)

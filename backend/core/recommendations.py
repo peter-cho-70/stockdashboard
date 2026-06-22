@@ -158,19 +158,22 @@ def get_co_mentioned_stocks(
 
     agg: dict[str, dict] = {}
     for r in rows:
-        if r.symbol == stock.symbol or r.stock_name == stock.name:
+        # symbol이 비어있는 행도 종목명으로 미리 심볼을 풀어서 키로 써야,
+        # 같은 종목이 symbol 유무에 따라 두 개 버킷으로 쪼개지지 않는다.
+        resolved_sym = r.symbol or resolve_symbol(r.stock_name, db)
+        if resolved_sym == stock.symbol or r.stock_name == stock.name:
             continue
-        key = r.symbol or r.stock_name
+        key = resolved_sym or r.stock_name
         entry = agg.setdefault(key, {
             "stock_name": r.stock_name,
-            "symbol": r.symbol,
+            "symbol": resolved_sym,
             "mention_count": 0,
             "latest_date": "",
             "latest_sentiment": "NEUTRAL",
         })
         entry["mention_count"] += 1
-        if not entry["symbol"] and r.symbol:
-            entry["symbol"] = r.symbol
+        if not entry["symbol"] and resolved_sym:
+            entry["symbol"] = resolved_sym
         if (r.event_date or "") >= entry["latest_date"]:
             entry["latest_date"] = r.event_date or entry["latest_date"]
             entry["latest_sentiment"] = r.sentiment or "NEUTRAL"
@@ -179,7 +182,7 @@ def get_co_mentioned_stocks(
 
     out = []
     for r in ranked:
-        sym = r["symbol"] or resolve_symbol(r["stock_name"], db)
+        sym = r["symbol"]
         st = db.query(Stock).filter(Stock.symbol == sym).first() if sym else None
         out.append({
             "symbol": sym,

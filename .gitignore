@@ -12,14 +12,18 @@ env/
 # Backend secrets & local data
 backend/.env
 backend/*.db
+backend/*.db.bak-*
 backend/data/backups/
 backend/data/study_images/
 backend/data/kis_invest_cache/
 backend/data/stock_basics_cache/
+backend/data/auction_files/
 backend/data/backend.pid
 backend/data/kr_snapshot_cache.json
 backend/nohup.out
 backend/.vercel
+/stockmind.db
+/*.png
 
 # Node / Next.js
 frontend/node_modules/

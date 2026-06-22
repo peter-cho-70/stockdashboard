@@ -12,7 +12,9 @@ from core.price_targets import (
     add_manual_target,
     delete_price_target,
     fetch_price_targets_with_ai,
+    get_target_setting,
     list_price_targets,
+    save_target_setting,
 )
 from core.trade_report import (
     generate_trade_report,
@@ -80,6 +82,22 @@ def api_delete_price_target(symbol: str, target_id: int, db: Session = Depends(g
     if not delete_price_target(db, symbol.strip(), target_id):
         raise HTTPException(status_code=404, detail="목표가 없음")
     return {"ok": True}
+
+
+class TargetSettingBody(BaseModel):
+    avg_window_days: Optional[int] = None
+    weight_pct: Optional[float] = None
+    custom_profit_pct: Optional[float] = None
+
+
+@market_router.get("/stocks/{symbol}/target-setting")
+def api_get_target_setting(symbol: str, db: Session = Depends(get_db)):
+    return get_target_setting(db, symbol.strip())
+
+
+@market_router.put("/stocks/{symbol}/target-setting")
+def api_save_target_setting(symbol: str, body: TargetSettingBody, db: Session = Depends(get_db)):
+    return save_target_setting(db, symbol.strip(), body.model_dump(exclude_none=True))
 
 
 @market_router.get("/stocks/{symbol}/kis-invest-info")

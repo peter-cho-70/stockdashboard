@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import {
   api,
+  marketApi,
   type StockItem,
   type StockCreatePayload,
   type TradeWhatIfItem,
@@ -30,6 +31,7 @@ import {
 } from "@/lib/api";
 import { krChangeClass, krSignedMediumClass } from "@/lib/krMarketColors";
 import { netSellProceeds } from "@/lib/tax";
+import { computeTargetAverage } from "@/lib/priceTargetUtils";
 
 function tradeLookbackStart(years = 3): string {
   const d = new Date();
@@ -301,6 +303,36 @@ function PortfolioContent() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const [computedBuyPrices, setComputedBuyPrices] = useState<Record<string, number | null>>({});
+  const symbolsKey = stocks.map((s) => s.symbol).join(",");
+
+  useEffect(() => {
+    const symbols = symbolsKey ? symbolsKey.split(",") : [];
+    if (symbols.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        symbols.map(async (symbol) => {
+          try {
+            const [{ targets }, setting] = await Promise.all([
+              marketApi.getPriceTargets(symbol),
+              marketApi.getTargetSetting(symbol),
+            ]);
+            const avg = computeTargetAverage(targets, setting.avg_window_days);
+            const buyPrice = avg ? avg.avg * (setting.weight_pct / 100) : null;
+            return [symbol, buyPrice] as const;
+          } catch {
+            return [symbol, null] as const;
+          }
+        }),
+      );
+      if (!cancelled) setComputedBuyPrices(Object.fromEntries(entries));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [symbolsKey]);
 
   useEffect(() => {
     if (!menuOpenSymbol) return;
@@ -988,18 +1020,30 @@ function PortfolioContent() {
                     </td>
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       <div className="flex flex-col gap-0.5 text-[11px]">
-                        {stock.target_buy_price ? (
-                          <span
-                            className={`inline-flex items-center gap-1 ${
-                              stock.target_buy_hit
-                                ? "font-semibold text-sky-600 dark:text-sky-400"
-                                : "text-neutral-400"
-                            }`}
-                          >
-                            매수 {fmt(stock.target_buy_price, stock.currency)}
-                            {stock.target_buy_hit && <Target size={10} />}
-                          </span>
-                        ) : null}
+                        {(() => {
+                          const rawBuyPrice = computedBuyPrices[stock.symbol];
+                          if (rawBuyPrice == null) return null;
+                          const round = stock.currency === "USD" ? (n: number) => Math.round(n * 100) / 100 : Math.round;
+                          const buyPrice = round(rawBuyPrice);
+                          const diff = stock.current_price > 0 ? round(stock.current_price - buyPrice) : null;
+                          return (
+                            <span className="inline-flex items-center gap-1 text-neutral-500 dark:text-neutral-400">
+                              매수적정가 {fmt(buyPrice, stock.currency)}
+                              {diff != null && (
+                                <span
+                                  className={
+                                    diff >= 0
+                                      ? "font-medium text-red-500"
+                                      : "font-medium text-emerald-600 dark:text-emerald-400"
+                                  }
+                                >
+                                  ({diff >= 0 ? "+" : ""}
+                                  {fmt(diff, stock.currency)})
+                                </span>
+                              )}
+                            </span>
+                          );
+                        })()}
                         {stock.target_sell_price ? (
                           <span
                             className={`inline-flex items-center gap-1 ${
@@ -1012,7 +1056,7 @@ function PortfolioContent() {
                             {stock.target_sell_hit && <Target size={10} />}
                           </span>
                         ) : null}
-                        {!stock.target_buy_price && !stock.target_sell_price && (
+                        {computedBuyPrices[stock.symbol] == null && !stock.target_sell_price && (
                           <span className="text-neutral-300 dark:text-neutral-600">—</span>
                         )}
                       </div>

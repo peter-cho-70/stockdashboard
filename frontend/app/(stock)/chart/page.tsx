@@ -94,7 +94,9 @@ import {
 } from "@/lib/chartAnalysis";
 import { ChartAnalysisPanel } from "@/components/chart-analysis-panel";
 import { HoldingsAnalysisPanel } from "@/components/holdings-analysis-panel";
+import { TargetPriceSummaryPanel } from "@/components/chart/target-price-summary-panel";
 import { ensureStockForChart } from "@/lib/ensureStock";
+import { isTargetShownOnChart, pickAllChartTargets, targetEffectiveDate } from "@/lib/priceTargetUtils";
 
 function isKrStockSymbol(symbol: string | null | undefined): boolean {
   return !!symbol && /^\d{6}$/.test(symbol);
@@ -220,26 +222,7 @@ interface ChartMemoMarker {
   body: string;
 }
 
-/** 차트에 표시할 목표가: 최근 1개월 */
-const CHART_TARGET_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const CHART_TARGET_PREVIEW_LIMIT = 5;
-
-function targetEffectiveDate(t: PriceTarget): number {
-  const raw = t.report_date || t.fetched_at;
-  if (!raw) return Date.now();
-  const ts = new Date(raw.includes("T") ? raw : `${raw}T12:00:00`).getTime();
-  return Number.isNaN(ts) ? Date.now() : ts;
-}
-
-function isTargetShownOnChart(t: PriceTarget): boolean {
-  return Date.now() - targetEffectiveDate(t) <= CHART_TARGET_MAX_AGE_MS;
-}
-
-function pickAllChartTargets(targets: PriceTarget[]): PriceTarget[] {
-  return targets
-    .filter(isTargetShownOnChart)
-    .sort((a, b) => targetEffectiveDate(b) - targetEffectiveDate(a));
-}
 
 function pickPreviewChartTargets(targets: PriceTarget[]): PriceTarget[] {
   return pickAllChartTargets(targets).slice(0, CHART_TARGET_PREVIEW_LIMIT);
@@ -2551,91 +2534,101 @@ function ChartContent() {
 
           {selectedSymbol && (priceTargets.length > 0 || targetDisclaimer || targetSearchArticles.length > 0 || targetsLoading) && (
             <div className="border-t border-[var(--border-subtle)] px-4 py-3 text-xs space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium text-neutral-600 dark:text-neutral-400">
-                  증권사·애널리스트 목표가
-                </span>
-                {targetsLoading && <Loader2 size={12} className="animate-spin text-neutral-400" />}
-              </div>
               {targetDisclaimer && (
                 <p className="text-[10px] text-amber-600 dark:text-amber-400">{targetDisclaimer}</p>
               )}
 
-              {priceTargets.length > 0 && (
-                <>
-                <ul className="space-y-2">
-                  {previewChartPriceTargets.map((t, i) => {
-                    const onChart = true;
-                    const stale = !isTargetShownOnChart(t);
-                    return (
-                    <li
-                      key={t.id}
-                      className={`rounded-lg border px-3 py-2 flex flex-wrap items-start justify-between gap-2 ${
-                        onChart
-                          ? "border-[var(--border-subtle)]"
-                          : "border-dashed border-neutral-300 dark:border-neutral-700 opacity-75"
-                      }`}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span
-                            className="h-2 w-2 rounded-full shrink-0"
-                            style={{ backgroundColor: analystTargetColor(i, t.is_consensus) }}
-                          />
-                          <span className="font-medium text-neutral-800 dark:text-neutral-200">
-                            {t.is_consensus ? "컨센서스" : t.source}
-                            {" "}
-                            {t.target_price.toLocaleString("ko-KR")}원
-                            {t.rating ? ` · ${t.rating}` : ""}
-                          </span>
-                          {t.report_date && (
-                            <span className="text-[10px] text-neutral-400">{t.report_date}</span>
-                          )}
-                          {stale && (
-                            <span className="text-[9px] text-neutral-400">차트 제외 · 1개월 초과</span>
-                          )}
-                        </div>
-                        {t.source_url && (
-                          <a
-                            href={t.source_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-1 inline-flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 hover:underline line-clamp-2"
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-neutral-600 dark:text-neutral-400">
+                      증권사·애널리스트 목표가
+                    </span>
+                    {targetsLoading && <Loader2 size={12} className="animate-spin text-neutral-400" />}
+                  </div>
+
+                  {priceTargets.length > 0 && (
+                    <>
+                    <ul className="space-y-2">
+                      {allChartPriceTargets.map((t, i) => {
+                        const onChart = true;
+                        const stale = !isTargetShownOnChart(t);
+                        return (
+                        <li
+                          key={t.id}
+                          className={`rounded-lg border px-3 py-2 flex flex-wrap items-start justify-between gap-2 ${
+                            onChart
+                              ? "border-[var(--border-subtle)]"
+                              : "border-dashed border-neutral-300 dark:border-neutral-700 opacity-75"
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span
+                                className="h-2 w-2 rounded-full shrink-0"
+                                style={{ backgroundColor: analystTargetColor(i, t.is_consensus) }}
+                              />
+                              <span className="font-medium text-neutral-800 dark:text-neutral-200">
+                                {t.is_consensus ? "컨센서스" : t.source}
+                                {" "}
+                                {t.target_price.toLocaleString("ko-KR")}원
+                                {t.rating ? ` · ${t.rating}` : ""}
+                              </span>
+                              {t.report_date && (
+                                <span className="text-[10px] text-neutral-400">{t.report_date}</span>
+                              )}
+                              {stale && (
+                                <span className="text-[9px] text-neutral-400">차트 제외 · 1개월 초과</span>
+                              )}
+                            </div>
+                            {t.source_url && (
+                              <a
+                                href={t.source_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-1 inline-flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 hover:underline line-clamp-2"
+                              >
+                                <ExternalLink size={11} className="shrink-0" />
+                                {t.source_title || "출처 기사 보기"}
+                              </a>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className="text-neutral-400 hover:text-red-500 shrink-0"
+                            onClick={async () => {
+                              await marketApi.deletePriceTarget(selectedSymbol, t.id);
+                              loadPriceTargets();
+                            }}
                           >
-                            <ExternalLink size={11} className="shrink-0" />
-                            {t.source_title || "출처 기사 보기"}
-                          </a>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        className="text-neutral-400 hover:text-red-500 shrink-0"
-                        onClick={async () => {
-                          await marketApi.deletePriceTarget(selectedSymbol, t.id);
-                          loadPriceTargets();
-                        }}
-                      >
-                        ×
-                      </button>
-                    </li>
-                    );
-                  })}
-                </ul>
-                {hasMoreTargetsThanPreview && (
-                  <p className="text-[10px] text-neutral-500">
-                    최신 {CHART_TARGET_PREVIEW_LIMIT}건만 표시 · 증권사 목표가 {allChartPriceTargets.length}건은{" "}
-                    <button
-                      type="button"
-                      className="text-violet-600 dark:text-violet-400 hover:underline font-medium"
-                      onClick={() => setChartExpanded(true)}
-                    >
-                      차트 확장
-                    </button>
-                    에서 전체 확인
-                  </p>
-                )}
-                </>
-              )}
+                            ×
+                          </button>
+                        </li>
+                        );
+                      })}
+                    </ul>
+                    {priceTargets.length > allChartPriceTargets.length && (
+                      <p className="text-[10px] text-neutral-500">
+                        최근 1개월 내 {allChartPriceTargets.length}건 표시 · 1개월 초과 목표가{" "}
+                        {priceTargets.length - allChartPriceTargets.length}건은{" "}
+                        <button
+                          type="button"
+                          className="text-violet-600 dark:text-violet-400 hover:underline font-medium"
+                          onClick={() => setChartExpanded(true)}
+                        >
+                          차트 확장
+                        </button>
+                        에서 전체 확인
+                      </p>
+                    )}
+                    </>
+                  )}
+                </div>
+
+                <div className="lg:border-l lg:border-[var(--border-subtle)] lg:pl-4">
+                  <TargetPriceSummaryPanel symbol={selectedSymbol} targets={priceTargets} currentPrice={displayPrice} />
+                </div>
+              </div>
 
               {targetSearchArticles.length > 0 && (
                 <div className="space-y-1.5">

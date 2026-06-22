@@ -12,7 +12,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from config.database import FinanceJsonStore, Stock
+from config.database import FinanceAssetSnapshot, FinanceJsonStore, Stock
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +173,49 @@ def get_stock_snapshot(db: Session) -> dict[str, Any]:
     }
 
 
+def record_asset_snapshot(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    오늘 날짜의 총자산·유동성자산 스냅샷을 upsert한다.
+    실제 합산 공식은 프론트(zustand store)가 계산하고, 여기서는 그 결과를 날짜별로 저장만 한다.
+    """
+    snapshot_date = (payload.get("date") or datetime.utcnow().strftime("%Y-%m-%d"))[:10]
+    row = db.query(FinanceAssetSnapshot).filter(FinanceAssetSnapshot.date == snapshot_date).first()
+    if not row:
+        row = FinanceAssetSnapshot(date=snapshot_date)
+        db.add(row)
+    row.total_assets = payload.get("total_assets") or 0
+    row.liquid_assets = payload.get("liquid_assets") or 0
+    row.illiquid_assets = payload.get("illiquid_assets") or 0
+    row.real_estate_assets = payload.get("real_estate_assets") or 0
+    row.total_liabilities = payload.get("total_liabilities") or 0
+    row.liquid_net_worth = payload.get("liquid_net_worth") or 0
+    db.commit()
+    db.refresh(row)
+    return _serialize_asset_snapshot(row)
+
+
+def list_asset_snapshots(db: Session, days: int = 180) -> list[dict[str, Any]]:
+    rows = (
+        db.query(FinanceAssetSnapshot)
+        .order_by(FinanceAssetSnapshot.date.desc())
+        .limit(days)
+        .all()
+    )
+    return [_serialize_asset_snapshot(r) for r in reversed(rows)]
+
+
+def _serialize_asset_snapshot(row: FinanceAssetSnapshot) -> dict[str, Any]:
+    return {
+        "date": row.date,
+        "total_assets": row.total_assets,
+        "liquid_assets": row.liquid_assets,
+        "illiquid_assets": row.illiquid_assets,
+        "real_estate_assets": row.real_estate_assets,
+        "total_liabilities": row.total_liabilities,
+        "liquid_net_worth": row.liquid_net_worth,
+    }
+
+
 BACKUP_VERSION = 1
 BACKUP_APP = "stockmind-financehub"
 LEGACY_BACKUP_APPS = {"financehub", "stockmind-financehub"}
@@ -241,6 +284,78 @@ def backup_summary(finance: dict[str, Any], ledger: dict[str, Any]) -> dict[str,
         "fixedExpenses": len(finance.get("fixedExpenses") or []),
         "incomes": len(finance.get("incomes") or []),
         "fundingNeeds": len(finance.get("fundingNeeds") or []),
+    }
+
+
+def _month_transactions(ledger_state: dict[str, Any], year: int, month: int) -> list[dict[str, Any]]:
+    prefix = f"{year:04d}-{month:02d}"
+    return [
+        t for t in ledger_state.get("transactions", [])
+        if str(t.get("date", "")).startswith(prefix)
+    ]
+
+
+def _build_cashflow_opinion_prompt(year: int, month: int, txns: list[dict[str, Any]]) -> str:
+    income = sum(t.get("amount", 0) for t in txns if t.get("type") == "income")
+    expense = sum(t.get("amount", 0) for t in txns if t.get("type") == "expense")
+    net = income - expense
+
+    cat_totals: dict[str, float] = {}
+    card_totals: dict[str, float] = {}
+    for t in txns:
+        if t.get("type") != "expense":
+            continue
+        cat = t.get("category") or "기타"
+        cat_totals[cat] = cat_totals.get(cat, 0) + t.get("amount", 0)
+        card = t.get("cardIssuer")
+        if card:
+            card_totals[card] = card_totals.get(card, 0) + t.get("amount", 0)
+
+    top_categories = sorted(cat_totals.items(), key=lambda x: -x[1])[:5]
+    top_cards = sorted(card_totals.items(), key=lambda x: -x[1])[:5]
+    cat_lines = "\n".join(f"- {c}: {a:,.0f}원" for c, a in top_categories) or "- (지출 내역 없음)"
+    card_lines = "\n".join(f"- {c}: {a:,.0f}원" for c, a in top_cards) or "- (카드 결제 내역 없음)"
+
+    return f"""당신은 가계 재무 상담 전문가입니다. 아래 {year}년 {month}월 가계부 데이터를 바탕으로 수입 대비 지출에 대한 의견을 작성하세요.
+
+[이번 달 요약]
+- 총 수입: {income:,.0f}원
+- 총 지출: {expense:,.0f}원
+- 순현금흐름: {net:,.0f}원
+
+[지출 상위 카테고리]
+{cat_lines}
+
+[카드사별 결제 상위]
+{card_lines}
+
+다음 JSON 형식으로만 응답하세요. 마크다운 기호(#, ** 등) 없이 자연스러운 문장으로 작성하세요:
+{{"opinion": "한국어 존댓말로 3~5문단. 수입 대비 지출 수준 평가, 주의할 지출 패턴, 구체적 개선 제안을 포함."}}"""
+
+
+def generate_cashflow_opinion(
+    db: Session, year: int, month: int, provider: str | None = None
+) -> dict[str, Any]:
+    from core.ai_analyzer import create_analyzer
+
+    state = get_ledger_state(db)
+    txns = _month_transactions(state, year, month)
+    income = sum(t.get("amount", 0) for t in txns if t.get("type") == "income")
+    expense = sum(t.get("amount", 0) for t in txns if t.get("type") == "expense")
+
+    prompt = _build_cashflow_opinion_prompt(year, month, txns)
+    analyzer = create_analyzer(db)
+    result = analyzer.analyze_json_prompt(prompt, provider, log_label="가계부 현금흐름 의견")
+    opinion = (result or {}).get("opinion")
+    if not opinion:
+        raise RuntimeError("AI 의견 생성에 실패했습니다. 로그를 확인하세요.")
+    return {
+        "opinion": opinion,
+        "year": year,
+        "month": month,
+        "income": income,
+        "expense": expense,
+        "net": income - expense,
     }
 
 

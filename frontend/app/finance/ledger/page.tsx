@@ -4,10 +4,11 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2,
   TrendingUp, TrendingDown, Minus, BookOpen, SlidersHorizontal,
-  Search, PieChart,
+  Search, PieChart, ClipboardList,
 } from 'lucide-react';
 import { useLedgerStore } from '@/lib/finance/store/ledger-store';
 import { CategoryBreakdownPanel } from '@/components/finance/ledger/category-breakdown-panel';
+import { BulkImportPanel } from '@/components/finance/ledger/bulk-import-panel';
 import {
   type Transaction, type TransactionType, type PaymentMethod,
 } from '@/lib/finance/types';
@@ -120,8 +121,10 @@ export default function LedgerPage() {
   // ─ 필터 ─
   const [filterType, setFilterType] = useState<'all' | TransactionType>('all');
   const [filterCategory, setFilterCategory] = useState<string | 'all'>('all');
+  const [filterUser, setFilterUser] = useState<string | 'all'>('all');
   const [showBudgetPanel, setShowBudgetPanel] = useState(false);
   const [showAnalysisPanel, setShowAnalysisPanel] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   // ─ 거래 폼 ─
   const [form, setForm] = useState(emptyForm());
@@ -132,11 +135,16 @@ export default function LedgerPage() {
   const [budgetEditCategory, setBudgetEditCategory] = useState<string | null>(null);
   const [budgetEditValue, setBudgetEditValue] = useState('');
   const amountInputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLDivElement>(null);
+  const [focusTick, setFocusTick] = useState(0);
 
   useEffect(() => {
     if (!formOpen) return;
-    requestAnimationFrame(() => amountInputRef.current?.focus());
-  }, [formOpen]);
+    requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      amountInputRef.current?.focus();
+    });
+  }, [formOpen, focusTick]);
 
   // ─ 이번 달 데이터 ─
   const monthTxns = useMemo(
@@ -152,9 +160,10 @@ export default function LedgerPage() {
     return monthTxns.filter(t => {
       if (filterType !== 'all' && t.type !== filterType) return false;
       if (filterCategory !== 'all' && t.category !== filterCategory) return false;
+      if (filterUser !== 'all' && (t.user || '공통') !== filterUser) return false;
       return true;
     }).sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
-  }, [monthTxns, filterType, filterCategory]);
+  }, [monthTxns, filterType, filterCategory, filterUser]);
 
   // ─ 날짜별 그룹 ─
   const grouped = useMemo(() => {
@@ -181,6 +190,7 @@ export default function LedgerPage() {
     setForm({ ...emptyForm(), category: defaultCat });
     setEditingId(null);
     setFormOpen(true);
+    setFocusTick(v => v + 1);
   }
   function openEdit(t: Transaction) {
     setForm({
@@ -191,6 +201,7 @@ export default function LedgerPage() {
     });
     setEditingId(t.id);
     setFormOpen(true);
+    setFocusTick(v => v + 1);
   }
   function submitForm() {
     const amount = Number(form.amount.replace(/,/g, ''));
@@ -243,6 +254,13 @@ export default function LedgerPage() {
           >
             <SlidersHorizontal size={12} />
             예산 관리
+          </button>
+          <button
+            onClick={() => setShowBulkImport(v => !v)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-all ${showBulkImport ? 'bg-gray-900 text-white border-gray-900' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+          >
+            <ClipboardList size={12} />
+            텍스트 일괄 추가
           </button>
           <button
             onClick={openNew}
@@ -299,12 +317,21 @@ export default function LedgerPage() {
         <CategoryBreakdownPanel
           categories={categories}
           budgets={store.budgets}
-          viewYear={viewYear}
-          viewMonth={viewMonth}
+          users={users ?? []}
+          transactions={monthTxns}
           monthExpenses={monthExpenses}
           monthIncome={monthIncome}
-          getCategorySpending={store.getCategorySpending}
-          getCategoryIncome={store.getCategoryIncome}
+        />
+      )}
+
+      {/* ─ 텍스트 일괄 추가 패널 ─────────────────────────────────────── */}
+      {showBulkImport && (
+        <BulkImportPanel
+          expenseCategories={expenseCategories}
+          cardIssuers={cardIssuers}
+          users={users ?? []}
+          onImport={(items) => { store.addTransactions(items); setShowBulkImport(false); }}
+          onClose={() => setShowBulkImport(false)}
         />
       )}
 
@@ -390,7 +417,7 @@ export default function LedgerPage() {
 
       {/* ─ 거래 추가/수정 폼 ──────────────────────────────────────────── */}
       {formOpen && (
-        <div className="bg-white rounded-xl border border-emerald-200 p-5 shadow-sm">
+        <div ref={formRef} className="bg-white rounded-xl border border-emerald-200 p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-gray-700 mb-4">
             {editingId ? '거래 수정' : '거래 추가'}
           </h2>
@@ -633,6 +660,20 @@ export default function LedgerPage() {
             <option key={c.name} value={c.name}>{c.name}</option>
           ))}
         </select>
+        {/* 사용자 필터 */}
+        {users && users.length > 0 && (
+          <select
+            value={filterUser}
+            onChange={e => setFilterUser(e.target.value)}
+            className="px-3 py-1 text-xs border border-gray-200 rounded-md bg-white text-gray-600 focus:outline-none"
+          >
+            <option value="all">전체 사용자</option>
+            <option value="공통">공통</option>
+            {users.map(u => (
+              <option key={u} value={u}>{u}</option>
+            ))}
+          </select>
+        )}
         <span className="ml-auto text-xs text-gray-400">{filtered.length}건</span>
       </div>
 

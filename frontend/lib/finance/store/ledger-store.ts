@@ -20,6 +20,7 @@ interface LedgerState {
   load: () => Promise<void>;
 
   addTransaction: (t: Transaction) => void;
+  addTransactions: (items: Transaction[]) => void;
   updateTransaction: (id: string, t: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
 
@@ -131,6 +132,10 @@ export const useLedgerStore = create<LedgerState>()((set, get) => ({
 
   addTransaction: (t) => {
     set((s) => ({ transactions: [t, ...s.transactions] }));
+    scheduleSave(get);
+  },
+  addTransactions: (items) => {
+    set((s) => ({ transactions: [...items, ...s.transactions] }));
     scheduleSave(get);
   },
   updateTransaction: (id, t) => {

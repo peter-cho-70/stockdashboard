@@ -204,6 +204,27 @@ class KISClient:
             return None
         return self._kis.account(self.account_no)
 
+    def place_order(self, symbol: str, side: str, qty: int, price: Optional[float] = None) -> dict:
+        """국내주식 매수·매도 주문 실행. side: 'buy' | 'sell'. price=None이면 시장가, 지정 시 지정가.
+
+        반드시 connect()로 연결된 계좌(self.account_no)에만 주문이 들어간다 — 자동매매 엔진은
+        호출 전 account_no가 전용 자동매매 계좌인지 별도로 검증해야 한다.
+        """
+        if not self._connected or not self._kis:
+            raise RuntimeError("KIS API 미연결. connect() 먼저 호출 필요")
+        if side not in ("buy", "sell"):
+            raise ValueError(f"side는 'buy' 또는 'sell'이어야 합니다: {side}")
+        result = self._kis.order(
+            self.account_no, "KRX", symbol,
+            order=side, price=price, qty=qty,
+        )
+        order_id = str(getattr(result, "number", "") or "")
+        logger.info(
+            "✅ KIS 주문 실행: %s %s %s주 @ %s (계좌 %s, 주문번호 %s)",
+            "매수" if side == "buy" else "매도", symbol, qty, price or "시장가", self.account_no, order_id,
+        )
+        return {"order_id": order_id, "raw": str(result)}
+
     def _fetch_balance_by_country(self, country: str) -> list[BalanceItem]:
         account = self._account()
         if not account:

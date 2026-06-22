@@ -20,6 +20,7 @@ import { api, type StockItem } from "@/lib/api";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 const THIS_YEAR = new Date().getFullYear();
+const DIVIDEND_TAX_RATE = 0.154; // 배당소득세(소득세 14%+지방소득세 1.4%) 원천징수 추정 — KIS는 계좌별 배당 지급내역을 제공하지 않아 자동계산으로 대체
 const YEARS = Array.from({ length: THIS_YEAR - 2019 }, (_, i) => 2020 + i).reverse();
 
 // ─── 타입 ────────────────────────────────────────────
@@ -101,6 +102,7 @@ export default function GainsPage() {
     stock_name: "", symbol: "", amount: "", tax_amount: "", trade_date: "", note: "",
   });
   const [submitting, setSubmitting] = useState(false);
+  const [taxTouched, setTaxTouched] = useState(false);
 
   // 편집
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -150,6 +152,7 @@ export default function GainsPage() {
         }),
       });
       setForm({ year: THIS_YEAR, gain_type: "CAPITAL", stock_name: "", symbol: "", amount: "", tax_amount: "", trade_date: "", note: "" });
+      setTaxTouched(false);
       setShowForm(false);
       await loadAll();
     } finally { setSubmitting(false); }
@@ -362,7 +365,13 @@ export default function GainsPage() {
                 <label className="block mb-1 text-xs font-medium text-neutral-500">종류 *</label>
                 <div className="flex gap-1 h-[38px] rounded-md border border-[var(--border-subtle)] p-1">
                   {(["CAPITAL", "DIVIDEND"] as const).map((t) => (
-                    <button key={t} onClick={() => setForm({ ...form, gain_type: t })}
+                    <button key={t} onClick={() => {
+                      const next = { ...form, gain_type: t };
+                      if (t === "DIVIDEND" && !taxTouched && isValidGainAmount(form.amount)) {
+                        next.tax_amount = String(Math.round(Number(form.amount) * DIVIDEND_TAX_RATE));
+                      }
+                      setForm(next);
+                    }}
                       className={`flex-1 rounded text-xs font-medium transition-colors ${form.gain_type === t ? (t === "CAPITAL" ? "bg-blue-600 text-white" : "bg-emerald-600 text-white") : "text-neutral-500 hover:text-neutral-700"}`}>
                       {t === "CAPITAL" ? "매도" : "배당"}
                     </button>
@@ -371,12 +380,21 @@ export default function GainsPage() {
               </div>
               <div>
                 <label className="block mb-1 text-xs font-medium text-neutral-500">금액 (원) * <span className="font-normal text-neutral-400">오입력 정정 시 음수 입력</span></label>
-                <input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                <input type="number" value={form.amount} onChange={(e) => {
+                  const amount = e.target.value;
+                  const next = { ...form, amount };
+                  if (form.gain_type === "DIVIDEND" && !taxTouched && isValidGainAmount(amount)) {
+                    next.tax_amount = String(Math.round(Number(amount) * DIVIDEND_TAX_RATE));
+                  }
+                  setForm(next);
+                }}
                   placeholder="3500000 (정정: -3500000)" className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-3 py-2 text-sm focus:outline-none" />
               </div>
               <div>
-                <label className="block mb-1 text-xs font-medium text-neutral-500">세금 (원)</label>
-                <input type="number" value={form.tax_amount} onChange={(e) => setForm({ ...form, tax_amount: e.target.value })}
+                <label className="block mb-1 text-xs font-medium text-neutral-500">
+                  세금 (원){form.gain_type === "DIVIDEND" && <span className="font-normal text-neutral-400"> · 배당소득세 15.4% 자동계산(수정 가능)</span>}
+                </label>
+                <input type="number" value={form.tax_amount} onChange={(e) => { setTaxTouched(true); setForm({ ...form, tax_amount: e.target.value }); }}
                   placeholder="0" className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-3 py-2 text-sm focus:outline-none" />
               </div>
             </div>

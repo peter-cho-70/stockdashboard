@@ -268,6 +268,15 @@ export interface FinanceLedgerState {
   settings: import("@/lib/finance/types").LedgerSettings;
 }
 
+export interface CashflowOpinionResult {
+  opinion: string;
+  year: number;
+  month: number;
+  income: number;
+  expense: number;
+  net: number;
+}
+
 export interface FinanceStockSnapshot {
   total_value: number;
   total_purchase: number;
@@ -275,6 +284,16 @@ export interface FinanceStockSnapshot {
   total_profit_rate: number;
   stock_count: number;
   updated_at: string;
+}
+
+export interface FinanceAssetSnapshot {
+  date: string;
+  total_assets: number;
+  liquid_assets: number;
+  illiquid_assets: number;
+  real_estate_assets: number;
+  total_liabilities: number;
+  liquid_net_worth: number;
 }
 
 export interface FinanceHubBackup {
@@ -510,6 +529,19 @@ export const api = {
     fetchApi<FinanceLedgerState>("/finance/ledger", { method: "DELETE" }),
   getFinanceStockSnapshot: () =>
     fetchApi<FinanceStockSnapshot>("/finance/stock-snapshot"),
+  recordFinanceAssetSnapshot: (body: Omit<FinanceAssetSnapshot, "date"> & { date?: string }) =>
+    fetchApi<FinanceAssetSnapshot>("/finance/asset-snapshot", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getFinanceAssetSnapshots: (days = 180) =>
+    fetchApi<{ items: FinanceAssetSnapshot[] }>(`/finance/asset-snapshot?days=${days}`),
+  generateCashflowOpinion: (year: number, month: number, analysisProvider?: AnalysisProvider) =>
+    fetchApi<CashflowOpinionResult>("/finance/ledger/cashflow-opinion", {
+      method: "POST",
+      body: JSON.stringify({ year, month, analysis_provider: analysisProvider }),
+      signal: AbortSignal.timeout(REPORT_GENERATE_TIMEOUT_MS),
+    }),
   exportFinanceBackup: () => fetchApi<FinanceHubBackup>("/finance/backup"),
   restoreFinanceBackup: (body: FinanceHubBackup | Record<string, unknown>) =>
     fetchApi<FinanceBackupRestoreResult>("/finance/backup/restore", {
@@ -1028,6 +1060,13 @@ export interface PriceTarget {
   source_title: string | null;
   notes: string | null;
   fetched_at: string | null;
+}
+
+export interface StockTargetSetting {
+  symbol: string;
+  avg_window_days: number;
+  weight_pct: number;
+  custom_profit_pct: number;
 }
 
 export interface PriceTargetSearchArticle {
@@ -1552,6 +1591,15 @@ export const marketApi = {
       { method: "DELETE" },
     ),
 
+  getTargetSetting: (symbol: string) =>
+    fetchApi<StockTargetSetting>(`/stocks/${encodeURIComponent(symbol)}/target-setting`),
+
+  saveTargetSetting: (symbol: string, body: Partial<Omit<StockTargetSetting, "symbol">>) =>
+    fetchApi<StockTargetSetting>(`/stocks/${encodeURIComponent(symbol)}/target-setting`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
   getUsReport: (date?: string) =>
     fetchApi<{ report: UsMarketReport | null }>(
       date
@@ -1651,6 +1699,78 @@ export const marketApi = {
       throw new Error(networkErrorMessage(err));
     }
   },
+};
+
+// ── 자동매매 (전용 KIS 계좌) ────────────────────────────
+
+export interface AutoTradeSellLeg {
+  pct: number;
+  price: number;
+}
+
+export interface AutoTradeRuleItem {
+  id: number;
+  symbol: string;
+  name: string;
+  account_no: string;
+  execution_mode: string;
+  enabled: boolean;
+  buy_qty: number;
+  current_price: number | null;
+  computed_buy_price: number | null;
+  avg_target: number | null;
+  weight_pct: number | null;
+  executed_buy_price: number | null;
+  position_qty: number;
+  sell_ladder: AutoTradeSellLeg[] | null;
+  sell_leg_done: string[];
+  status: string;
+}
+
+export interface AutoTradeEventItem {
+  id: number;
+  rule_id: number;
+  symbol: string | null;
+  name: string | null;
+  event_type: "BUY" | "SELL";
+  leg_pct: number | null;
+  status: string;
+  trigger_price: number;
+  qty: number;
+  order_id: string | null;
+  error_message: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export const autotradeApi = {
+  listRules: () => fetchApi<AutoTradeRuleItem[]>("/autotrade/rules"),
+
+  createRule: (body: { symbol: string; name?: string; buy_qty: number }) =>
+    fetchApi<AutoTradeRuleItem>("/autotrade/rules", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  setRuleEnabled: (id: number, enabled: boolean) =>
+    fetchApi<AutoTradeRuleItem>(`/autotrade/rules/${id}?enabled=${enabled}`, { method: "PATCH" }),
+
+  deleteRule: (id: number) =>
+    fetchApi<{ ok: boolean }>(`/autotrade/rules/${id}`, { method: "DELETE" }),
+
+  listEvents: (status?: string) =>
+    fetchApi<AutoTradeEventItem[]>(`/autotrade/events${status ? `?status=${status}` : ""}`),
+
+  approveEvent: (id: number) =>
+    fetchApi<{ status: string; order_id?: string }>(`/autotrade/events/${id}/approve`, { method: "POST" }),
+
+  rejectEvent: (id: number) =>
+    fetchApi<{ status: string }>(`/autotrade/events/${id}/reject`, { method: "POST" }),
+
+  getKillSwitch: () => fetchApi<{ on: boolean }>("/autotrade/kill-switch"),
+
+  setKillSwitch: (on: boolean) =>
+    fetchApi<{ on: boolean }>(`/autotrade/kill-switch?on=${on}`, { method: "POST" }),
 };
 
 // ── 관심 종목 (Watchlist) ───────────────────────────────

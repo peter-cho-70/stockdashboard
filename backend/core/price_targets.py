@@ -7,12 +7,13 @@ import json
 import logging
 import re
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import httpx
 from sqlalchemy.orm import Session
 
-from config.database import Stock, StockPriceTarget
+from config.database import Stock, StockPriceTarget, StockTargetSetting
 from config.settings import get_settings
 from core.gemini_client import GeminiClient
 
@@ -204,6 +205,88 @@ def delete_price_target(db: Session, symbol: str, target_id: int) -> bool:
     db.delete(row)
     db.commit()
     return True
+
+
+def serialize_target_setting(row: StockTargetSetting) -> dict[str, Any]:
+    return {
+        "symbol": row.symbol,
+        "avg_window_days": row.avg_window_days,
+        "weight_pct": row.weight_pct,
+        "custom_profit_pct": row.custom_profit_pct,
+    }
+
+
+def get_target_setting(db: Session, symbol: str) -> dict[str, Any]:
+    row = db.query(StockTargetSetting).filter(StockTargetSetting.symbol == symbol).first()
+    if not row:
+        return {"symbol": symbol, "avg_window_days": 30, "weight_pct": 75, "custom_profit_pct": 10}
+    return serialize_target_setting(row)
+
+
+def save_target_setting(db: Session, symbol: str, data: dict[str, Any]) -> dict[str, Any]:
+    row = db.query(StockTargetSetting).filter(StockTargetSetting.symbol == symbol).first()
+    if not row:
+        row = StockTargetSetting(symbol=symbol)
+        db.add(row)
+    if data.get("avg_window_days") is not None:
+        row.avg_window_days = data["avg_window_days"]
+    if data.get("weight_pct") is not None:
+        row.weight_pct = data["weight_pct"]
+    if data.get("custom_profit_pct") is not None:
+        row.custom_profit_pct = data["custom_profit_pct"]
+    db.commit()
+    db.refresh(row)
+    return serialize_target_setting(row)
+
+
+def _target_effective_date(row: StockPriceTarget) -> datetime:
+    """frontend lib/priceTargetUtils.ts의 targetEffectiveDate와 동일 — report_date 우선, 없으면 fetched_at."""
+    if row.report_date:
+        try:
+            return datetime.strptime(row.report_date, "%Y-%m-%d")
+        except ValueError:
+            pass
+    if row.fetched_at:
+        return row.fetched_at
+    return datetime.utcnow()
+
+
+def compute_target_buy_price(db: Session, symbol: str) -> Optional[dict[str, Any]]:
+    """평균 목표가(컨센서스 제외, N일 윈도) × 가중치 = 매수적정가.
+
+    frontend의 computeTargetAverage(lib/priceTargetUtils.ts) + target-price-summary-panel.tsx
+    가중치 계산과 동일 공식을 백엔드(자동매매 엔진)에서도 쓸 수 있도록 포팅한 것.
+    공식을 바꿀 때는 두 곳 다 같이 수정해야 한다.
+    """
+    setting = get_target_setting(db, symbol)
+    window_days = setting["avg_window_days"]
+    weight_pct = setting["weight_pct"]
+    cutoff = datetime.utcnow() - timedelta(days=window_days)
+
+    rows = (
+        db.query(StockPriceTarget)
+        .filter(StockPriceTarget.symbol == symbol, StockPriceTarget.is_consensus.is_(False))
+        .all()
+    )
+    filtered = [r for r in rows if _target_effective_date(r) >= cutoff]
+    if not filtered:
+        return None
+
+    avg = sum(r.target_price for r in filtered) / len(filtered)
+    buy_price = avg * (weight_pct / 100)
+    return {
+        "avg_target": avg,
+        "count": len(filtered),
+        "weight_pct": weight_pct,
+        "buy_price": buy_price,
+        "custom_profit_pct": setting["custom_profit_pct"],
+    }
+
+
+def compute_sell_ladder(buy_price: float, custom_profit_pct: float) -> list[dict[str, Any]]:
+    """매수가 기준 5/10/15/20%+커스텀% 익절 사다리 (target-price-summary-panel.tsx와 동일 공식)"""
+    pcts = [5, 10, 15, 20, custom_profit_pct]
+    return [{"pct": pct, "price": buy_price * (1 + pct / 100)} for pct in pcts]
 
 
 def fetch_price_targets_with_ai(db: Session, symbol: str) -> dict[str, Any]:

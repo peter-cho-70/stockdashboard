@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     kis_accounts: str = Field(default="", validation_alias="KIS_ACCOUNTS")  # 계좌별 키 (JSON 또는 pipe)
     kis_hts_id: str = Field("", env="KIS_HTS_ID")  # HTS 로그인 ID (없으면 계좌번호 앞자리)
     kis_is_mock: bool = Field(True, env="KIS_IS_MOCK")
+    autotrade_account_no: str = Field("", env="AUTOTRADE_ACCOUNT_NO")  # 자동매매 전용 계좌 — 이 계좌로만 주문 허용
 
     def _legacy_kis_account_nos(self) -> list[str]:
         raw = (self.kis_account_nos or "").strip()

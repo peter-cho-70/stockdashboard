@@ -191,6 +191,35 @@ async def job_health_check():
     logger.info("💚 헬스 체크: %s", datetime.now().strftime("%Y-%m-%d %H:%M"))
 
 
+def _is_krx_trading_hours() -> bool:
+    """KRX 정규장 09:00~15:20 KST 평일 (공휴일은 반영하지 않음 — v1 한계)."""
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    if now.weekday() >= 5:  # 토(5)·일(6)
+        return False
+    minutes = now.hour * 60 + now.minute
+    return 9 * 60 <= minutes <= 15 * 60 + 20
+
+
+async def job_autotrade_check():
+    """[1분 주기, 평일 09:00~15:20 KST] 자동매매 매수적정가/익절 사다리 조건 감시"""
+    if not _is_krx_trading_hours():
+        return
+    db = SessionLocal()
+    try:
+        from core.autotrade_engine import check_conditions
+
+        result = check_conditions(db)
+        created = result.get("events_created") or []
+        if created:
+            logger.info("🤖 자동매매 조건 충족: %s건", len(created))
+    except Exception as e:
+        logger.error("❌ 자동매매 조건 체크 실패: %s", e)
+    finally:
+        db.close()
+
+
 async def job_compute_lead_lag():
     """[01:00 KST] PriceMoveCause × Signal Lead-Lag 갱신"""
     logger.info("⏰ [스케줄] Lead-Lag 분석 시작 (01:00)")
@@ -348,6 +377,13 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(minute=0, timezone="Asia/Seoul"),
         id="health_check",
         name="시스템 헬스 체크",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_autotrade_check,
+        CronTrigger(minute="*/1", hour="9-15", day_of_week="mon-fri", timezone="Asia/Seoul"),
+        id="autotrade_check",
+        name="자동매매 조건 체크",
         replace_existing=True,
     )
 
