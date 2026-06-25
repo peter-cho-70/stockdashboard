@@ -12,6 +12,7 @@ const stockMenuGroups = [
       { href: "/portfolio/trades", label: "체결내역" },
       { href: "/chart", label: "차트 분석" },
       { href: "/groups", label: "종목 그룹" },
+      { href: "/etf", label: "ETF" },
     ],
   },
   {

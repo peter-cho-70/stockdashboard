@@ -1,10 +1,10 @@
 """
 core/autotrade_engine.py
-전용 KIS 계좌 자동매매 — 매수적정가/익절 사다리 조건 감시 + (반자동) 승인 후 주문 실행
+전용 계좌(KIS 또는 키움) 자동매매 — 매수적정가/익절 사다리 조건 감시 + (반자동) 승인 후 주문 실행
 
 안전장치:
 - 킬스위치(AppConfig) on이면 조건 평가 자체를 하지 않음
-- approve_event는 rule.account_no가 settings.autotrade_account_no와 다르면 무조건 거부
+- approve_event는 rule.account_no가 rule.broker에 맞는 전용 계좌 설정과 다르면 무조건 거부
   (다른 코드의 버그가 있어도 대시보드 계좌로는 절대 주문이 나가지 않도록 하는 이중 방어)
 """
 from __future__ import annotations
@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from config.database import AlertHistory, AppConfig, AutoTradeEvent, AutoTradeRule, Stock
 from config.settings import get_settings
 from core.kis_client import create_kis_client_from_settings
+from core.kiwoom_client import create_kiwoom_client_from_settings
 from core.price_targets import compute_sell_ladder, compute_target_buy_price
 
 logger = logging.getLogger(__name__)
@@ -151,18 +152,29 @@ def approve_event(db: Session, event_id: int) -> dict[str, Any]:
         raise ValueError("규칙을 찾을 수 없습니다.")
 
     settings = get_settings()
-    autotrade_account = (settings.autotrade_account_no or "").strip()
+    broker = rule.broker or "kis"
+    if broker == "kiwoom":
+        autotrade_account = (settings.autotrade_kiwoom_account_no or "").strip()
+        env_name = "AUTOTRADE_KIWOOM_ACCOUNT_NO"
+    else:
+        autotrade_account = (settings.autotrade_account_no or "").strip()
+        env_name = "AUTOTRADE_ACCOUNT_NO"
+
     if not autotrade_account or rule.account_no != autotrade_account:
         # 다른 코드 경로에 버그가 있어도 대시보드(메인) 계좌로는 절대 주문이 나가지 않도록 하는 안전장치
         event.status = "FAILED"
-        event.error_message = "전용 자동매매 계좌(AUTOTRADE_ACCOUNT_NO)와 일치하지 않아 주문을 거부했습니다."
+        event.error_message = f"전용 자동매매 계좌({env_name})와 일치하지 않아 주문을 거부했습니다."
         event.resolved_at = datetime.utcnow()
         db.commit()
         raise ValueError(event.error_message)
 
     side = "buy" if event.event_type == "BUY" else "sell"
     try:
-        client = create_kis_client_from_settings(rule.account_no)
+        client = (
+            create_kiwoom_client_from_settings(rule.account_no)
+            if broker == "kiwoom"
+            else create_kis_client_from_settings(rule.account_no)
+        )
         result = client.place_order(rule.symbol, side, event.qty)
         event.status = "EXECUTED"
         event.order_id = result.get("order_id")

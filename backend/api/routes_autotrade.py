@@ -21,6 +21,7 @@ class RuleCreate(BaseModel):
     symbol: str = Field(..., min_length=1)
     name: Optional[str] = None
     buy_qty: int = Field(..., gt=0)
+    broker: str = Field("kis", pattern="^(kis|kiwoom)$")
 
 
 def _serialize_rule(db: Session, rule: AutoTradeRule) -> dict:
@@ -35,6 +36,7 @@ def _serialize_rule(db: Session, rule: AutoTradeRule) -> dict:
         "symbol": rule.symbol,
         "name": rule.name or (stock.name if stock else rule.symbol),
         "account_no": rule.account_no,
+        "broker": rule.broker or "kis",
         "execution_mode": rule.execution_mode,
         "enabled": rule.enabled,
         "buy_qty": rule.buy_qty,
@@ -65,16 +67,23 @@ def list_rules(db: Session = Depends(get_db)):
 @autotrade_router.post("/rules")
 def create_rule(body: RuleCreate, db: Session = Depends(get_db)):
     demo_write_blocked()
-    account_no = (get_settings().autotrade_account_no or "").strip()
+    settings = get_settings()
+    if body.broker == "kiwoom":
+        account_no = (settings.autotrade_kiwoom_account_no or "").strip()
+        env_name = "AUTOTRADE_KIWOOM_ACCOUNT_NO"
+    else:
+        account_no = (settings.autotrade_account_no or "").strip()
+        env_name = "AUTOTRADE_ACCOUNT_NO"
     if not account_no:
         raise HTTPException(
             status_code=400,
-            detail="AUTOTRADE_ACCOUNT_NO가 설정되지 않았습니다. .env에 자동매매 전용 계좌를 먼저 등록하세요.",
+            detail=f"{env_name}가 설정되지 않았습니다. .env에 자동매매 전용 계좌를 먼저 등록하세요.",
         )
     rule = AutoTradeRule(
         symbol=body.symbol.strip(),
         name=body.name,
         account_no=account_no,
+        broker=body.broker,
         execution_mode="semi",
         buy_qty=body.buy_qty,
     )

@@ -418,6 +418,38 @@ class YouTubeChannel(Base):
 
 
 # ─────────────────────────────────────────────
+# ETF 전용 유튜브 채널 (ETF 영상 분석)
+# ─────────────────────────────────────────────
+class EtfYoutubeChannel(Base):
+    __tablename__ = "etf_youtube_channels"
+
+    id = Column(Integer, primary_key=True, index=True)
+    channel_id = Column(String(50), unique=True, nullable=False)
+    channel_name = Column(String(100), nullable=False)
+    channel_url = Column(String(300), nullable=False)
+    is_active = Column(Boolean, default=True)
+    last_checked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class EtfVideoAnalysis(Base):
+    """ETF 전용 채널 영상의 AI 분석 결과 — 언급된 ETF · 감성 · 요약"""
+    __tablename__ = "etf_video_analyses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    channel_id = Column(String(50), nullable=False, index=True)  # EtfYoutubeChannel.channel_id
+    channel_name = Column(String(100), nullable=False)
+    video_id = Column(String(20), unique=True, nullable=False)
+    title = Column(String(300), nullable=False)
+    url = Column(String(200), nullable=False)
+    published_at = Column(String(30), nullable=True)
+    summary = Column(Text, nullable=True)
+    sentiment = Column(String(20), nullable=True)  # POSITIVE/NEUTRAL/NEGATIVE
+    mentioned_etfs = Column(Text, nullable=True)  # JSON 배열: [{name, code, sentiment, reason}]
+    analyzed_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
 # 차트 날짜 메모 (종목별)
 # ─────────────────────────────────────────────
 class ChartDateMemo(Base):
@@ -660,7 +692,8 @@ class AutoTradeRule(Base):
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(20), nullable=False, index=True)
     name = Column(String(100), nullable=True)
-    account_no = Column(String(30), nullable=False)        # 전용 자동매매 KIS 계좌 (대시보드 계좌와 분리)
+    account_no = Column(String(30), nullable=False)        # 전용 자동매매 계좌 (대시보드 계좌와 분리)
+    broker = Column(String(10), default="kis")              # kis | kiwoom — 주문 실행 클라이언트 선택
     execution_mode = Column(String(10), default="semi")     # manual | semi | auto (Phase1은 semi만 사용)
     enabled = Column(Boolean, default=True)
     buy_qty = Column(Integer, nullable=False)               # 조건 충족 시 매수할 수량
@@ -730,6 +763,32 @@ class UsMarketReport(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class EtfOutlook(Base):
+    """ETF AI 전망 코멘트 — 같은 날 재요청 시 캐시 재사용"""
+    __tablename__ = "etf_outlooks"
+    __table_args__ = (UniqueConstraint("etf_code", "report_date", name="uq_etf_outlook_date"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    etf_code = Column(String(10), nullable=False, index=True)
+    etf_name = Column(String(100), nullable=False)
+    report_date = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD
+    outlook_text = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TrackedUsStock(Base):
+    """설정 화면에서 추가/삭제하는 미국 증시 리포트 추적 종목 — 한국 증시 연동 종목 메모 포함"""
+    __tablename__ = "tracked_us_stocks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticker = Column(String(10), unique=True, nullable=False, index=True)
+    name_kr = Column(String(100), nullable=False)
+    sector = Column(String(30), default="other")  # semiconductor_ai | bigtech_cloud | ev_battery | defense_energy | other
+    korea_related = Column(String(200), nullable=True)  # 영향받는 한국 종목 (예: "삼성전자, SK하이닉스")
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class EconomicCalendarEvent(Base):
     """검색·AI 추출 기반 주요 경제 일정 (캘린더 전용)"""
     __tablename__ = "economic_calendar_events"
@@ -743,6 +802,24 @@ class EconomicCalendarEvent(Base):
     importance = Column(String(10), default="medium")
     source_url = Column(String(800), nullable=True)
     source_title = Column(String(400), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class EtfMemo(Base):
+    __tablename__ = "etf_memos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(20), unique=True, nullable=False, index=True)
+    memo = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EtfFavorite(Base):
+    __tablename__ = "etf_favorites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(20), unique=True, nullable=False, index=True)
+    name = Column(String(200), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -994,6 +1071,25 @@ def _migrate_stock_columns():
         try:
             conn.execute(
                 text("UPDATE stocks SET position_source = 'kis' WHERE position_source IS NULL")
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+
+def _migrate_autotrade_broker_column():
+    """autotrade_rules 테이블에 broker 컬럼 추가 (kis | kiwoom)"""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE autotrade_rules ADD COLUMN broker VARCHAR(10)"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(
+                text("UPDATE autotrade_rules SET broker = 'kis' WHERE broker IS NULL")
             )
             conn.commit()
         except Exception:
@@ -1316,6 +1412,9 @@ def init_db():
     _migrate_study_library_columns()
     _migrate_target_price_columns()
     _migrate_portfolio_trade_columns()
+    _migrate_autotrade_broker_column()
+    from core.us_market_report import seed_default_tracked_us_stocks
+    seed_default_tracked_us_stocks()
     print("✅ 데이터베이스 초기화 완료")
 
 

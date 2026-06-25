@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { ExternalLink, HelpCircle, Loader2, RefreshCw, Globe } from "lucide-react";
 import {
   marketApi,
@@ -17,6 +17,58 @@ import { loadUsReportCache, saveUsReportCache } from "@/lib/marketCache";
 import { todayKst } from "@/lib/marketDisplay";
 import { formatDateTimeKst, parseUtcIsoMs } from "@/lib/dateTimeKst";
 import { krChangeClass } from "@/lib/krMarketColors";
+
+/** backend SECTOR_LABELS와 동일한 키 — 카드 좌측 색상 구분용 */
+const SECTOR_ACCENT_COLORS: Record<string, string> = {
+  semiconductor_ai: "border-l-sky-500",
+  semiconductor_equip: "border-l-cyan-500",
+  bigtech_cloud: "border-l-violet-500",
+  ev_battery: "border-l-emerald-500",
+  data_center_power: "border-l-yellow-500",
+  defense_aerospace: "border-l-slate-500",
+  energy: "border-l-orange-500",
+  biotech_pharma: "border-l-pink-500",
+  other: "border-l-neutral-400",
+};
+
+const SECTOR_LABELS_KR: Record<string, string> = {
+  semiconductor_ai: "반도체/AI",
+  semiconductor_equip: "반도체 장비",
+  bigtech_cloud: "빅테크/클라우드",
+  ev_battery: "전기차/배터리",
+  data_center_power: "데이터센터/전력",
+  defense_aerospace: "방산/항공우주",
+  energy: "에너지",
+  biotech_pharma: "바이오/제약",
+  other: "기타",
+};
+
+const SECTOR_DOT_COLORS: Record<string, string> = {
+  semiconductor_ai: "bg-sky-500",
+  semiconductor_equip: "bg-cyan-500",
+  bigtech_cloud: "bg-violet-500",
+  ev_battery: "bg-emerald-500",
+  data_center_power: "bg-yellow-500",
+  defense_aerospace: "bg-slate-500",
+  energy: "bg-orange-500",
+  biotech_pharma: "bg-pink-500",
+  other: "bg-neutral-400",
+};
+
+function SectorLegend({ items }: { items: UsMarketQuote[] }) {
+  const sectors = Array.from(new Set(items.map((i) => i.sector).filter((s): s is string => !!s)));
+  if (sectors.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 mb-2">
+      {sectors.map((s) => (
+        <span key={s} className="flex items-center gap-1 text-[10px] text-neutral-400">
+          <span className={`size-1.5 rounded-full ${SECTOR_DOT_COLORS[s] ?? "bg-neutral-400"}`} />
+          {SECTOR_LABELS_KR[s] ?? s}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 /** KST 08:30~22:59 — 미국 선물 표시 구간 */
 function isUsDaytimeKst(now = new Date()): boolean {
@@ -118,21 +170,49 @@ function ChangePct({ value }: { value?: number }) {
   );
 }
 
+function PostMarketRow({ item }: { item: UsMarketQuote }) {
+  if (item.post_market_price == null) return null;
+  return (
+    <div className="mt-1 pt-1 border-t border-dashed border-[var(--border-subtle)]">
+      <p className="text-[9px] text-neutral-400 leading-tight">
+        시간외{item.post_market_as_of_label ? ` · ${item.post_market_as_of_label}` : ""}
+      </p>
+      <p className="text-xs font-medium tabular-nums">
+        ${item.post_market_price.toFixed(2)}
+      </p>
+      {item.post_market_change_pct != null && <ChangePct value={item.post_market_change_pct} />}
+    </div>
+  );
+}
+
 function QuoteCard({ item }: { item: UsMarketQuote }) {
-  const tooltip = getUsMarketQuoteTooltip(item.name, item.ticker);
+  const koreaHint = item.korea_related ? `영향: ${item.korea_related}` : undefined;
+  const tooltip =
+    [item.issue_reason, koreaHint].filter(Boolean).join(" · ") ||
+    getUsMarketQuoteTooltip(item.name, item.ticker);
   const asOf = formatQuoteAsOf(item);
+  const sectorAccent = item.sector ? SECTOR_ACCENT_COLORS[item.sector] : undefined;
 
   return (
     <div
-      className={`relative rounded-md border border-[var(--border-subtle)] px-3 py-2 ${
-        tooltip ? "group cursor-help" : ""
-      }`}
+      className={`relative rounded-md border-t border-r border-b px-3 py-2 ${
+        item.is_issue
+          ? "border-amber-400/60 dark:border-amber-500/40 border-l-4 border-l-amber-400 dark:border-l-amber-500"
+          : sectorAccent
+            ? `border-[var(--border-subtle)] border-l-4 ${sectorAccent}`
+            : "border-l border-[var(--border-subtle)]"
+      } ${tooltip ? "group cursor-help" : ""}`}
       title={tooltip ?? undefined}
     >
       <p className="text-[10px] text-neutral-400 leading-tight flex items-start gap-0.5">
         <span className={tooltip ? "border-b border-dotted border-neutral-400/60" : ""}>
           {item.name}
         </span>
+        {item.is_issue && (
+          <span className="shrink-0 rounded bg-amber-400/20 px-1 text-[8px] font-medium text-amber-600 dark:text-amber-400">
+            이슈
+          </span>
+        )}
         {tooltip && (
           <HelpCircle
             size={10}
@@ -152,6 +232,7 @@ function QuoteCard({ item }: { item: UsMarketQuote }) {
               {asOf}
             </p>
           )}
+          <PostMarketRow item={item} />
         </>
       )}
       {tooltip && (
@@ -318,7 +399,11 @@ function SnapshotSections({
       )}
       {snapshot.us_stocks.length > 0 && (
         <section>
-          <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">주요 미국 주식</h3>
+          <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">
+            주요 미국 주식
+            <span className="font-normal text-neutral-400 ml-1">(전일 마감 + 시간외)</span>
+          </h3>
+          <SectorLegend items={snapshot.us_stocks} />
           <QuoteGrid items={snapshot.us_stocks} />
           <InterpretationBlock
             topic="us_stocks"
@@ -338,15 +423,13 @@ export function UsMarketReportCard({
   cacheOnly?: boolean;
   marketToggle?: ReactNode;
 }) {
-  const initialCached = cacheOnly ? loadUsReportCache() : null;
-  const [report, setReport] = useState<UsMarketReport | null>(initialCached);
-  const [liveLabel, setLiveLabel] = useState<string | null>(
-    initialCached?.generated_at ? `저장 리포트 · ${initialCached.report_date}` : null,
-  );
-  const [displaySnapshot, setDisplaySnapshot] = useState<UsMarketSnapshot | null>(
-    initialCached ? normalizeUsSnapshot(initialCached) : null,
-  );
-  const [loading, setLoading] = useState(cacheOnly ? false : !initialCached);
+  // localStorage는 클라이언트에만 존재 — 초기 state에서 동기적으로 읽으면 SSR과
+  // 클라이언트 하이드레이션 결과가 달라져 hydration mismatch가 발생한다.
+  // 캐시는 마운트 후 effect에서 읽어 적용한다(아래 cacheOnly용 useEffect).
+  const [report, setReport] = useState<UsMarketReport | null>(null);
+  const [liveLabel, setLiveLabel] = useState<string | null>(null);
+  const [displaySnapshot, setDisplaySnapshot] = useState<UsMarketSnapshot | null>(null);
+  const [loading, setLoading] = useState(!cacheOnly);
   const [generating, setGenerating] = useState(false);
   const [refreshingNews, setRefreshingNews] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -383,6 +466,13 @@ export function UsMarketReportCard({
     );
     saveUsReportCache(r);
   }, []);
+
+  // useLayoutEffect: 페인트 전에 캐시를 적용해 "리포트 없음" 깜빡임을 피한다.
+  // (이 effect는 클라이언트 마운트 후에만 실행되므로 SSR/하이드레이션 결과는 항상 빈 상태로 일치한다)
+  useLayoutEffect(() => {
+    if (!cacheOnly) return;
+    applyCachedReport(loadUsReportCache());
+  }, [cacheOnly, applyCachedReport]);
 
   const applyReport = useCallback(
     async (r: UsMarketReport | null, opts?: { refreshNews?: boolean }) => {
@@ -464,14 +554,14 @@ export function UsMarketReportCard({
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "리포트 로드 실패");
-      if (!cacheOnly && !initialCached) {
+      if (!cacheOnly) {
         setReport(null);
         setDisplaySnapshot(null);
       }
     } finally {
       if (!cacheOnly) setLoading(false);
     }
-  }, [applyReport, applyCachedReport, cacheOnly, initialCached]);
+  }, [applyReport, applyCachedReport, cacheOnly]);
 
   useEffect(() => {
     if (cacheOnly) return;

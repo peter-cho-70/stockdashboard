@@ -20,6 +20,46 @@ class KISAccountConfig:
     is_mock: bool | None = None
 
 
+@dataclass(frozen=True)
+class KiwoomAccountConfig:
+    account_no: str
+    app_key: str
+    app_secret: str
+    is_mock: bool | None = None
+
+
+def _parse_broker_accounts_env(raw: str) -> list[dict]:
+    """공용 계좌 설정 파서 — JSON 배열 또는 account|key|secret[|is_mock];... 형식 (KIS/키움 공용)."""
+    text = (raw or "").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        data = json.loads(text)
+        if not isinstance(data, list):
+            raise ValueError("계좌 설정 JSON은 배열이어야 합니다")
+        return data
+
+    items: list[dict] = []
+    for part in text.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        fields = [f.strip() for f in part.split("|")]
+        if len(fields) < 3:
+            raise ValueError(
+                "계좌 설정 pipe 포맷: account_no|app_key|app_secret[|is_mock];..."
+            )
+        item: dict = {
+            "account_no": fields[0],
+            "app_key": fields[1],
+            "app_secret": fields[2],
+        }
+        if len(fields) > 3 and fields[3]:
+            item["is_mock"] = fields[3]
+        items.append(item)
+    return items
+
+
 class Settings(BaseSettings):
     # ── KIS Open API ──────────────────────────────
     kis_app_key: str = Field("", env="KIS_APP_KEY")
@@ -39,44 +79,12 @@ class Settings(BaseSettings):
             return [(self.kis_account_no or "").strip()]
         return []
 
-    @staticmethod
-    def _parse_kis_accounts_env(raw: str) -> list[dict]:
-        """KIS_ACCOUNTS: JSON 배열 또는 account|key|secret;... 형식."""
-        text = (raw or "").strip()
-        if not text:
-            return []
-        if text.startswith("["):
-            data = json.loads(text)
-            if not isinstance(data, list):
-                raise ValueError("KIS_ACCOUNTS JSON must be an array")
-            return data
-
-        items: list[dict] = []
-        for part in text.split(";"):
-            part = part.strip()
-            if not part:
-                continue
-            fields = [f.strip() for f in part.split("|")]
-            if len(fields) < 3:
-                raise ValueError(
-                    "KIS_ACCOUNTS pipe format: account_no|app_key|app_secret[|is_mock];..."
-                )
-            item: dict = {
-                "account_no": fields[0],
-                "app_key": fields[1],
-                "app_secret": fields[2],
-            }
-            if len(fields) > 3 and fields[3]:
-                item["is_mock"] = fields[3]
-            items.append(item)
-        return items
-
     def get_kis_accounts(self) -> list[KISAccountConfig]:
         """동기화 대상 계좌 (계좌별 App Key/Secret)."""
         raw = (self.kis_accounts or "").strip()
         if raw:
             try:
-                parsed = self._parse_kis_accounts_env(raw)
+                parsed = _parse_broker_accounts_env(raw)
                 result: list[KISAccountConfig] = []
                 for i, item in enumerate(parsed):
                     if not isinstance(item, dict):
@@ -121,8 +129,76 @@ class Settings(BaseSettings):
                 return cfg
         return None
 
+    # ── 키움증권 REST API ──────────────────────────
+    kiwoom_app_key: str = Field("", env="KIWOOM_APP_KEY")
+    kiwoom_app_secret: str = Field("", env="KIWOOM_APP_SECRET")
+    kiwoom_account_no: str = Field("", env="KIWOOM_ACCOUNT_NO")
+    kiwoom_account_nos: str = Field("", env="KIWOOM_ACCOUNT_NOS")  # 공통 키 + 복수 계좌 (레거시)
+    kiwoom_accounts: str = Field(default="", validation_alias="KIWOOM_ACCOUNTS")  # 계좌별 키 (JSON 또는 pipe)
+    kiwoom_is_mock: bool = Field(True, env="KIWOOM_IS_MOCK")
+    autotrade_kiwoom_account_no: str = Field("", env="AUTOTRADE_KIWOOM_ACCOUNT_NO")  # 키움 자동매매 전용 계좌
+
+    def _legacy_kiwoom_account_nos(self) -> list[str]:
+        raw = (self.kiwoom_account_nos or "").strip()
+        if raw:
+            return [a.strip() for a in raw.split(",") if a.strip()]
+        if (self.kiwoom_account_no or "").strip():
+            return [(self.kiwoom_account_no or "").strip()]
+        return []
+
+    def get_kiwoom_accounts(self) -> list[KiwoomAccountConfig]:
+        """동기화 대상 키움 계좌 (계좌별 App Key/Secret)."""
+        raw = (self.kiwoom_accounts or "").strip()
+        if raw:
+            try:
+                parsed = _parse_broker_accounts_env(raw)
+                result: list[KiwoomAccountConfig] = []
+                for i, item in enumerate(parsed):
+                    if not isinstance(item, dict):
+                        continue
+                    acct = str(item.get("account_no") or item.get("account") or "").strip()
+                    key = str(item.get("app_key") or "").strip()
+                    secret = str(item.get("app_secret") or "").strip()
+                    mock = item.get("is_mock")
+                    if isinstance(mock, str):
+                        mock = mock.strip().lower() in ("true", "1", "yes")
+                    if acct and key and secret:
+                        result.append(KiwoomAccountConfig(acct, key, secret, mock))
+                    else:
+                        logger.warning(
+                            "KIWOOM_ACCOUNTS[%s] skipped — account_no, app_key, app_secret required",
+                            i,
+                        )
+                if result:
+                    return result
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning("KIWOOM_ACCOUNTS parse failed: %s", e)
+
+        shared_key = (self.kiwoom_app_key or "").strip()
+        shared_secret = (self.kiwoom_app_secret or "").strip()
+        if not shared_key or not shared_secret:
+            return []
+
+        return [
+            KiwoomAccountConfig(acct, shared_key, shared_secret, self.kiwoom_is_mock)
+            for acct in self._legacy_kiwoom_account_nos()
+        ]
+
+    def kiwoom_account_list(self) -> list[str]:
+        return [a.account_no for a in self.get_kiwoom_accounts()]
+
+    def kiwoom_is_configured(self) -> bool:
+        return bool(self.get_kiwoom_accounts())
+
+    def kiwoom_account_for(self, account_no: str) -> KiwoomAccountConfig | None:
+        for cfg in self.get_kiwoom_accounts():
+            if cfg.account_no == account_no:
+                return cfg
+        return None
+
     @field_validator(
         "kis_is_mock",
+        "kiwoom_is_mock",
         "debug",
         "ai_fallback",
         "ai_skip_if_cached",
@@ -191,6 +267,7 @@ class Settings(BaseSettings):
     # ── 데이터베이스 ──────────────────────────────
     db_path: str = Field("./stockmind.db", env="DB_PATH")
     db_backup_max_count: int = Field(3, env="DB_BACKUP_MAX_COUNT")
+    auto_db_backup_on_start: bool = Field(True, env="AUTO_DB_BACKUP_ON_START")
 
     # ── 데모 모드 (공개 시연 — demo_portfolio.json, 실보유 미노출) ──
     demo_mode: bool = Field(False, env="DEMO_MODE")

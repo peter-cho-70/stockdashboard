@@ -58,6 +58,7 @@ def sanitize_for_json(value: Any) -> Any:
 US_INDEX_TICKERS: list[tuple[str, str, str]] = [
     ("S&P 500", "^GSPC", "index"),
     ("NASDAQ", "^IXIC", "index"),
+    ("나스닥100", "QQQ", "index"),
     ("DOW", "^DJI", "index"),
     ("러셀 2000", "^RUT", "index"),
     ("필라델피아 반도체", "^SOX", "index"),
@@ -90,15 +91,224 @@ TREASURY_TICKERS: list[tuple[str, str, str]] = [
     ("국채 3개월", "^IRX", "yield"),
 ]
 
-US_STOCK_TICKERS: list[tuple[str, str, str]] = [
-    ("애플", "AAPL", "stock"),
-    ("마이크로소프트", "MSFT", "stock"),
-    ("엔비디아", "NVDA", "stock"),
-    ("아마존", "AMZN", "stock"),
-    ("알파벳", "GOOGL", "stock"),
-    ("메타", "META", "stock"),
-    ("테슬라", "TSLA", "stock"),
+# 기본 추적 종목 (ticker, name_kr, sector, korea_related) — 설정 화면에서 추가/삭제 가능.
+# DB(tracked_us_stocks)가 비어있을 때만 시딩·폴백용으로 사용한다.
+SECTOR_LABELS: dict[str, str] = {
+    "semiconductor_ai": "반도체/AI",
+    "semiconductor_equip": "반도체 장비",
+    "bigtech_cloud": "빅테크/클라우드",
+    "ev_battery": "전기차/배터리",
+    "data_center_power": "데이터센터/전력",
+    "defense_aerospace": "방산/항공우주",
+    "energy": "에너지",
+    "biotech_pharma": "바이오/제약",
+    "other": "기타",
+}
+
+DEFAULT_US_STOCK_TICKERS: list[tuple[str, str, str, str]] = [
+    # 반도체/AI 칩
+    ("NVDA", "엔비디아", "semiconductor_ai", "SK하이닉스, 삼성전자, 한미반도체, HPSP"),
+    ("AMD", "AMD", "semiconductor_ai", "SK하이닉스, 삼성전자"),
+    ("INTC", "인텔", "semiconductor_ai", "삼성전자(파운드리), 한솔케미칼"),
+    ("QCOM", "퀄컴", "semiconductor_ai", "삼성전자(모바일 AP)"),
+    ("MRVL", "마벨테크놀로지", "semiconductor_ai", "삼성전자, HPSP, 파두"),
+    ("AVGO", "브로드컴", "semiconductor_ai", "삼성전기, LG이노텍, 심텍"),
+    ("MU", "마이크론", "semiconductor_ai", "SK하이닉스, 삼성전자(경쟁사·선행지표)"),
+    ("TSM", "TSMC", "semiconductor_ai", "삼성전자, SK하이닉스"),
+    # 반도체 장비 (소부장 직결)
+    ("AMAT", "어플라이드머티리얼즈", "semiconductor_equip", "원익IPS, 피에스케이, 주성엔지니어링"),
+    ("LRCX", "램리서치", "semiconductor_equip", "한국 반도체 장비주 전반"),
+    ("KLAC", "KLA", "semiconductor_equip", "피에스케이홀딩스, 오로스테크놀로지"),
+    ("ASML", "ASML", "semiconductor_equip", "삼성전자, SK하이닉스(EUV 장비 의존)"),
+    # 빅테크/클라우드/AI 플랫폼
+    ("AAPL", "애플", "bigtech_cloud", "LG이노텍, 삼성전기, 삼성SDI, 비에이치"),
+    ("MSFT", "마이크로소프트", "bigtech_cloud", "클라우드·AI 소프트웨어주 전반"),
+    ("GOOGL", "알파벳", "bigtech_cloud", "네이버, 카카오, 크래프톤"),
+    ("META", "메타", "bigtech_cloud", "카카오, 하이브, 콘텐츠주"),
+    ("AMZN", "아마존", "bigtech_cloud", "쿠팡, 물류주, 클라우드 관련주"),
+    ("ORCL", "오라클", "bigtech_cloud", "AI 데이터센터 수혜주 전반"),
+    # 전기차/배터리
+    ("TSLA", "테슬라", "ev_battery", "LG에너지솔루션, 삼성SDI, SK이노베이션"),
+    ("GM", "GM", "ev_battery", "한국 배터리 3사"),
+    ("F", "포드", "ev_battery", "한국 배터리 3사"),
+    ("RIVN", "리비안", "ev_battery", "LG에너지솔루션"),
+    # 데이터센터/전력
+    ("DLR", "디지털리얼티", "data_center_power", "국내 데이터센터 리츠·통신주"),
+    ("GEV", "GE버노바", "data_center_power", "효성중공업, 현대일렉트릭"),
+    # 방산/항공우주
+    ("LMT", "록히드마틴", "defense_aerospace", "한화에어로스페이스, LIG넥스원"),
+    ("RTX", "RTX(레이시온)", "defense_aerospace", "한화시스템, 현대로템"),
+    ("NOC", "노스롭그루먼", "defense_aerospace", "방산주 전반"),
+    ("BA", "보잉", "defense_aerospace", "한국항공우주(KAI), 한화에어로스페이스"),
+    # 에너지
+    ("XOM", "엑슨모빌", "energy", "HD현대중공업, 삼성중공업(유가 연동)"),
+    ("CVX", "쉐브론", "energy", "HD현대중공업, 삼성중공업(유가 연동)"),
+    # 바이오/제약
+    ("LLY", "일라이릴리", "biotech_pharma", "한미약품, 유한양행(비만치료제)"),
+    ("NVO", "노보노디스크", "biotech_pharma", "한미약품(경쟁·동반주목)"),
+    ("MRNA", "모더나", "biotech_pharma", "셀트리온, 삼성바이오로직스"),
+    ("REGN", "리제네론", "biotech_pharma", "국내 ADC·항체 바이오주"),
+    ("ABBV", "애브비", "biotech_pharma", "셀트리온, 에이비엘바이오"),
 ]
+
+
+def seed_default_tracked_us_stocks() -> None:
+    """tracked_us_stocks 테이블이 비어있으면 기본 종목으로 1회 시딩."""
+    from config.database import SessionLocal, TrackedUsStock
+
+    db = SessionLocal()
+    try:
+        if db.query(TrackedUsStock).count() > 0:
+            return
+        for i, (ticker, name_kr, sector, korea_related) in enumerate(DEFAULT_US_STOCK_TICKERS):
+            db.add(TrackedUsStock(
+                ticker=ticker, name_kr=name_kr, sector=sector,
+                korea_related=korea_related, sort_order=i,
+            ))
+        db.commit()
+        logger.info("✅ 추적 미국 종목 기본값 시딩: %s개", len(DEFAULT_US_STOCK_TICKERS))
+    finally:
+        db.close()
+
+
+def _load_tracked_us_stocks() -> tuple[list[tuple[str, str, str]], dict[str, str], dict[str, str]]:
+    """DB에 등록된 추적 종목 → ((name_kr, ticker, "stock") 목록, {ticker: korea_related}, {ticker: sector}).
+    DB가 비어있으면(시딩 전이거나 조회 실패) 기본값으로 폴백."""
+    try:
+        from config.database import SessionLocal, TrackedUsStock
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(TrackedUsStock)
+                .order_by(TrackedUsStock.sort_order, TrackedUsStock.id)
+                .all()
+            )
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("추적 종목 조회 실패, 기본값 사용: %s", e)
+        rows = []
+
+    if not rows:
+        specs = [(name_kr, ticker, "stock") for ticker, name_kr, _, _ in DEFAULT_US_STOCK_TICKERS]
+        korea_map = {ticker: korea for ticker, _, _, korea in DEFAULT_US_STOCK_TICKERS}
+        sector_map = {ticker: sector for ticker, _, sector, _ in DEFAULT_US_STOCK_TICKERS}
+        return specs, korea_map, sector_map
+
+    specs = [(r.name_kr, r.ticker, "stock") for r in rows]
+    korea_map = {r.ticker: r.korea_related for r in rows if r.korea_related}
+    sector_map = {r.ticker: r.sector for r in rows}
+    return specs, korea_map, sector_map
+
+
+def list_tracked_us_stocks(db: Session) -> list[dict[str, Any]]:
+    """설정 화면에 표시할 추적 종목 목록 (섹터별 정렬)."""
+    from config.database import TrackedUsStock
+
+    rows = (
+        db.query(TrackedUsStock)
+        .order_by(TrackedUsStock.sort_order, TrackedUsStock.id)
+        .all()
+    )
+    return [
+        {
+            "ticker": r.ticker,
+            "name_kr": r.name_kr,
+            "sector": r.sector,
+            "sector_label": SECTOR_LABELS.get(r.sector, r.sector),
+            "korea_related": r.korea_related,
+        }
+        for r in rows
+    ]
+
+
+def add_tracked_us_stock(
+    db: Session,
+    *,
+    ticker: str,
+    name_kr: str,
+    sector: str = "other",
+    korea_related: Optional[str] = None,
+) -> dict[str, Any]:
+    """추적 종목 추가 — yfinance로 티커 유효성을 먼저 확인한다."""
+    from config.database import TrackedUsStock
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        raise ValueError("티커를 입력하세요")
+    if db.query(TrackedUsStock).filter(TrackedUsStock.ticker == ticker).first():
+        raise ValueError(f"이미 추적 중인 종목입니다: {ticker}")
+
+    quotes = _fetch_ticker_group([(name_kr or ticker, ticker, "stock")], "us_stock")
+    if not quotes or quotes[0].get("error"):
+        raise ValueError(f"유효하지 않은 티커입니다: {ticker}")
+
+    sort_order = db.query(TrackedUsStock).count()
+    row = TrackedUsStock(
+        ticker=ticker,
+        name_kr=(name_kr or ticker).strip(),
+        sector=sector if sector in SECTOR_LABELS else "other",
+        korea_related=(korea_related or "").strip() or None,
+        sort_order=sort_order,
+    )
+    db.add(row)
+    db.commit()
+    return {
+        "ticker": row.ticker,
+        "name_kr": row.name_kr,
+        "sector": row.sector,
+        "sector_label": SECTOR_LABELS.get(row.sector, row.sector),
+        "korea_related": row.korea_related,
+    }
+
+
+def update_tracked_us_stock(
+    db: Session,
+    ticker: str,
+    *,
+    name_kr: Optional[str] = None,
+    sector: Optional[str] = None,
+    korea_related: Optional[str] = None,
+) -> dict[str, Any]:
+    """등록된 추적 종목의 이름/섹터/한국 연동 종목 메모를 수정 (티커는 변경 불가)."""
+    from config.database import TrackedUsStock
+
+    ticker = (ticker or "").strip().upper()
+    row = db.query(TrackedUsStock).filter(TrackedUsStock.ticker == ticker).first()
+    if not row:
+        raise ValueError(f"등록되지 않은 종목입니다: {ticker}")
+
+    if name_kr is not None:
+        name_kr = name_kr.strip()
+        if not name_kr:
+            raise ValueError("종목명을 입력하세요")
+        row.name_kr = name_kr
+    if sector is not None:
+        row.sector = sector if sector in SECTOR_LABELS else "other"
+    if korea_related is not None:
+        row.korea_related = korea_related.strip() or None
+
+    db.commit()
+    return {
+        "ticker": row.ticker,
+        "name_kr": row.name_kr,
+        "sector": row.sector,
+        "sector_label": SECTOR_LABELS.get(row.sector, row.sector),
+        "korea_related": row.korea_related,
+    }
+
+
+def remove_tracked_us_stock(db: Session, ticker: str) -> None:
+    from config.database import TrackedUsStock
+
+    ticker = (ticker or "").strip().upper()
+    row = db.query(TrackedUsStock).filter(TrackedUsStock.ticker == ticker).first()
+    if not row:
+        raise ValueError(f"등록되지 않은 종목입니다: {ticker}")
+    db.delete(row)
+    db.commit()
+
 
 NEWS_SEARCH: list[tuple[str, str]] = [
     ("us_indices", "미국 증시 나스닥 S&P500 마감 시황"),
@@ -106,7 +316,30 @@ NEWS_SEARCH: list[tuple[str, str]] = [
     ("fx", "달러인덱스 원달러 환율 엔화 위안"),
     ("treasury", "미국 국채 수익률 10년 금리"),
     ("us_stocks", "미국 빅테크 주가 엔비디아 애플 마감"),
+    ("issue_stocks", "미국 증시 급등주 급락주 실적 서프라이즈"),
 ]
+
+ISSUE_STOCK_MAX = 3
+
+ISSUE_STOCK_SYSTEM = """당신은 미국 증시 뉴스에서 현재 이슈가 되는 개별 종목을 찾는 애널리스트입니다.
+제공된 뉴스 제목·요약만 근거로 판단하고, 뉴스에 없는 사실은 만들지 마세요.
+실제 NYSE/NASDAQ에 상장된 정확한 티커만 사용하세요. 확신이 없으면 포함하지 마세요.
+응답은 완전한 JSON 한 덩어리로 끝내세요."""
+
+ISSUE_STOCK_PROMPT = """뉴스 목록:
+{articles_block}
+
+위 뉴스에서 실적 발표·급등락 등으로 이슈가 된 미국 개별 종목을 최대 {max_n}개 찾아 JSON으로 반환하세요.
+이미 고정 추적 중인 종목({fixed_names})은 제외합니다.
+명확한 이슈 종목이 없으면 빈 배열을 반환하세요.
+
+JSON 형식:
+{{
+  "issue_stocks": [
+    {{"ticker": "MU", "name_kr": "마이크론테크놀로지", "reason": "10단어 이내 이유"}}
+  ]
+}}
+"""
 
 INTERPRETATION_TOPICS = ("us_indices", "commodity", "fx", "treasury", "us_stocks")
 
@@ -136,7 +369,7 @@ REPORT_PROMPT = """오늘(KST) 아침 브리핑 날짜: {report_date}
 ## 미국 국채 수익률 (단위: %)
 {treasury_json}
 
-## 주요 미국 주식 (전일 등락률 %)
+## 주요 미국 주식 (전일 등락률 %, post_market_price/post_market_change_pct는 시간외 거래가, korea_related는 영향받는 한국 종목)
 {us_stocks_json}
 
 ## 뉴스 검색 결과 (인덱스 = source_index, 발행 시각 포함 — 최근 72시간만 사용)
@@ -420,13 +653,118 @@ def _format_articles_block(articles: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _fetch_post_market_quotes(items: list[tuple[str, str, str]]) -> dict[str, dict[str, Any]]:
+    """장마감 후 시간외(after-hours) 거래가 — yfinance get_info()의 postMarket* 필드 사용.
+    ticker별 quoteSummary 호출이라 느려서(틱당 ~1초) 일일 리포트 생성 시에만 호출한다."""
+    try:
+        import yfinance as yf
+    except ImportError:
+        return {}
+
+    result: dict[str, dict[str, Any]] = {}
+    for _, ticker, _ in items:
+        try:
+            info = yf.Ticker(ticker).get_info()
+            if not info.get("hasPrePostMarketData") or info.get("postMarketPrice") is None:
+                continue
+            post_time = info.get("postMarketTime")
+            as_of_label = None
+            if post_time:
+                as_of_label = _format_as_of_kst(datetime.fromtimestamp(post_time, tz=timezone.utc))
+            result[ticker] = {
+                "post_market_price": _safe_float(info.get("postMarketPrice")),
+                "post_market_change": _safe_float(info.get("postMarketChange")),
+                "post_market_change_pct": _safe_float(info.get("postMarketChangePercent")),
+                "market_state": info.get("marketState"),
+                "post_market_as_of_label": as_of_label,
+            }
+        except Exception as e:
+            logger.warning("시간외 시세 조회 실패 (%s): %s", ticker, e)
+    return result
+
+
+def _extract_issue_stocks(client: GeminiClient, articles: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """뉴스에서 고정 추적 종목 외 '이슈 종목'(예: 실적 서프라이즈로 급등한 마이크론)을 추출."""
+    if not articles:
+        return []
+    stock_specs, _, _ = _load_tracked_us_stocks()
+    fixed_names = ", ".join(f"{name}({ticker})" for name, ticker, _ in stock_specs)
+    prompt = ISSUE_STOCK_PROMPT.format(
+        articles_block=_format_articles_block(articles),
+        max_n=ISSUE_STOCK_MAX,
+        fixed_names=fixed_names,
+    )
+    try:
+        data = client.generate_json(prompt, purpose="이슈 종목 추출", system_instruction=ISSUE_STOCK_SYSTEM)
+    except Exception as e:
+        logger.warning("이슈 종목 추출 실패: %s", e)
+        return []
+
+    fixed_tickers = {ticker for _, ticker, _ in stock_specs}
+    seen: set[str] = set()
+    result: list[dict[str, str]] = []
+    for item in (data or {}).get("issue_stocks") or []:
+        if not isinstance(item, dict):
+            continue
+        ticker = str(item.get("ticker") or "").strip().upper()
+        if not ticker or ticker in fixed_tickers or ticker in seen:
+            continue
+        seen.add(ticker)
+        result.append({
+            "ticker": ticker,
+            "name_kr": str(item.get("name_kr") or "").strip() or ticker,
+            "reason": str(item.get("reason") or "").strip()[:80],
+        })
+        if len(result) >= ISSUE_STOCK_MAX:
+            break
+    return result
+
+
+def fetch_issue_stock_quotes(client: GeminiClient, articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """뉴스 기반 이슈 종목의 시세+시간외가 조회. 추출된 티커가 유효하지 않으면 조용히 제외."""
+    issue_stocks = _extract_issue_stocks(client, articles)
+    if not issue_stocks:
+        return []
+
+    items_spec = [(s["name_kr"], s["ticker"], "stock") for s in issue_stocks]
+    reasons = {s["ticker"]: s["reason"] for s in issue_stocks}
+    quotes = _fetch_ticker_group(items_spec, "us_stock")
+    post_market = _fetch_post_market_quotes(items_spec)
+
+    result: list[dict[str, Any]] = []
+    for q in quotes:
+        if q.get("error"):
+            continue
+        q["is_issue"] = True
+        if reasons.get(q.get("ticker")):
+            q["issue_reason"] = reasons[q["ticker"]]
+        extra = post_market.get(q.get("ticker"))
+        if extra:
+            q.update(extra)
+        result.append(q)
+    return result
+
+
 def fetch_us_market_snapshot() -> dict[str, Any]:
+    stock_specs, korea_map, sector_map = _load_tracked_us_stocks()
+    us_stocks = _fetch_ticker_group(stock_specs, "us_stock")
+    post_market = _fetch_post_market_quotes(stock_specs)
+    for item in us_stocks:
+        extra = post_market.get(item.get("ticker"))
+        if extra:
+            item.update(extra)
+        related = korea_map.get(item.get("ticker"))
+        if related:
+            item["korea_related"] = related
+        sector = sector_map.get(item.get("ticker"))
+        if sector:
+            item["sector"] = sector
     return {
         "us_indices": _fetch_ticker_group(US_INDEX_TICKERS, "us_index"),
         "commodity": _fetch_ticker_group(COMMODITY_TICKERS, "commodity", intraday=True),
         "fx": _fetch_ticker_group(FX_TICKERS, "fx", intraday=True),
         "treasury": _fetch_ticker_group(TREASURY_TICKERS, "treasury"),
-        "us_stocks": _fetch_ticker_group(US_STOCK_TICKERS, "us_stock"),
+        "us_stocks": us_stocks,
         "us_futures": [],
     }
 
@@ -438,6 +776,15 @@ def fetch_live_snapshot(mode: QuoteMode = "auto") -> dict[str, Any]:
     """실시간 시세 스냅샷 — KST 낮에는 미국 선물 포함."""
     use_futures = mode == "futures" or (mode == "auto" and is_us_daytime_kst())
     now_kst = _kst_now()
+    stock_specs, korea_map, sector_map = _load_tracked_us_stocks()
+    us_stocks = _fetch_ticker_group(stock_specs, "us_stock")
+    for item in us_stocks:
+        related = korea_map.get(item.get("ticker"))
+        if related:
+            item["korea_related"] = related
+        sector = sector_map.get(item.get("ticker"))
+        if sector:
+            item["sector"] = sector
     snap: dict[str, Any] = {
         "us_indices": _fetch_ticker_group(US_INDEX_TICKERS, "us_index"),
         "us_futures": (
@@ -448,7 +795,7 @@ def fetch_live_snapshot(mode: QuoteMode = "auto") -> dict[str, Any]:
         "commodity": _fetch_ticker_group(COMMODITY_TICKERS, "commodity", intraday=True),
         "fx": _fetch_ticker_group(FX_TICKERS, "fx", intraday=True),
         "treasury": _fetch_ticker_group(TREASURY_TICKERS, "treasury"),
-        "us_stocks": _fetch_ticker_group(US_STOCK_TICKERS, "us_stock"),
+        "us_stocks": us_stocks,
         "quote_mode": "futures_daytime" if use_futures else "cash_close",
         "fetched_at": now_kst.isoformat(),
         "fetched_at_label": now_kst.strftime("%Y-%m-%d %H:%M KST"),
@@ -601,7 +948,7 @@ INTERPRETATION_PROMPT = """오늘(KST) 브리핑 날짜: {report_date}
 ## 미국 국채 수익률
 {treasury_json}
 
-## 주요 미국 주식
+## 주요 미국 주식 (post_market_price/post_market_change_pct는 시간외 거래가, korea_related는 영향받는 한국 종목)
 {us_stocks_json}
 
 ## 최신 뉴스 (72시간 이내만 사용, 발행 시각 참고)
@@ -733,6 +1080,17 @@ def generate_us_morning_report(
     macro_ctx = _macro_context(db, since)
 
     client = GeminiClient(api_key=settings.gemini_api_key, model=settings.gemini_model)
+
+    try:
+        issue_quotes = fetch_issue_stock_quotes(client, articles)
+        if issue_quotes:
+            snapshot["us_stocks"] = snapshot["us_stocks"] + issue_quotes
+            existing.indices_json = json.dumps(snapshot, ensure_ascii=False)
+            db.commit()
+            logger.info("✅ 이슈 종목 추가: %s", [q["name"] for q in issue_quotes])
+    except Exception as e:
+        logger.warning("이슈 종목 처리 실패 (계속 진행): %s", e)
+
     prompt = REPORT_PROMPT.format(
         report_date=report_date,
         session_date=session_date,

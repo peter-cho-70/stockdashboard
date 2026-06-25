@@ -3,6 +3,8 @@ api/routes_groups.py
 관계 묶어보기 2단계 — 사용자 지정 종목 그룹(수동) CRUD
   GET    /api/stock-groups                       — 전체 그룹 목록
   GET    /api/stock-groups/by-symbol/{symbol}     — 특정 종목이 속한 그룹 목록 (차트 패널용)
+  GET    /api/stock-groups/{group_id}             — 그룹 상세
+  GET    /api/stock-groups/{group_id}/content     — 그룹 멤버 관련 AI 분석 콘텐츠 + 실시간 뉴스
   POST   /api/stock-groups                        — 그룹 생성
   PATCH  /api/stock-groups/{group_id}             — 그룹 이름 변경
   POST   /api/stock-groups/{group_id}/members     — 멤버 추가
@@ -16,6 +18,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from config.database import Stock, StockGroup, StockGroupMember, get_db
+from core.stock_group_discovery import (
+    discover_related_stocks,
+    get_group_live_news,
+    get_group_related_content,
+)
 from core.stock_resolver import resolve_symbol
 from core.watchlist_detail import resolve_name_from_symbol
 
@@ -56,6 +63,15 @@ class MemberAdd(BaseModel):
     stock_name: Optional[str] = None
 
 
+class MemberBulkAdd(BaseModel):
+    members: list[MemberAdd]
+
+
+class DiscoverBody(BaseModel):
+    query: str
+    limit: int = 10
+
+
 def _resolve_member_input(db: Session, body: MemberAdd) -> tuple[str, Optional[str]]:
     """입력(symbol 또는 stock_name)으로부터 (symbol, stock_name) 확정."""
     sym = (body.symbol or "").strip() or None
@@ -85,6 +101,27 @@ def list_groups_for_symbol(symbol: str, db: Session = Depends(get_db)):
         .all()
     )
     return {"symbol": symbol, "groups": [_serialize_group(db, g) for g in groups]}
+
+
+@groups_router.get("/stock-groups/{group_id}")
+def get_group(group_id: int, db: Session = Depends(get_db)):
+    group = db.query(StockGroup).filter(StockGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="그룹 없음")
+    return _serialize_group(db, group)
+
+
+@groups_router.get("/stock-groups/{group_id}/content")
+def get_group_content(
+    group_id: int, days: int = 180, limit: int = 30, db: Session = Depends(get_db)
+):
+    """그룹 멤버 중 하나라도 언급된 유튜브·뉴스 분석 + 실시간 관련 뉴스."""
+    group = db.query(StockGroup).filter(StockGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="그룹 없음")
+    analyzed = get_group_related_content(db, group, days=days, limit=limit)
+    live_news = get_group_live_news(group, limit=6)
+    return {"group_id": group_id, "analyzed": analyzed, "live_news": live_news}
 
 
 @groups_router.post("/stock-groups")
@@ -141,6 +178,44 @@ def add_group_member(group_id: int, body: MemberAdd, db: Session = Depends(get_d
         db.commit()
         db.refresh(group)
     return _serialize_group(db, group)
+
+
+@groups_router.post("/stock-groups/{group_id}/members/bulk")
+def add_group_members_bulk(group_id: int, body: MemberBulkAdd, db: Session = Depends(get_db)):
+    group = db.query(StockGroup).filter(StockGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="그룹 없음")
+
+    added, skipped = 0, 0
+    for item in body.members:
+        try:
+            sym, name = _resolve_member_input(db, item)
+        except HTTPException:
+            skipped += 1
+            continue
+        existing = (
+            db.query(StockGroupMember)
+            .filter(StockGroupMember.group_id == group_id, StockGroupMember.symbol == sym)
+            .first()
+        )
+        if existing:
+            skipped += 1
+            continue
+        db.add(StockGroupMember(group_id=group_id, symbol=sym, stock_name=name))
+        added += 1
+
+    db.commit()
+    db.refresh(group)
+    return {"added": added, "skipped": skipped, **_serialize_group(db, group)}
+
+
+@groups_router.post("/stock-groups/discover")
+def discover_related(body: DiscoverBody, db: Session = Depends(get_db)):
+    """관계 묶어보기 — 종목명/코드로 관련 종목 후보 검색 (함께 언급된 종목 + 뉴스 기반 관련주)."""
+    query = body.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="검색할 종목명 또는 코드를 입력하세요.")
+    return discover_related_stocks(db, query, limit=max(1, min(body.limit, 20)))
 
 
 @groups_router.delete("/stock-groups/{group_id}/members/{symbol}")

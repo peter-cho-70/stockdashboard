@@ -11,13 +11,42 @@ from datetime import datetime, date
 from sqlalchemy.orm import Session
 
 from config.database import Stock, PriceHistory, PortfolioSnapshot, AlertHistory, PortfolioTrade
+from core.broker_types import BalanceItem, merge_balance_pair
 from core.kis_client import (
-    KISClient, BalanceItem, fetch_merged_balance_from_settings,
+    KISClient, fetch_merged_balance_from_settings,
     fetch_trade_history_from_settings,
 )
+from core.kiwoom_client import fetch_merged_kiwoom_balance_from_settings
 from core.target_alerts import check_all_targets_for_stock
 
 logger = logging.getLogger(__name__)
+
+
+def fetch_all_broker_balances() -> dict[str, tuple[BalanceItem, str]]:
+    """설정된 모든 broker(KIS+키움) 잔고를 종목코드 기준 합산.
+    반환: {symbol: (BalanceItem, position_source)} — position_source는 "kis" | "kiwoom" | "kis+kiwoom"
+    """
+    from config.settings import get_settings
+
+    s = get_settings()
+    result: dict[str, tuple[BalanceItem, str]] = {}
+
+    if s.kis_is_configured():
+        for item in fetch_merged_balance_from_settings():
+            result[item.symbol] = (item, "kis")
+
+    if s.kiwoom_is_configured():
+        for item in fetch_merged_kiwoom_balance_from_settings():
+            if item.symbol in result:
+                existing_item, existing_source = result[item.symbol]
+                result[item.symbol] = (
+                    merge_balance_pair(existing_item, item),
+                    f"{existing_source}+kiwoom",
+                )
+            else:
+                result[item.symbol] = (item, "kiwoom")
+
+    return result
 
 
 def sync_trade_history(db: Session, start, end=None) -> dict:
@@ -75,6 +104,21 @@ def sync_trade_history(db: Session, start, end=None) -> dict:
     }
     logger.info(f"✅ 체결내역 동기화 완료: {result}")
     return result
+
+
+def create_quote_client_from_settings():
+    """시세 조회용 client 1개를 반환 — KIS가 설정되어 있으면 KIS, 없으면 키움.
+    시세는 broker 무관 데이터라 잔고 합산과 달리 둘 다 조회할 필요는 없다."""
+    from config.settings import get_settings
+    from core.kis_client import create_kis_client_from_settings
+    from core.kiwoom_client import create_kiwoom_client_from_settings
+
+    s = get_settings()
+    if s.kis_is_configured():
+        return create_kis_client_from_settings()
+    if s.kiwoom_is_configured():
+        return create_kiwoom_client_from_settings()
+    raise ValueError("KIS/키움 API가 모두 설정되지 않았습니다 (.env 확인)")
 
 
 def resolve_prev_close(
@@ -142,17 +186,17 @@ class PortfolioManager:
         KIS API에서 잔고를 가져와 DB 동기화
         반환: {"added": N, "updated": N, "removed": N}
         """
-        balance_items = fetch_merged_balance_from_settings()
-        if not balance_items and self.kis:
-            balance_items = self.kis.get_all_balance()
-        if not balance_items:
+        balance_map = fetch_all_broker_balances()
+        if not balance_map and self.kis:
+            balance_map = {item.symbol: (item, "kis") for item in self.kis.get_all_balance()}
+        if not balance_map:
             logger.warning("잔고 데이터 없음 (API 응답 비어있음)")
             return {"added": 0, "updated": 0, "removed": 0}
 
         added, updated = 0, 0
         synced_symbols = set()
 
-        for item in balance_items:
+        for item, source in balance_map.values():
             synced_symbols.add(item.symbol)
             existing = self.db.query(Stock).filter(
                 Stock.symbol == item.symbol
@@ -164,17 +208,15 @@ class PortfolioManager:
                 existing.avg_price = item.avg_price
                 existing.purchase_amount = item.purchase_amount
                 existing.current_price = item.current_price or existing.current_price
-                existing.position_source = "kis"
+                existing.position_source = source
                 existing.is_active = item.qty > 0
                 existing.last_synced_at = datetime.utcnow()
                 existing.updated_at = datetime.utcnow()
                 updated += 1
                 if prev_source == "manual":
                     logger.info(
-                        "KIS 동기화 — manual→kis 수량 갱신: %s (%s) qty=%s",
-                        existing.name,
-                        existing.symbol,
-                        item.qty,
+                        "%s 동기화 — manual→%s 수량 갱신: %s (%s) qty=%s",
+                        source, source, existing.name, existing.symbol, item.qty,
                     )
             else:
                 # 신규 종목 추가
@@ -187,7 +229,7 @@ class PortfolioManager:
                     avg_price=item.avg_price,
                     purchase_amount=item.purchase_amount,
                     current_price=item.current_price,
-                    position_source="kis",
+                    position_source=source,
                     last_synced_at=datetime.utcnow(),
                 )
                 self.db.add(new_stock)

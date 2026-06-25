@@ -6,15 +6,19 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
-import { ArrowUpRight, ArrowDownRight, RefreshCw, Calculator } from "lucide-react";
-import { api, type AllTradeItem } from "@/lib/api";
+import { ArrowUpRight, ArrowDownRight, RefreshCw, Calculator, TrendingUp, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
+import { api, type AllTradeItem, type FinanceHubState } from "@/lib/api";
+import type { Liability } from "@/lib/finance/types";
+import { LeverageAnalysisPanel } from "@/components/finance/leverage-analysis-panel";
 
 type SideFilter = "ALL" | "BUY" | "SELL";
 type SourceFilter = "ALL" | "manual" | "kis";
-type TradePeriod = "1M" | "3M" | "6M" | "1Y" | "2Y" | "ALL" | "CUSTOM";
+type TradePeriod = "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "2Y" | "ALL" | "CUSTOM";
 type DisplayTradeItem = AllTradeItem & { trade_count: number };
 
 const TRADE_PERIODS: { id: Exclude<TradePeriod, "CUSTOM">; label: string }[] = [
+  { id: "1D", label: "오늘" },
+  { id: "1W", label: "1주일" },
   { id: "1M", label: "1개월" },
   { id: "3M", label: "3개월" },
   { id: "6M", label: "6개월" },
@@ -41,6 +45,13 @@ function formatYmd(d: Date): string {
 function rangeForPeriod(period: Exclude<TradePeriod, "CUSTOM" | "ALL">): { start: string; end: string } {
   const end = new Date();
   const start = new Date(end);
+  if (period === "1D") {
+    return { start: formatYmd(end), end: formatYmd(end) };
+  }
+  if (period === "1W") {
+    start.setDate(start.getDate() - 7);
+    return { start: formatYmd(start), end: formatYmd(end) };
+  }
   const months = { "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "2Y": 24 }[period];
   start.setMonth(start.getMonth() - months);
   return { start: formatYmd(start), end: formatYmd(end) };
@@ -104,6 +115,117 @@ function groupSameDayTrades(items: AllTradeItem[]): DisplayTradeItem[] {
       memo: row.trade_count > 1 && !row.memo ? `${row.trade_count}건 합산` : row.memo,
     }))
     .sort((a, b) => b.traded_at.localeCompare(a.traded_at) || b.id - a.id);
+}
+
+// ─── 레버리지 투자 분석 패널 ─────────────────────────────────────────────
+function LeverageSection() {
+  const router = useRouter();
+  const [liabilities, setLiabilities] = useState<Liability[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getFinanceState()
+      .then((state: FinanceHubState) => {
+        // 경락잔금대출은 주식투자 용도가 아니므로 제외
+        const investmentLoans = state.liabilities.filter(
+          (l) => l.lenderType !== "auction_settlement_loan"
+        );
+        setLiabilities(investmentLoans);
+        if (investmentLoans.length > 0) setSelectedId(investmentLoans[0].id);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading || liabilities.length === 0) return null;
+
+  const selected = liabilities.find((l) => l.id === selectedId);
+
+  return (
+    <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 hover:bg-[var(--surface-elevated)] transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <TrendingUp size={15} className="text-emerald-500" />
+          <span className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+            레버리지 투자 분석
+          </span>
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+            대출 {liabilities.length}건
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-neutral-400">
+          <span className="text-xs">대출 이자 차감 후 실질 수익 분석</span>
+          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-[var(--border-subtle)] p-4 space-y-4">
+          {/* 대출 선택 탭 */}
+          {liabilities.length > 1 && (
+            <div className="flex flex-wrap gap-1.5">
+              {liabilities.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => setSelectedId(l.id)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    selectedId === l.id
+                      ? "bg-emerald-600 text-white"
+                      : "border border-[var(--border-subtle)] text-neutral-600 hover:bg-[var(--surface-elevated)] dark:text-neutral-400"
+                  }`}
+                >
+                  {l.name}
+                  <span className="ml-1.5 opacity-70">
+                    {l.principal.toLocaleString("ko-KR")}원 · {l.interestRate}%
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selected ? (
+            selected.startDate ? (
+              <>
+                {/* 대출 요약 */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-[var(--surface-elevated)] px-4 py-2.5 text-xs text-neutral-500">
+                  <span className="font-medium text-neutral-800 dark:text-neutral-200">{selected.name}</span>
+                  <span>원금 <strong className="text-neutral-800 dark:text-neutral-200">{selected.principal.toLocaleString("ko-KR")}원</strong></span>
+                  <span>금리 <strong className="text-neutral-800 dark:text-neutral-200">{selected.interestRate}%</strong></span>
+                  <span>월 이자 <strong className="text-amber-600">{selected.monthlyInterest.toLocaleString("ko-KR")}원</strong></span>
+                  <span>대출 실행일 <strong className="text-neutral-800 dark:text-neutral-200">{selected.startDate}</strong></span>
+                </div>
+                {/* 분석 패널 */}
+                <LeverageAnalysisPanel
+                  startDate={selected.startDate}
+                  principal={selected.principal}
+                  annualRate={selected.interestRate}
+                />
+              </>
+            ) : (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/20 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+                <strong>{selected.name}</strong>의 대출 실행일이 등록되지 않았습니다.{" "}
+                <button
+                  type="button"
+                  onClick={() => router.push("/finance/liabilities")}
+                  className="inline-flex items-center gap-1 font-semibold underline hover:no-underline"
+                >
+                  재정보드 → 부채관리 <ExternalLink size={11} />
+                </button>
+                에서 대출 실행일을 입력해주세요.
+              </div>
+            )
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function TradesPage() {
@@ -445,6 +567,9 @@ export default function TradesPage() {
               )}
             </div>
           </div>
+
+          {/* 레버리지 투자 분석 */}
+          <LeverageSection />
 
           {/* 월별 매수/매도 차트 */}
           <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4">

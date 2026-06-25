@@ -1,8 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { KeyRound, Bell, Server, CheckCircle2, XCircle, Loader2, Eye, Database, RotateCcw, Trash2 } from "lucide-react";
-import { api, settingsApi, systemApi, type DemoModeStatus, type DbBackupItem, type DbInfo } from "@/lib/api";
+import { KeyRound, Bell, Server, CheckCircle2, XCircle, Loader2, Eye, Database, RotateCcw, Trash2, Globe, Plus, Pencil, Check, X } from "lucide-react";
+import {
+  api,
+  marketApi,
+  settingsApi,
+  systemApi,
+  type DemoModeStatus,
+  type DbBackupItem,
+  type DbInfo,
+  type TrackedUsStock,
+} from "@/lib/api";
 
 function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -41,6 +50,20 @@ export default function SettingsPage() {
   const [demoSaving, setDemoSaving] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
 
+  const [trackedStocks, setTrackedStocks] = useState<TrackedUsStock[]>([]);
+  const [sectorLabels, setSectorLabels] = useState<Record<string, string>>({});
+  const [trackedLoading, setTrackedLoading] = useState(true);
+  const [trackedSaving, setTrackedSaving] = useState(false);
+  const [trackedError, setTrackedError] = useState<string | null>(null);
+  const [newTicker, setNewTicker] = useState("");
+  const [newNameKr, setNewNameKr] = useState("");
+  const [newSector, setNewSector] = useState("other");
+  const [newKoreaRelated, setNewKoreaRelated] = useState("");
+  const [editingTicker, setEditingTicker] = useState<string | null>(null);
+  const [editNameKr, setEditNameKr] = useState("");
+  const [editSector, setEditSector] = useState("other");
+  const [editKoreaRelated, setEditKoreaRelated] = useState("");
+
   const [dbInfo, setDbInfo] = useState<DbInfo | null>(null);
   const [backups, setBackups] = useState<DbBackupItem[]>([]);
   const [dbLoading, setDbLoading] = useState(true);
@@ -77,10 +100,102 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const loadTrackedStocks = useCallback(async () => {
+    setTrackedLoading(true);
+    setTrackedError(null);
+    try {
+      const res = await marketApi.listTrackedUsStocks();
+      setTrackedStocks(res.stocks);
+      setSectorLabels(res.sectors);
+    } catch (e) {
+      setTrackedError(e instanceof Error ? e.message : "추적 종목을 불러오지 못했습니다.");
+    } finally {
+      setTrackedLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadDemoStatus();
     loadDbBackups();
-  }, [loadDemoStatus, loadDbBackups]);
+    loadTrackedStocks();
+  }, [loadDemoStatus, loadDbBackups, loadTrackedStocks]);
+
+  async function handleAddTracked() {
+    const ticker = newTicker.trim().toUpperCase();
+    const nameKr = newNameKr.trim();
+    if (!ticker || !nameKr) {
+      setTrackedError("티커와 종목명을 입력하세요.");
+      return;
+    }
+    setTrackedSaving(true);
+    setTrackedError(null);
+    try {
+      await marketApi.addTrackedUsStock({
+        ticker,
+        name_kr: nameKr,
+        sector: newSector,
+        korea_related: newKoreaRelated.trim() || undefined,
+      });
+      setNewTicker("");
+      setNewNameKr("");
+      setNewKoreaRelated("");
+      await loadTrackedStocks();
+    } catch (e) {
+      setTrackedError(e instanceof Error ? e.message : "추가에 실패했습니다.");
+    } finally {
+      setTrackedSaving(false);
+    }
+  }
+
+  async function handleRemoveTracked(ticker: string) {
+    if (!confirm(`${ticker}를 추적 목록에서 제거할까요?`)) return;
+    setTrackedSaving(true);
+    setTrackedError(null);
+    try {
+      await marketApi.removeTrackedUsStock(ticker);
+      await loadTrackedStocks();
+    } catch (e) {
+      setTrackedError(e instanceof Error ? e.message : "삭제에 실패했습니다.");
+    } finally {
+      setTrackedSaving(false);
+    }
+  }
+
+  function startEditTracked(s: TrackedUsStock) {
+    setTrackedError(null);
+    setEditingTicker(s.ticker);
+    setEditNameKr(s.name_kr);
+    setEditSector(s.sector);
+    setEditKoreaRelated(s.korea_related ?? "");
+  }
+
+  function cancelEditTracked() {
+    setEditingTicker(null);
+  }
+
+  async function handleSaveEditTracked() {
+    if (!editingTicker) return;
+    const nameKr = editNameKr.trim();
+    if (!nameKr) {
+      setTrackedError("종목명을 입력하세요.");
+      return;
+    }
+    setTrackedSaving(true);
+    setTrackedError(null);
+    try {
+      await marketApi.updateTrackedUsStock(editingTicker, {
+        name_kr: nameKr,
+        sector: editSector,
+        korea_related: editKoreaRelated.trim(),
+      });
+      setEditingTicker(null);
+      await loadTrackedStocks();
+    } catch (e) {
+      setTrackedError(e instanceof Error ? e.message : "수정에 실패했습니다.");
+    } finally {
+      setTrackedSaving(false);
+    }
+  }
 
   async function handleCreateBackup() {
     setDbBusy(true);
@@ -437,6 +552,28 @@ export default function SettingsPage() {
         </div>
       </Section>
 
+      {/* 키움증권 REST API 설정 */}
+      <Section title="키움증권 (REST API)" icon={<KeyRound size={15} />}>
+        <p className="text-sm text-neutral-600 dark:text-neutral-400">
+          키움 Open API 포털에서 앱키/시크릿을 발급받고, 백엔드{" "}
+          <code className="rounded bg-neutral-100 px-1 py-0.5 text-xs dark:bg-neutral-800">.env</code>에 입력하세요.
+          KIS와 동시에 설정하면 보유종목이 종목코드 기준으로 합산됩니다.
+        </p>
+        <div className="rounded-md bg-[var(--surface-elevated)] p-3 font-mono text-xs text-neutral-600 dark:text-neutral-400 space-y-0.5">
+          <p className="text-neutral-500 dark:text-neutral-500"># 단일 계좌</p>
+          <p>KIWOOM_APP_KEY=<span className="text-amber-600 dark:text-amber-400">your_app_key</span></p>
+          <p>KIWOOM_APP_SECRET=<span className="text-amber-600 dark:text-amber-400">your_app_secret</span></p>
+          <p>KIWOOM_ACCOUNT_NO=<span className="text-amber-600 dark:text-amber-400">12345678-01</span></p>
+          <p className="pt-2 text-neutral-500 dark:text-neutral-500"># 복수 계좌 (계좌별 키 — 한 줄)</p>
+          <p>KIWOOM_ACCOUNTS=<span className="text-amber-600 dark:text-amber-400">12345678-01|key1|secret1;12345678-22|key2|secret2</span></p>
+          <p>KIWOOM_IS_MOCK=<span className="text-amber-600 dark:text-amber-400">true</span>&nbsp;&nbsp;# 모의투자 / false=실전</p>
+        </div>
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+          키움 REST API는 잔고/현재가/주문만 지원합니다 (체결내역 백필은 아직 미지원). 처음에는{" "}
+          <strong>KIWOOM_IS_MOCK=true</strong>로 테스트하세요.
+        </div>
+      </Section>
+
       {/* Gemini API — YouTube 추출 + Gemini 분석 */}
       <Section title="Google Gemini AI (Flash-Lite)" icon={<KeyRound size={15} />}>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
@@ -506,6 +643,172 @@ export default function SettingsPage() {
               <span className="text-neutral-700 dark:text-neutral-300 text-xs">{desc}</span>
             </div>
           ))}
+        </div>
+      </Section>
+
+      {/* 추적 미국 주식 (한국 증시 영향) */}
+      <Section title="추적 미국 주식 (한국 증시 영향)" icon={<Globe size={15} />}>
+        <p className="text-xs text-neutral-400">
+          매일 아침 미국 증시 리포트에 표시되는 종목입니다. 추가/삭제하면 다음 리포트 생성부터 반영됩니다.
+        </p>
+
+        {trackedError && <p className="text-sm text-red-500">{trackedError}</p>}
+
+        {trackedLoading ? (
+          <div className="flex items-center gap-2 py-4 text-sm text-neutral-400">
+            <Loader2 size={14} className="animate-spin" /> 불러오는 중...
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {Object.entries(
+              trackedStocks.reduce<Record<string, TrackedUsStock[]>>((acc, s) => {
+                (acc[s.sector] ??= []).push(s);
+                return acc;
+              }, {}),
+            ).map(([sector, stocks]) => (
+              <div key={sector}>
+                <p className="text-[11px] font-semibold text-neutral-500 mb-1">
+                  {sectorLabels[sector] ?? sector}
+                </p>
+                <div className="space-y-1">
+                  {stocks.map((s) =>
+                    editingTicker === s.ticker ? (
+                      <div
+                        key={s.ticker}
+                        className="rounded-md bg-[var(--surface-elevated)] px-3 py-2 space-y-1.5"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-neutral-400 shrink-0">{s.ticker}</span>
+                          <input
+                            value={editNameKr}
+                            onChange={(e) => setEditNameKr(e.target.value)}
+                            placeholder="종목명"
+                            className="min-w-0 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-sm"
+                          />
+                          <select
+                            value={editSector}
+                            onChange={(e) => setEditSector(e.target.value)}
+                            className="shrink-0 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-xs"
+                          >
+                            {Object.entries(sectorLabels).map(([key, label]) => (
+                              <option key={key} value={key}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={editKoreaRelated}
+                            onChange={(e) => setEditKoreaRelated(e.target.value)}
+                            placeholder="영향받는 한국 종목 (선택)"
+                            className="min-w-0 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleSaveEditTracked}
+                            disabled={trackedSaving}
+                            className="shrink-0 rounded p-1 text-neutral-400 hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-50 dark:hover:bg-emerald-950/30"
+                            aria-label={`${s.ticker} 저장`}
+                          >
+                            <Check size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEditTracked}
+                            disabled={trackedSaving}
+                            className="shrink-0 rounded p-1 text-neutral-400 hover:bg-[var(--surface)] disabled:opacity-50"
+                            aria-label="수정 취소"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        key={s.ticker}
+                        className="flex items-center justify-between gap-2 rounded-md bg-[var(--surface-elevated)] px-3 py-1.5"
+                      >
+                        <div className="min-w-0">
+                          <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
+                            {s.name_kr}
+                          </span>
+                          <span className="ml-1.5 text-xs text-neutral-400">{s.ticker}</span>
+                          {s.korea_related && (
+                            <p className="text-[11px] text-neutral-400 truncate">→ {s.korea_related}</p>
+                          )}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => startEditTracked(s)}
+                            disabled={trackedSaving}
+                            className="rounded p-1 text-neutral-400 hover:bg-[var(--surface)] hover:text-blue-500 disabled:opacity-50"
+                            aria-label={`${s.ticker} 수정`}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveTracked(s.ticker)}
+                            disabled={trackedSaving}
+                            className="rounded p-1 text-neutral-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-50 dark:hover:bg-red-950/30"
+                            aria-label={`${s.ticker} 삭제`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ),
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="border-t border-[var(--border-subtle)] pt-3 space-y-2">
+          <p className="text-xs font-medium text-neutral-500">종목 추가</p>
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              value={newTicker}
+              onChange={(e) => setNewTicker(e.target.value)}
+              placeholder="티커 (예: MU)"
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2.5 py-1.5 text-sm"
+            />
+            <input
+              value={newNameKr}
+              onChange={(e) => setNewNameKr(e.target.value)}
+              placeholder="종목명 (예: 마이크론)"
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2.5 py-1.5 text-sm"
+            />
+            <select
+              value={newSector}
+              onChange={(e) => setNewSector(e.target.value)}
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2.5 py-1.5 text-sm"
+            >
+              {Object.entries(sectorLabels).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <input
+              value={newKoreaRelated}
+              onChange={(e) => setNewKoreaRelated(e.target.value)}
+              placeholder="영향받는 한국 종목 (선택)"
+              className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2.5 py-1.5 text-sm"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleAddTracked}
+            disabled={trackedSaving}
+            className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--surface-elevated)] disabled:opacity-50"
+          >
+            {trackedSaving ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+            추가
+          </button>
         </div>
       </Section>
     </div>

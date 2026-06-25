@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,7 @@ from core.finance_service import (
     save_finance_state,
     save_ledger_state,
 )
+from core.leverage_analysis import analyze_leverage_investment
 
 finance_router = APIRouter(prefix="/finance", tags=["finance"])
 
@@ -110,6 +111,19 @@ def cashflow_opinion(body: CashflowOpinionBody, db: Session = Depends(get_db)):
 @finance_router.get("/stock-snapshot")
 def read_stock_snapshot(db: Session = Depends(get_db)):
     return get_stock_snapshot(db)
+
+
+@finance_router.get("/leverage-analysis")
+def read_leverage_analysis(
+    start_date: str = Query(..., description="대출 실행일 YYYY-MM-DD"),
+    principal: float = Query(..., gt=0),
+    annual_rate: float = Query(..., ge=0),
+    db: Session = Depends(get_db),
+):
+    """대출 실행일 이후 매수한 종목들의 투자 성과 vs 대출 이자비용"""
+    return analyze_leverage_investment(
+        db, start_date=start_date, principal=principal, annual_rate=annual_rate
+    )
 
 
 class AssetSnapshotBody(BaseModel):

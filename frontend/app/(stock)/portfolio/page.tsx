@@ -967,6 +967,11 @@ function PortfolioContent() {
                               수동
                             </span>
                           )}
+                          {stock.position_source?.includes("kiwoom") && (
+                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                              {stock.position_source === "kis+kiwoom" ? "KIS+키움" : "키움"}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </td>

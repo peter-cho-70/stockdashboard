@@ -22,11 +22,16 @@ from core.trade_report import (
     list_reports as list_trade_reports,
 )
 from core.us_market_report import (
+    SECTOR_LABELS,
+    add_tracked_us_stock,
     fetch_live_snapshot,
     generate_us_morning_report,
     get_report,
     list_reports,
+    list_tracked_us_stocks,
     refresh_us_report_news,
+    remove_tracked_us_stock,
+    update_tracked_us_stock,
 )
 from core.kr_market_snapshot import fetch_kr_market_snapshot, fetch_kr_group_stocks
 from core.kis_invest_info import fetch_kis_invest_info, sync_kis_price_targets
@@ -197,6 +202,67 @@ def api_refresh_us_report_news(
         return {"report": report}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+# ── 추적 미국 종목 (설정 화면에서 추가/수정/삭제) ──────────────────────
+
+class TrackedUsStockBody(BaseModel):
+    ticker: str = Field(..., min_length=1, max_length=10)
+    name_kr: str = Field(..., min_length=1, max_length=100)
+    sector: str = Field("other", max_length=30)
+    korea_related: Optional[str] = Field(None, max_length=200)
+
+
+class TrackedUsStockUpdateBody(BaseModel):
+    name_kr: Optional[str] = Field(None, min_length=1, max_length=100)
+    sector: Optional[str] = Field(None, max_length=30)
+    korea_related: Optional[str] = Field(None, max_length=200)
+
+
+@market_router.get("/reports/us/tracked-stocks")
+def api_list_tracked_us_stocks(db: Session = Depends(get_db)):
+    return {"stocks": list_tracked_us_stocks(db), "sectors": SECTOR_LABELS}
+
+
+@market_router.post("/reports/us/tracked-stocks")
+def api_add_tracked_us_stock(body: TrackedUsStockBody, db: Session = Depends(get_db)):
+    try:
+        stock = add_tracked_us_stock(
+            db,
+            ticker=body.ticker,
+            name_kr=body.name_kr,
+            sector=body.sector,
+            korea_related=body.korea_related,
+        )
+        return {"stock": stock}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@market_router.patch("/reports/us/tracked-stocks/{ticker}")
+def api_update_tracked_us_stock(
+    ticker: str, body: TrackedUsStockUpdateBody, db: Session = Depends(get_db)
+):
+    try:
+        stock = update_tracked_us_stock(
+            db,
+            ticker,
+            name_kr=body.name_kr,
+            sector=body.sector,
+            korea_related=body.korea_related,
+        )
+        return {"stock": stock}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@market_router.delete("/reports/us/tracked-stocks/{ticker}")
+def api_remove_tracked_us_stock(ticker: str, db: Session = Depends(get_db)):
+    try:
+        remove_tracked_us_stock(db, ticker)
+        return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 # ── 국내 증시 스냅샷 ──────────────────────────────────────────────

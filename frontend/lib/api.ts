@@ -53,7 +53,7 @@ export interface StockItem {
   profit_loss?: number;
   current_value?: number;
   memo: string | null;
-  position_source?: "kis" | "manual";
+  position_source?: "kis" | "manual" | "kiwoom" | "kis+kiwoom";
   last_synced_at: string | null;
   target_buy_price?: number | null;
   target_sell_price?: number | null;
@@ -109,6 +109,52 @@ export interface StockGroup {
   name: string;
   created_at: string | null;
   members: StockGroupMember[];
+}
+
+export interface RelatedStockCandidate {
+  symbol: string | null;
+  name: string;
+  current_price: number | null;
+  change_rate: number | null;
+  is_holding: boolean;
+  source: "co_mention" | "news_search";
+  reason: string | null;
+  mention_count?: number;
+  latest_date?: string;
+  sentiment?: string;
+}
+
+export interface DiscoverRelatedResponse {
+  query: string;
+  base_symbol: string | null;
+  base_name: string | null;
+  candidates: RelatedStockCandidate[];
+}
+
+export interface GroupContentItem {
+  id: number;
+  source_type: string;
+  source_url: string | null;
+  source_title: string | null;
+  channel_name: string | null;
+  published_at: string | null;
+  analyzed_at: string | null;
+  summary: string | null;
+  sentiment: string | null;
+  matched_members: string[];
+}
+
+export interface GroupLiveNewsItem {
+  title: string;
+  snippet?: string;
+  url?: string;
+  published?: string;
+}
+
+export interface GroupContentResponse {
+  group_id: number;
+  analyzed: GroupContentItem[];
+  live_news: GroupLiveNewsItem[];
 }
 
 export interface StockCreatePayload {
@@ -284,6 +330,37 @@ export interface FinanceStockSnapshot {
   total_profit_rate: number;
   stock_count: number;
   updated_at: string;
+}
+
+export interface LeverageAnalysisItem {
+  symbol: string;
+  name: string;
+  post_loan_buy_qty: number;
+  post_loan_avg_price: number;
+  post_loan_cost: number;
+  overall_avg_price: number;
+  held_qty: number;
+  current_price: number;
+  realized_profit: number;
+  unrealized_profit_post_loan_avg: number;
+  unrealized_profit_overall_avg: number;
+}
+
+export interface LeverageAnalysisResult {
+  start_date: string;
+  months_elapsed: number;
+  principal: number;
+  annual_rate: number;
+  monthly_interest: number;
+  total_interest_cost: number;
+  total_invested: number;
+  total_realized_profit: number;
+  investment_profit_post_loan_avg: number;
+  investment_profit_overall_avg: number;
+  net_profit_post_loan_avg: number;
+  net_profit_overall_avg: number;
+  net_return_on_principal_pct: number;
+  items: LeverageAnalysisItem[];
 }
 
 export interface FinanceAssetSnapshot {
@@ -529,6 +606,10 @@ export const api = {
     fetchApi<FinanceLedgerState>("/finance/ledger", { method: "DELETE" }),
   getFinanceStockSnapshot: () =>
     fetchApi<FinanceStockSnapshot>("/finance/stock-snapshot"),
+  getLeverageAnalysis: (startDate: string, principal: number, annualRate: number) =>
+    fetchApi<LeverageAnalysisResult>(
+      `/finance/leverage-analysis?start_date=${startDate}&principal=${principal}&annual_rate=${annualRate}`,
+    ),
   recordFinanceAssetSnapshot: (body: Omit<FinanceAssetSnapshot, "date"> & { date?: string }) =>
     fetchApi<FinanceAssetSnapshot>("/finance/asset-snapshot", {
       method: "POST",
@@ -1311,6 +1392,27 @@ export interface UsMarketQuote {
   as_of?: string;
   as_of_label?: string;
   error?: string;
+  /** 시간외(after-hours) 거래가 — us_stocks 항목에만 존재 */
+  post_market_price?: number;
+  post_market_change?: number;
+  post_market_change_pct?: number;
+  market_state?: string;
+  post_market_as_of_label?: string;
+  /** 뉴스 기반으로 추출된 이슈 종목 (고정 추적 종목 외) */
+  is_issue?: boolean;
+  issue_reason?: string;
+  /** 영향받는 한국 종목 (설정 화면에서 등록) */
+  korea_related?: string;
+  /** 섹터 (설정 화면 추적 종목 카테고리) */
+  sector?: string;
+}
+
+export interface TrackedUsStock {
+  ticker: string;
+  name_kr: string;
+  sector: string;
+  sector_label?: string;
+  korea_related?: string | null;
 }
 
 export type UsMarketInterpretationTopic =
@@ -1640,6 +1742,36 @@ export const marketApi = {
     );
   },
 
+  listTrackedUsStocks: () =>
+    fetchApi<{ stocks: TrackedUsStock[]; sectors: Record<string, string> }>(
+      "/reports/us/tracked-stocks",
+    ),
+
+  addTrackedUsStock: (body: {
+    ticker: string;
+    name_kr: string;
+    sector?: string;
+    korea_related?: string;
+  }) =>
+    fetchApi<{ stock: TrackedUsStock }>("/reports/us/tracked-stocks", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateTrackedUsStock: (
+    ticker: string,
+    body: { name_kr?: string; sector?: string; korea_related?: string },
+  ) =>
+    fetchApi<{ stock: TrackedUsStock }>(
+      `/reports/us/tracked-stocks/${encodeURIComponent(ticker)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  removeTrackedUsStock: (ticker: string) =>
+    fetchApi<{ ok: boolean }>(`/reports/us/tracked-stocks/${encodeURIComponent(ticker)}`, {
+      method: "DELETE",
+    }),
+
   getKrMarketSnapshot: (force = false) =>
     fetchApi<{ snapshot: KrMarketSnapshot }>(
       `/market/kr/snapshot${force ? "?force=true" : ""}`,
@@ -1713,6 +1845,7 @@ export interface AutoTradeRuleItem {
   symbol: string;
   name: string;
   account_no: string;
+  broker: "kis" | "kiwoom";
   execution_mode: string;
   enabled: boolean;
   buy_qty: number;
@@ -1746,7 +1879,7 @@ export interface AutoTradeEventItem {
 export const autotradeApi = {
   listRules: () => fetchApi<AutoTradeRuleItem[]>("/autotrade/rules"),
 
-  createRule: (body: { symbol: string; name?: string; buy_qty: number }) =>
+  createRule: (body: { symbol: string; name?: string; buy_qty: number; broker?: "kis" | "kiwoom" }) =>
     fetchApi<AutoTradeRuleItem>("/autotrade/rules", {
       method: "POST",
       body: JSON.stringify(body),
@@ -1960,6 +2093,11 @@ export const groupsApi = {
     fetchApi<{ symbol: string; groups: StockGroup[] }>(
       `/stock-groups/by-symbol/${encodeURIComponent(symbol)}`,
     ),
+  getById: (id: number) => fetchApi<StockGroup>(`/stock-groups/${id}`),
+  getContent: (id: number, days = 180, limit = 30) =>
+    fetchApi<GroupContentResponse>(
+      `/stock-groups/${id}/content?days=${days}&limit=${limit}`,
+    ),
   create: (body: { name: string; symbols?: string[] }) =>
     fetchApi<StockGroup>("/stock-groups", { method: "POST", body: JSON.stringify(body) }),
   rename: (id: number, name: string) =>
@@ -1973,8 +2111,188 @@ export const groupsApi = {
     fetchApi<StockGroup>(`/stock-groups/${id}/members/${encodeURIComponent(symbol)}`, {
       method: "DELETE",
     }),
+  addMembersBulk: (id: number, members: { symbol?: string; stock_name?: string }[]) =>
+    fetchApi<StockGroup & { added: number; skipped: number }>(
+      `/stock-groups/${id}/members/bulk`,
+      { method: "POST", body: JSON.stringify({ members }) },
+    ),
+  discover: (query: string, limit = 10) =>
+    fetchApi<DiscoverRelatedResponse>("/stock-groups/discover", {
+      method: "POST",
+      body: JSON.stringify({ query, limit }),
+    }),
   remove: (id: number) => fetchApi<{ ok: boolean }>(`/stock-groups/${id}`, { method: "DELETE" }),
 };
+
+// ── ETF ──────────────────────────────────
+export interface EtfCategoriesResponse {
+  categories: { code: number; label: string }[];
+  sort_columns: { key: string; label: string }[];
+}
+
+export interface EtfRankingItem {
+  code: string;
+  name: string;
+  category: number;
+  current_price: number | null;
+  change_value: number | null;
+  change_rate: number | null;
+  nav: number | null;
+  return_3m: number | null;
+  volume: number | null;
+  trading_value: number | null;
+  market_cap: number | null;
+  listing_date?: string | null;
+}
+
+export interface EtfRankingsResponse {
+  category: number;
+  sort: string;
+  order: "asc" | "desc";
+  items: EtfRankingItem[];
+}
+
+export interface EtfHolding {
+  symbol: string | null;
+  name: string | null;
+  weight: number | null;
+  quantity: number | null;
+}
+
+export interface EtfHoldingsResponse {
+  code: string;
+  name: string | null;
+  current_price: number | null;
+  change_rate: number | null;
+  rising?: boolean;
+  total_count?: number;
+  total_weight?: number;
+  holdings: EtfHolding[];
+}
+
+export interface EtfOutlookResponse {
+  outlook: string | null;
+  cached: boolean;
+  report_date: string;
+  error?: string;
+}
+
+export interface EtfSearchByStockResponse {
+  query: string;
+  symbol: string | null;
+  etfs: { etf_code: string; etf_name: string; category: number; weight: number | null }[];
+}
+
+export interface EtfChannel {
+  id: number;
+  channel_id: string;
+  channel_name: string;
+  channel_url: string;
+  is_active: boolean;
+  last_checked_at: string | null;
+}
+
+export interface EtfMentionedEtf {
+  name: string;
+  code: string | null;
+  sentiment: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | null;
+  reason: string | null;
+}
+
+export interface EtfVideoAnalysis {
+  id: number | string;
+  channel_id: string;
+  channel_name: string;
+  video_id: string;
+  title: string;
+  url: string;
+  published_at: string | null;
+  summary: string | null;
+  sentiment: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | null;
+  mentioned_etfs: EtfMentionedEtf[];
+  analyzed_at: string | null;
+  already_analyzed?: boolean;
+}
+
+export interface EtfYoutubeInsight extends EtfVideoAnalysis {
+  source: "etf_channel" | "general_ai";
+  matched_reason: string | null;
+  matched_sentiment: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | null;
+}
+
+export const etfApi = {
+  getCategories: () => fetchApi<EtfCategoriesResponse>("/etf/categories"),
+  getChannels: () => fetchApi<{ channels: EtfChannel[] }>("/etf/channels"),
+  addChannel: (body: { handle: string; custom_name?: string }) =>
+    fetchApi<EtfChannel>("/etf/channels", { method: "POST", body: JSON.stringify(body) }),
+  removeChannel: (id: number) => fetchApi<{ ok: boolean }>(`/etf/channels/${id}`, { method: "DELETE" }),
+  analyzeChannelLatest: (id: number, maxResults = 5) =>
+    fetchApi<{ analyzed: EtfVideoAnalysis[]; count: number }>(`/etf/channels/${id}/analyze-latest`, {
+      method: "POST",
+      body: JSON.stringify({ max_results: maxResults }),
+    }),
+  getChannelVideos: (id: number) =>
+    fetchApi<{ videos: EtfVideoAnalysis[] }>(`/etf/channels/${id}/videos`),
+  analyzeVideoUrl: (url: string, force = false) =>
+    fetchApi<EtfVideoAnalysis>("/etf/videos/analyze-url", {
+      method: "POST",
+      body: JSON.stringify({ url, force }),
+    }),
+  getYoutubeInsights: (code: string) =>
+    fetchApi<{ insights: EtfYoutubeInsight[] }>(`/etf/${encodeURIComponent(code)}/youtube-insights`),
+  getRankings: (params: { category?: number; sort?: string; order?: "asc" | "desc"; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params.category != null) qs.set("category", String(params.category));
+    if (params.sort) qs.set("sort", params.sort);
+    if (params.order) qs.set("order", params.order);
+    if (params.limit != null) qs.set("limit", String(params.limit));
+    return fetchApi<EtfRankingsResponse>(`/etf/rankings?${qs.toString()}`);
+  },
+  getHoldings: (code: string) => fetchApi<EtfHoldingsResponse>(`/etf/${encodeURIComponent(code)}/holdings`),
+  getOutlook: (code: string, force = false) =>
+    fetchApi<EtfOutlookResponse>(`/etf/${encodeURIComponent(code)}/outlook${force ? "?force=true" : ""}`),
+  searchByStock: (query: string) =>
+    fetchApi<EtfSearchByStockResponse>(`/etf/search-by-stock?query=${encodeURIComponent(query)}`),
+  getMyHoldings: () => fetchApi<{ codes: string[] }>("/etf/my-holdings"),
+  getMemo: (code: string) => fetchApi<{ code: string; memo: string }>(`/etf/${encodeURIComponent(code)}/memo`),
+  setMemo: (code: string, memo: string) =>
+    fetchApi<{ code: string; memo: string }>(`/etf/${encodeURIComponent(code)}/memo`, {
+      method: "PUT",
+      body: JSON.stringify({ memo }),
+    }),
+  getListingDates: (codes: string) =>
+    fetchApi<{ dates: Record<string, string | null> }>(`/etf/listing-dates?codes=${encodeURIComponent(codes)}`),
+  getLinkAnalyzed: (limit = 30) =>
+    fetchApi<{ videos: EtfVideoAnalysis[] }>(`/etf/videos/link-analyzed?limit=${limit}`),
+  getFavorites: () => fetchApi<{ codes: string[] }>("/etf/favorites"),
+  toggleFavorite: (code: string, name?: string) =>
+    fetchApi<{ code: string; favorited: boolean }>("/etf/favorites/toggle", {
+      method: "POST",
+      body: JSON.stringify({ code, name }),
+    }),
+};
+
+/** 종목명(+코드)을 관심종목에 등록 — 코드가 없으면 이름으로 내부 조회 후 등록 */
+export async function addStockNameToWatchlist(
+  stockName: string,
+  symbol?: string,
+): Promise<WatchlistItem> {
+  let resolvedSymbol = symbol;
+  let resolvedName = stockName;
+  if (!resolvedSymbol) {
+    try {
+      const looked = await watchlistApi.lookupName(stockName);
+      resolvedSymbol = looked.symbol;
+      resolvedName = looked.stock_name || resolvedName;
+    } catch {
+      // 심볼을 못 찾으면 이름만으로 등록 (서버에서 재조회 시도)
+    }
+  }
+  if (resolvedSymbol && resolvedSymbol.length === 6) {
+    return watchlistApi.addBySymbol({ symbol: resolvedSymbol, stock_name: resolvedName });
+  }
+  return watchlistApi.add({ stock_name: resolvedName, symbol: resolvedSymbol, source_type: "manual" });
+}
 
 /** AI 추천 → 지켜보기 (종목코드 자동 조회 후 등록) */
 export async function addRecommendationToWatchlist(

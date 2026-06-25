@@ -28,8 +28,7 @@ from core.portfolio_positions import (
     target_price_flags,
 )
 from config.settings import get_settings
-from core.kis_client import create_kis_client_from_settings
-from core.portfolio import PortfolioManager, sync_trade_history
+from core.portfolio import PortfolioManager, create_quote_client_from_settings, sync_trade_history
 from core.ai_analyzer import (
     create_analyzer,
     serialize_intel,
@@ -830,12 +829,11 @@ def get_stocks(db: Session = Depends(get_db)):
 
 @router.post("/portfolio/sync")
 async def sync_portfolio(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """KIS API 잔고 동기화 (백그라운드 실행)"""
+    """KIS/키움 잔고 동기화 (백그라운드 실행)"""
     demo_write_blocked()
     def run_sync():
         try:
-            kis = create_kis_client_from_settings()
-            manager = PortfolioManager(db, kis)
+            manager = PortfolioManager(db, create_quote_client_from_settings())
             result = manager.sync_all(alert_threshold=settings.alert_threshold)
             return result
         except Exception as e:
@@ -847,11 +845,10 @@ async def sync_portfolio(background_tasks: BackgroundTasks, db: Session = Depend
 
 @router.post("/portfolio/sync/now")
 def sync_portfolio_now(db: Session = Depends(get_db)):
-    """KIS API 잔고 동기화 (즉시 실행, 결과 반환)"""
+    """KIS/키움 잔고 동기화 (즉시 실행, 결과 반환)"""
     demo_write_blocked()
     try:
-        kis = create_kis_client_from_settings()
-        manager = PortfolioManager(db, kis)
+        manager = PortfolioManager(db, create_quote_client_from_settings())
         result = manager.sync_all(alert_threshold=settings.alert_threshold)
         return result
     except Exception as e:
@@ -865,20 +862,33 @@ def sync_portfolio_trade_history(
     end: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """KIS API 일별 체결내역 동기화 (잔고는 변경하지 않음, 매도 후 기회비용 분석용 history 추가).
+    """KIS API 일별 체결내역 동기화 + 잔고 자동 갱신.
     start/end(YYYY-MM-DD)를 지정하면 해당 기간을, 없으면 days(기본 90일)를 사용한다."""
     demo_write_blocked()
     try:
         end_date = datetime.strptime(end, "%Y-%m-%d").date() if end else date.today()
         start_date = datetime.strptime(start, "%Y-%m-%d").date() if start else end_date - timedelta(days=days)
         result = sync_trade_history(db, start_date, end_date)
+
+        # 신규 체결이 있으면 잔고도 즉시 갱신 — 오늘 신규 매수한 종목이 종목현황에 바로 나타나도록
+        balance_result = None
+        if result.get("added", 0) > 0:
+            try:
+                manager = PortfolioManager(db, create_quote_client_from_settings())
+                balance_result = manager.sync_balance()
+            except Exception as be:
+                balance_result = {"error": str(be)}
+
         return {
             "message": (
                 f"체결내역 동기화 완료 ({start_date}~{end_date}, "
                 f"신규 {result['added']}건, 기존 {result['skipped']}건)"
+                + (f" · 잔고 갱신: 추가 {balance_result['added']}건, 수정 {balance_result['updated']}건"
+                   if balance_result and "added" in balance_result else "")
             ),
             "start": start_date.isoformat(),
             "end": end_date.isoformat(),
+            "balance_sync": balance_result,
             **result,
         }
     except Exception as e:

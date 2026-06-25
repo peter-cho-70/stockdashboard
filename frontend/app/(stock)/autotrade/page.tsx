@@ -32,6 +32,7 @@ export default function AutoTradePage() {
   const [pickerOptions, setPickerOptions] = useState<{ symbol: string; name: string }[]>([]);
   const [newSymbol, setNewSymbol] = useState("");
   const [newQty, setNewQty] = useState("1");
+  const [newBroker, setNewBroker] = useState<"kis" | "kiwoom">("kis");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [acting, setActing] = useState<number | null>(null);
@@ -94,9 +95,11 @@ export default function AutoTradePage() {
         symbol: newSymbol,
         name: picked?.name,
         buy_qty: Number(newQty),
+        broker: newBroker,
       });
       setShowAddModal(false);
       setNewQty("1");
+      setNewBroker("kis");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "규칙 생성에 실패했습니다.");
@@ -258,6 +261,11 @@ export default function AutoTradePage() {
                     <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800">
                       {STATUS_LABEL[rule.status] || rule.status}
                     </span>
+                    {rule.broker === "kiwoom" && (
+                      <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                        키움
+                      </span>
+                    )}
                     {!rule.enabled && (
                       <span className="rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-700">
                         비활성
@@ -417,6 +425,20 @@ export default function AutoTradePage() {
                   onChange={(e) => setNewQty(e.target.value)}
                   className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-3 py-2 text-sm"
                 />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-neutral-500">증권사</label>
+                <select
+                  value={newBroker}
+                  onChange={(e) => setNewBroker(e.target.value as "kis" | "kiwoom")}
+                  className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-3 py-2 text-sm"
+                >
+                  <option value="kis">한국투자증권 (KIS)</option>
+                  <option value="kiwoom">키움증권</option>
+                </select>
+                <p className="mt-1 text-[11px] text-neutral-400">
+                  선택한 증권사의 AUTOTRADE_{newBroker === "kiwoom" ? "KIWOOM_" : ""}ACCOUNT_NO가 .env에 설정되어 있어야 합니다.
+                </p>
               </div>
               <p className="text-[11px] text-neutral-400">
                 실행 모드는 반자동(승인 필요)으로 고정됩니다. 조건 충족 시 알림이 오고, 직접 승인해야 주문이 나갑니다.

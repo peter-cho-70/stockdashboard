@@ -29,6 +29,7 @@ from api.routes_finance import finance_router
 from api.routes_auction import auction_router
 from api.routes_cron import cron_router
 from api.routes_autotrade import autotrade_router
+from api.routes_etf import etf_router
 from scheduler.jobs import create_scheduler
 
 # 로깅 설정
@@ -126,6 +127,7 @@ app.include_router(finance_router, prefix="/api")
 app.include_router(auction_router, prefix="/api")
 app.include_router(cron_router, prefix="/api")
 app.include_router(autotrade_router, prefix="/api")
+app.include_router(etf_router, prefix="/api")
 
 
 @app.get("/")

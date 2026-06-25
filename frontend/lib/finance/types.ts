@@ -55,6 +55,8 @@ export interface Liability {
   monthlyInterest: number;
   dueDay?: number;
   maturityDate: string | null;
+  /** 대출 실행일 (YYYY-MM-DD) — 레버리지 투자 성과 분석 기준일. 과거에 등록된 대출은 없을 수 있음 */
+  startDate?: string | null;
 }
 
 export interface FixedExpense {

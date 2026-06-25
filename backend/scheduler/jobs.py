@@ -3,7 +3,7 @@ scheduler/jobs.py
 APScheduler 자동 갱신 작업
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -25,17 +25,27 @@ async def job_domestic_market_close():
         result = update_prices_from_krx(db, alert_threshold=settings.alert_threshold)
         logger.info("✅ 시세 갱신: %s개 / 알림: %s건", result["updated"], len(result["alerts"]))
 
+        if settings.kis_is_configured() or settings.kiwoom_is_configured():
+            try:
+                from core.portfolio import PortfolioManager, create_quote_client_from_settings
+
+                # 잔고 동기화는 PortfolioManager.sync_balance() 내부에서 KIS+키움을 모두 합산한다.
+                # 시세 조회는 broker 무관 데이터라 client 1개(KIS 우선, 없으면 키움)만 있으면 된다.
+                manager = PortfolioManager(db, create_quote_client_from_settings())
+                sync_result = manager.sync_all(alert_threshold=settings.alert_threshold)
+                logger.info("✅ 잔고 동기화: %s", sync_result["sync"])
+            except Exception as e:
+                logger.warning("⚠️ 잔고 동기화 실패 (pykrx 결과 유지): %s", e)
+
         if settings.kis_is_configured():
             try:
-                from core.kis_client import create_kis_client_from_settings
-                from core.portfolio import PortfolioManager
+                from core.portfolio import sync_trade_history
 
-                kis = create_kis_client_from_settings()
-                manager = PortfolioManager(db, kis)
-                sync_result = manager.sync_all(alert_threshold=settings.alert_threshold)
-                logger.info("✅ KIS 잔고 동기화: %s", sync_result["sync"])
+                # 휴장일·정산 지연을 감안해 최근 5일을 매번 다시 조회 (external_id로 중복 스킵됨)
+                trade_result = sync_trade_history(db, date.today() - timedelta(days=5), date.today())
+                logger.info("✅ 체결내역 동기화: 신규 %s건 (기존 %s건)", trade_result["added"], trade_result["skipped"])
             except Exception as e:
-                logger.warning("⚠️ KIS 동기화 실패 (pykrx 결과 유지): %s", e)
+                logger.warning("⚠️ 체결내역 동기화 실패: %s", e)
 
         save_daily_snapshot(db)
         logger.info("✅ 국내 장 마감 동기화 완료")
@@ -390,6 +400,10 @@ def create_scheduler() -> AsyncIOScheduler:
     from scheduler.knowledge_jobs import register_knowledge_jobs
 
     register_knowledge_jobs(scheduler)
+
+    from scheduler.etf_jobs import register_etf_jobs
+
+    register_etf_jobs(scheduler)
 
     logger.info("✅ 스케줄러 작업 등록 완료")
     for job in scheduler.get_jobs():

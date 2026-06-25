@@ -23,6 +23,8 @@ import {
   type HighlightColor,
 } from "@/lib/highlightColors";
 import { renderAnalysisText, type SnippetMark } from "@/lib/renderAnalysisText";
+import { AddToGroupPopover } from "@/components/add-to-group-popover";
+import { AddToWatchlistButton } from "@/components/add-to-watchlist-button";
 import { studyApi } from "@/lib/studyApi";
 import { useListenPanel } from "@/lib/useListenPanel";
 import { ListenExperience } from "@/components/audio-listen/ListenExperience";
@@ -692,8 +694,14 @@ export function IntelDetailPanel({
                 {data.stock_issues!.map((iss, i) => (
                   <div key={i} className="flex gap-2">
                     <SentDot s={iss.sentiment} />
-                    <div>
-                      <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">{iss.name}</span>
+                    <div className="min-w-0 flex-1">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">{iss.name}</span>
+                        {(iss.symbol || iss.name) && (
+                          <AddToGroupPopover symbol={iss.symbol ?? undefined} stockName={iss.symbol ? undefined : iss.name ?? undefined} compact />
+                        )}
+                        {iss.name && <AddToWatchlistButton symbol={iss.symbol ?? undefined} stockName={iss.name} compact />}
+                      </span>
                       <p className="text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap">
                         {iss.issue_summary}
                       </p>
@@ -721,9 +729,11 @@ export function IntelDetailPanel({
               {data.mentioned_stocks?.map((st) => (
                 <span
                   key={st}
-                  className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[10px] text-neutral-600 dark:text-neutral-400"
+                  className="inline-flex items-center gap-0.5 rounded-full border border-[var(--border-subtle)] pl-2 pr-0.5 py-0.5 text-[10px] text-neutral-600 dark:text-neutral-400"
                 >
                   {st}
+                  <AddToGroupPopover stockName={st} compact />
+                  <AddToWatchlistButton stockName={st} compact />
                 </span>
               ))}
               {data.keywords?.map((kw) => (

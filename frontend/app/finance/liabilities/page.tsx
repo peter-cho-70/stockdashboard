@@ -1,20 +1,23 @@
 'use client';
 
 import { useFinanceStore } from '@/lib/finance/store/finance-store';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { LiabilityType, Liability } from '@/lib/finance/types';
-import { Plus, CreditCard, Percent, Trash2, Pencil, X, AlertTriangle } from 'lucide-react';
+import { Plus, CreditCard, Percent, Trash2, Pencil, X, AlertTriangle, TrendingUp } from 'lucide-react';
+import { LeverageAnalysisPanel } from '@/components/finance/leverage-analysis-panel';
 
 export default function LiabilitiesPage() {
   const store = useFinanceStore();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     lender: '',
     principal: '',
     interestRate: '',
     lenderType: 'credit_line' as LiabilityType,
+    startDate: '',
   });
 
 
@@ -26,15 +29,15 @@ export default function LiabilitiesPage() {
     const monthlyInterest = Math.round((principal * (rate / 100)) / 12);
 
     if (editingId) {
-      store.updateLiability(editingId, { name: formData.name, lender: formData.lender, principal, interestRate: rate, monthlyInterest, lenderType: formData.lenderType });
+      store.updateLiability(editingId, { name: formData.name, lender: formData.lender, principal, interestRate: rate, monthlyInterest, lenderType: formData.lenderType, startDate: formData.startDate || null });
     } else {
-      store.addLiability({ id: crypto.randomUUID(), name: formData.name, lender: formData.lender, principal, interestRate: rate, monthlyInterest, lenderType: formData.lenderType, source: 'manual', maturityDate: null });
+      store.addLiability({ id: crypto.randomUUID(), name: formData.name, lender: formData.lender, principal, interestRate: rate, monthlyInterest, lenderType: formData.lenderType, source: 'manual', maturityDate: null, startDate: formData.startDate || null });
     }
     resetForm();
   };
 
   const handleEdit = (l: Liability) => {
-    setFormData({ name: l.name, lender: l.lender, principal: l.principal.toString(), interestRate: l.interestRate.toString(), lenderType: l.lenderType });
+    setFormData({ name: l.name, lender: l.lender, principal: l.principal.toString(), interestRate: l.interestRate.toString(), lenderType: l.lenderType, startDate: l.startDate || '' });
     setEditingId(l.id);
     setIsFormOpen(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -44,11 +47,12 @@ export default function LiabilitiesPage() {
     if (confirm('이 부채 항목을 삭제하시겠습니까?')) {
       store.deleteLiability(id);
       if (editingId === id) resetForm();
+      if (expandedId === id) setExpandedId(null);
     }
   };
 
   const resetForm = () => {
-    setFormData({ name: '', lender: '', principal: '', interestRate: '', lenderType: 'credit_line' });
+    setFormData({ name: '', lender: '', principal: '', interestRate: '', lenderType: 'credit_line', startDate: '' });
     setEditingId(null);
     setIsFormOpen(false);
   };
@@ -125,6 +129,10 @@ export default function LiabilitiesPage() {
                 <label className="text-xs font-medium text-gray-600">금리 (%)</label>
                 <input type="number" step="0.01" required className="w-full bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg text-sm text-gray-900 outline-none focus:border-rose-400 focus:bg-white transition-colors" placeholder="0.00" value={formData.interestRate} onChange={e => setFormData({ ...formData, interestRate: e.target.value })} />
               </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-600">대출 실행일</label>
+                <input type="date" className="w-full bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg text-sm text-gray-900 outline-none focus:border-rose-400 focus:bg-white transition-colors" value={formData.startDate} onChange={e => setFormData({ ...formData, startDate: e.target.value })} />
+              </div>
               <div className="flex items-end">
                 <button type="submit" className="w-full bg-rose-500 text-white px-4 py-2 rounded-lg text-xs font-semibold hover:bg-rose-600 transition-colors">
                   {editingId ? '수정 저장' : '저장'}
@@ -161,26 +169,47 @@ export default function LiabilitiesPage() {
               <tr><td colSpan={6} className="px-6 py-8 text-center text-xs text-gray-400">등록된 부채가 없습니다.</td></tr>
             ) : (
               store.liabilities.map((liability) => (
-                <tr key={liability.id} className="group hover:bg-gray-50 transition-colors">
-                  <td className="px-6 py-3.5">
-                    <p className="text-gray-800 font-medium">{liability.name}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{lenderTypeLabel(liability.lenderType)}</p>
-                  </td>
-                  <td className="px-6 py-3.5 text-gray-600">{liability.lender}</td>
-                  <td className="px-6 py-3.5 text-right">
-                    <div className="flex items-center justify-end gap-1 text-rose-500 font-semibold">
-                      <Percent size={12} />{liability.interestRate}%
-                    </div>
-                  </td>
-                  <td className="px-6 py-3.5 text-right text-gray-600 tabular-nums">{formatKRW(liability.monthlyInterest)}</td>
-                  <td className="px-6 py-3.5 text-right font-semibold text-rose-500 tabular-nums">{formatKRW(liability.principal)}</td>
-                  <td className="px-4 py-3.5">
-                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => handleEdit(liability)} className="p-1 text-gray-400 hover:text-blue-500 transition-colors"><Pencil size={14} /></button>
-                      <button onClick={() => handleDelete(liability.id)} className="p-1 text-gray-400 hover:text-rose-500 transition-colors"><Trash2 size={14} /></button>
-                    </div>
-                  </td>
-                </tr>
+                <Fragment key={liability.id}>
+                  <tr className="group hover:bg-gray-50 transition-colors">
+                    <td className="px-6 py-3.5">
+                      <p className="text-gray-800 font-medium">{liability.name}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{lenderTypeLabel(liability.lenderType)}</p>
+                    </td>
+                    <td className="px-6 py-3.5 text-gray-600">{liability.lender}</td>
+                    <td className="px-6 py-3.5 text-right">
+                      <div className="flex items-center justify-end gap-1 text-rose-500 font-semibold">
+                        <Percent size={12} />{liability.interestRate}%
+                      </div>
+                    </td>
+                    <td className="px-6 py-3.5 text-right text-gray-600 tabular-nums">{formatKRW(liability.monthlyInterest)}</td>
+                    <td className="px-6 py-3.5 text-right font-semibold text-rose-500 tabular-nums">{formatKRW(liability.principal)}</td>
+                    <td className="px-4 py-3.5">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => setExpandedId(expandedId === liability.id ? null : liability.id)}
+                          disabled={!liability.startDate}
+                          title={liability.startDate ? '레버리지 투자 성과 보기' : '대출 실행일을 등록하면 분석할 수 있습니다'}
+                          className={`p-1 transition-colors ${expandedId === liability.id ? 'text-emerald-600' : 'text-gray-400 hover:text-emerald-500'} disabled:opacity-30 disabled:hover:text-gray-400`}
+                        >
+                          <TrendingUp size={14} />
+                        </button>
+                        <button onClick={() => handleEdit(liability)} className="p-1 text-gray-400 hover:text-blue-500 transition-colors opacity-0 group-hover:opacity-100"><Pencil size={14} /></button>
+                        <button onClick={() => handleDelete(liability.id)} className="p-1 text-gray-400 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100"><Trash2 size={14} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                  {expandedId === liability.id && liability.startDate && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-4 bg-gray-50">
+                        <LeverageAnalysisPanel
+                          startDate={liability.startDate}
+                          principal={liability.principal}
+                          annualRate={liability.interestRate}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))
             )}
           </tbody>

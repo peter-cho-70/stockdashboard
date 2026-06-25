@@ -54,14 +54,14 @@ def cron_domestic_market_close(
 
     settings = gs()
     result = update_prices_from_krx(db, alert_threshold=settings.alert_threshold)
-    if settings.kis_is_configured():
+    if settings.kis_is_configured() or settings.kiwoom_is_configured():
         try:
-            from core.kis_client import create_kis_client_from_settings
-            from core.portfolio import PortfolioManager
+            from core.portfolio import PortfolioManager, create_quote_client_from_settings
 
-            kis = create_kis_client_from_settings()
-            PortfolioManager(db, kis).sync_all(alert_threshold=settings.alert_threshold)
+            PortfolioManager(db, create_quote_client_from_settings()).sync_all(
+                alert_threshold=settings.alert_threshold
+            )
         except Exception as e:
-            logger.warning("Cron KIS sync failed: %s", e)
+            logger.warning("Cron 잔고 동기화 실패: %s", e)
     save_daily_snapshot(db)
     return {"ok": True, "updated": result.get("updated"), "alerts": len(result.get("alerts") or [])}
