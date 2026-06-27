@@ -22,6 +22,19 @@ from core.signal_extractor import extract_signals
 
 logger = logging.getLogger(__name__)
 
+
+def _naver_blog_to_mobile(url: str) -> str:
+    """네이버 블로그 PC URL을 모바일 URL로 변환.
+
+    PC URL(blog.naver.com)은 JS frameset이라 본문이 iframe 안에만 있어 크롤링 불가.
+    모바일 URL(m.blog.naver.com)은 정적 HTML로 본문을 직접 제공한다.
+    """
+    m = re.match(r"https?://blog\.naver\.com/([^/?#]+)/(\d+)", url)
+    if m:
+        return f"https://m.blog.naver.com/{m.group(1)}/{m.group(2)}"
+    return url
+
+
 MAX_RETRIES = 1
 RETRY_DELAY = 45
 
@@ -967,9 +980,19 @@ class AIAnalyzer:
     def _fetch_article(self, url: str) -> Optional[str]:
         self._log("info", "🌐 기사 다운로드...")
         try:
+            # 네이버 블로그 PC URL은 JS frameset → 모바일 URL로 변환해야 본문 추출 가능
+            fetch_url = _naver_blog_to_mobile(url)
+            if fetch_url != url:
+                self._log("info", "📱 네이버 블로그 → 모바일 URL 변환")
+
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            resp = httpx.get(url, headers=headers, timeout=15, follow_redirects=True)
+            resp = httpx.get(fetch_url, headers=headers, timeout=15, follow_redirects=True)
             resp.raise_for_status()
+
+            final_url = str(resp.url)
+            if final_url != fetch_url:
+                self._log("info", f"↪ 최종 URL: {final_url}")
+
             try:
                 from bs4 import BeautifulSoup
                 soup = BeautifulSoup(resp.text, "html.parser")

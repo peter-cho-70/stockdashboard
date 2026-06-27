@@ -8,6 +8,7 @@ import {
   Wallet,
   CreditCard,
   TrendingUp,
+  BarChart2,
   Calendar,
   Settings,
 } from "lucide-react";
@@ -21,6 +22,7 @@ const tabs = [
   { href: "/finance/assets", label: "자산", icon: Wallet },
   { href: "/finance/liabilities", label: "부채", icon: CreditCard },
   { href: "/finance/cashflow", label: "현금흐름", icon: TrendingUp },
+  { href: "/finance/charts", label: "차트", icon: BarChart2 },
   { href: "/finance/funding", label: "자금 계획", icon: Calendar },
   { href: "/finance/settings", label: "설정", icon: Settings },
 ];

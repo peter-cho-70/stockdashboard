@@ -393,6 +393,17 @@ export default function GroupsPage() {
   }, []);
 
   useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const syncKey = "group-price-synced";
+    const lastSynced = localStorage.getItem(syncKey);
+    if (lastSynced !== today) {
+      groupsApi.syncPrices()
+        .then((r) => {
+          localStorage.setItem(syncKey, today);
+          if (r.updated > 0) load();
+        })
+        .catch(() => {});
+    }
     load();
   }, [load]);
 

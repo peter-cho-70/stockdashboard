@@ -282,6 +282,7 @@ def build_holdings_analysis(
         "research_reports": basics.get("research_reports") or [],
         "corporation_summary": basics.get("corporation_summary") or {},
         "overview": basics.get("overview"),
+        "business_profile": basics.get("business_profile"),
         "news": basics.get("news") or [],
         "daily_issues": daily_issues[-10:],
         "weekly_issues": weekly_issues[-6:],

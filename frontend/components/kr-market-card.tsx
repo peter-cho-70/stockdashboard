@@ -386,7 +386,7 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
                         symbol: item.symbol,
                         name: item.name,
                         close: item.close,
-                        change_pct: 0,
+                        change_pct: item.change_pct ?? 0,
                       })
                     }
                     className="shrink-0 rounded-md border border-[var(--border-subtle)] px-3 py-2 min-w-[120px] text-left hover:bg-[var(--surface-elevated)]"
@@ -396,6 +396,11 @@ export function KrMarketCard({ marketToggle }: { marketToggle?: ReactNode }) {
                     {item.close != null && (
                       <p className="text-[11px] tabular-nums text-neutral-600 dark:text-neutral-300">
                         {item.close.toLocaleString("ko-KR")}
+                      </p>
+                    )}
+                    {item.change_pct != null && (
+                      <p className={`text-[11px] font-medium tabular-nums ${krChangeClass(item.change_pct)}`}>
+                        {item.change_pct >= 0 ? "+" : ""}{item.change_pct.toFixed(2)}%
                       </p>
                     )}
                   </button>

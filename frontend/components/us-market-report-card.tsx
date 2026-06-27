@@ -152,12 +152,39 @@ function formatClose(item: UsMarketQuote): string {
     if (item.name.includes("원")) return `${v.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원`;
     if (item.name.includes("엔")) return `¥${v.toFixed(2)}`;
     if (item.name.includes("위안")) return `¥${v.toFixed(4)}`;
+    // 교차환율 (한화 표기)
+    if (item.name.includes("한화")) return `${v.toLocaleString("ko-KR", { maximumFractionDigits: 1 })}원`;
     return v.toFixed(2);
   }
   if (item.unit === "price" || item.unit === "stock" || item.unit === "futures") {
     return `$${v.toFixed(2)}`;
   }
   return v.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+/** 위안/엔 → 한화 교차환율 아이템 생성 */
+function buildFxCrossRates(fxItems: UsMarketQuote[]): UsMarketQuote[] {
+  const krw = fxItems.find((i) => i.name.includes("원") && !i.name.includes("한화"))?.close;
+  const cny = fxItems.find((i) => i.name.includes("위안"))?.close;
+  const jpy = fxItems.find((i) => i.name.includes("엔"))?.close;
+  const extra: UsMarketQuote[] = [];
+  if (krw && cny && cny > 0) {
+    extra.push({
+      name: "위안화(한화)",
+      ticker: "CNY_KRW",
+      unit: "fx",
+      close: krw / cny,
+    });
+  }
+  if (krw && jpy && jpy > 0) {
+    extra.push({
+      name: "100엔(한화)",
+      ticker: "JPY_KRW",
+      unit: "fx",
+      close: (krw / jpy) * 100,
+    });
+  }
+  return extra;
 }
 
 function ChangePct({ value }: { value?: number }) {
@@ -369,7 +396,7 @@ function SnapshotSections({
       {(snapshot.commodity.length > 0 || snapshot.fx.length > 0) && (
         <section>
           <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">유가 · 환율</h3>
-          <QuoteGrid items={[...snapshot.commodity, ...snapshot.fx]} />
+          <QuoteGrid items={[...snapshot.commodity, ...snapshot.fx, ...buildFxCrossRates(snapshot.fx)]} />
           {snapshot.commodity.length > 0 && (
             <InterpretationBlock
               topic="commodity"

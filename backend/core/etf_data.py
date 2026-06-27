@@ -47,11 +47,13 @@ _RANKINGS_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _HOLDINGS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _REVERSE_INDEX: dict[str, Any] = {"built_at": 0.0, "by_symbol": {}}
 _LISTING_DATE_CACHE: dict[str, tuple[float, str | None]] = {}
+_BASIC_STATS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 RANKINGS_TTL_SEC = 5 * 60
 HOLDINGS_TTL_SEC = 6 * 60 * 60
 REVERSE_INDEX_TTL_SEC = 6 * 60 * 60
 LISTING_DATE_TTL_SEC = 24 * 60 * 60
+BASIC_STATS_TTL_SEC = 5 * 60
 
 
 def _fetch_rankings_raw(category: int, sort: str, order: str) -> list[dict[str, Any]]:
@@ -153,6 +155,48 @@ def fetch_etf_rankings(
         raise
     _RANKINGS_CACHE[cache_key] = (now, items)
     return items[:limit]
+
+
+def _fetch_basic_stats_single(code: str) -> dict[str, Any]:
+    """네이버 ETF basic API에서 시가총액·3개월수익률 조회."""
+    now = time.time()
+    cached = _BASIC_STATS_CACHE.get(code)
+    if cached and now - cached[0] < BASIC_STATS_TTL_SEC:
+        return cached[1]
+    result: dict[str, Any] = {"code": code, "market_cap": None, "return_3m": None}
+    try:
+        basic = httpx.get(
+            f"https://m.stock.naver.com/api/etf/{code}/basic",
+            headers={"User-Agent": UA},
+            timeout=8,
+        ).json()
+        # "2,127억" or "4조 4,933억" → 숫자(억 단위)
+        mv_raw = (basic.get("marketValue") or "").replace(",", "").strip()
+        if "조" in mv_raw:
+            parts = mv_raw.replace("억", "").split("조")
+            jo = float(parts[0].strip()) if parts[0].strip() else 0
+            eok = float(parts[1].strip()) if len(parts) > 1 and parts[1].strip() else 0
+            result["market_cap"] = jo * 10000 + eok
+        else:
+            mv_str = mv_raw.replace("억", "").strip()
+            result["market_cap"] = float(mv_str) if mv_str else None
+        r3m = basic.get("returnRate3m")
+        result["return_3m"] = float(r3m) if r3m is not None else None
+    except Exception as e:
+        logger.debug("ETF basic stats 조회 실패 (%s): %s", code, e)
+    _BASIC_STATS_CACHE[code] = (now, result)
+    return result
+
+
+def fetch_etf_basic_stats(codes: list[str]) -> dict[str, dict[str, Any]]:
+    """여러 ETF의 시가총액·3개월수익률을 병렬 조회."""
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {executor.submit(_fetch_basic_stats_single, c): c for c in codes}
+        result = {}
+        for future in as_completed(futures):
+            data = future.result()
+            result[data["code"]] = data
+    return result
 
 
 def fetch_etf_holdings(code: str) -> dict[str, Any]:

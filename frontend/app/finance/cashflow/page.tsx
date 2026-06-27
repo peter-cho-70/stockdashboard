@@ -3,7 +3,6 @@
 import { useFinanceStore } from '@/lib/finance/store/finance-store';
 import { useLedgerStore } from '@/lib/finance/store/ledger-store';
 import { coverageStatusLabel } from '@/lib/finance/payment-coverage';
-import { MonthlyCashflowAnalysis } from '@/components/finance/cashflow/monthly-cashflow-analysis';
 import { useState } from 'react';
 import { Plus, TrendingUp, TrendingDown, User, CreditCard, Zap, Trash2, Calendar, Pencil, X, Wallet, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { IncomeType, ExpenseCategory, Income, FixedExpense } from '@/lib/finance/types';
@@ -127,7 +126,7 @@ export default function CashflowPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">현금흐름</h1>
-          <p className="text-gray-400 text-sm mt-0.5">월별 수입 및 고정 지출 현황</p>
+          <p className="text-gray-400 text-sm mt-0.5">월별 수입 현황 및 통장 잔액 확인</p>
         </div>
       </div>
 
@@ -143,7 +142,7 @@ export default function CashflowPage() {
         <div className="bg-white rounded-xl border border-gray-200 px-5 py-4 shadow-sm">
           <div className="flex items-center gap-2 mb-2">
             <TrendingDown size={14} className="text-rose-500" />
-            <p className="text-xs text-gray-500 font-medium">월 고정 지출</p>
+            <p className="text-xs text-gray-500 font-medium">월 결제 예정</p>
           </div>
           <p className="text-xl font-bold text-rose-500 tabular-nums">{formatKRW(monthlyExpense)}</p>
         </div>
@@ -276,44 +275,7 @@ export default function CashflowPage() {
         </div>
       )}
 
-      {/* 카드사별 결제 현황 + AI 의견 */}
-      <MonthlyCashflowAnalysis />
 
-      {/* Payment coverage summary */}
-      {paymentCoverage.payments.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-          <div className="flex items-center gap-2 mb-3">
-            <Wallet size={14} className="text-emerald-600" />
-            <h3 className="text-sm font-semibold text-gray-900">결제 계좌 잔액 확인</h3>
-            <span className="text-xs text-gray-400">45일 이내</span>
-          </div>
-          {paymentCoverage.accounts.length === 0 ? (
-            <p className="text-xs text-gray-500">출금 계좌가 지정된 결제가 없습니다. 지출 등록 시 결제 계좌를 선택하세요.</p>
-          ) : (
-            <div className="space-y-2">
-              {paymentCoverage.accounts.map((acct) => (
-                <div key={acct.accountId} className={`flex items-center justify-between rounded-lg border px-3 py-2 text-xs ${statusBadgeClass(acct.status)}`}>
-                  <div>
-                    <p className="font-medium">{acct.accountName}</p>
-                    <p className="opacity-80 mt-0.5">
-                      잔액 {formatKRW(acct.balance)} · 예정 {formatKRW(acct.upcomingTotal)}
-                      {acct.shortfall > 0 && ` · 부족 ${formatKRW(acct.shortfall)}`}
-                    </p>
-                  </div>
-                  <span className="font-semibold shrink-0">{coverageStatusLabel(acct.status)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {paymentCoverage.shortfallCount > 0 && (
-            <p className="mt-3 text-xs text-rose-600 flex items-center gap-1">
-              <AlertTriangle size={12} />
-              잔액 부족 결제 {paymentCoverage.shortfallCount}건
-              {paymentCoverage.urgentShortfallCount > 0 && ` (7일 이내 ${paymentCoverage.urgentShortfallCount}건)`}
-            </p>
-          )}
-        </div>
-      )}
 
       {/* Content grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -368,11 +330,11 @@ export default function CashflowPage() {
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-1.5 bg-gray-100 border border-gray-200 rounded-lg">
-                <CreditCard className="text-rose-500" size={14} />
+                <Wallet className="text-rose-500" size={14} />
               </div>
               <div>
-                <h3 className="text-sm font-semibold text-gray-900">고정 지출</h3>
-                <p className="text-gray-400 text-xs mt-0.5">카드·이자·공과금 등</p>
+                <h3 className="text-sm font-semibold text-gray-900">통장 확인</h3>
+                <p className="text-gray-400 text-xs mt-0.5">결제일 기준 통장 잔액 체크</p>
               </div>
             </div>
             {!isExpenseFormOpen && (
@@ -381,11 +343,42 @@ export default function CashflowPage() {
               </button>
             )}
           </div>
+
+          {/* 계좌 잔액 요약 */}
+          {paymentCoverage.accounts.length > 0 && (
+            <div className="px-4 py-3 border-b border-gray-100 space-y-1.5 bg-gray-50">
+              {paymentCoverage.accounts.map((acct) => (
+                <div key={acct.accountId} className={`flex items-center justify-between rounded-lg border px-3 py-2 text-xs ${statusBadgeClass(acct.status)}`}>
+                  <div>
+                    <p className="font-medium">{acct.accountName}</p>
+                    <p className="opacity-80 mt-0.5">
+                      잔액 {formatKRW(acct.balance)} · 예정 {formatKRW(acct.upcomingTotal)}
+                      {acct.shortfall > 0 && <span className="font-semibold"> · 부족 {formatKRW(acct.shortfall)}</span>}
+                    </p>
+                  </div>
+                  <span className="font-semibold shrink-0 flex items-center gap-1">
+                    {acct.status === 'ok' ? <CheckCircle2 size={11} /> : acct.status === 'shortfall' ? <AlertTriangle size={11} /> : null}
+                    {coverageStatusLabel(acct.status)}
+                  </span>
+                </div>
+              ))}
+              {paymentCoverage.shortfallCount > 0 && (
+                <p className="text-[11px] text-rose-600 flex items-center gap-1 pt-0.5">
+                  <AlertTriangle size={11} />
+                  잔액 부족 {paymentCoverage.shortfallCount}건
+                  {paymentCoverage.urgentShortfallCount > 0 && ` · 7일 이내 ${paymentCoverage.urgentShortfallCount}건`}
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="divide-y divide-gray-100">
             {store.fixedExpenses.length === 0 ? (
-              <div className="px-5 py-6 text-center text-xs text-gray-400">등록된 지출 항목이 없습니다.</div>
+              <div className="px-5 py-6 text-center text-xs text-gray-400">등록된 결제 항목이 없습니다.</div>
             ) : (
-              store.fixedExpenses.map((expense) => {
+              [...store.fixedExpenses]
+              .sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime())
+              .map((expense) => {
                 const check = paymentCheckById.get(expense.id);
                 const acct = accountName(expense.paymentAccountId);
                 return (
@@ -423,7 +416,7 @@ export default function CashflowPage() {
             )}
           </div>
           <div className="px-5 py-3 border-t border-gray-100 flex justify-between">
-            <span className="text-xs text-gray-400">월 합계</span>
+            <span className="text-xs text-gray-400">결제 예정 합계</span>
             <span className="text-xs font-semibold text-rose-500 tabular-nums">{formatKRW(monthlyExpense)}</span>
           </div>
         </section>

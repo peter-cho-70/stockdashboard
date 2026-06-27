@@ -503,13 +503,21 @@ export default function EtfPage() {
   const [error, setError] = useState("");
 
   const [ownedCodes, setOwnedCodes] = useState<Set<string>>(new Set());
+  const [ownedQty, setOwnedQty] = useState<Record<string, number>>({});
+  const [myHoldings, setMyHoldings] = useState<{ code: string; name: string; qty: number; avg_price: number; current_price: number; change_rate: number; market_cap: number | null; return_3m: number | null }[]>([]);
   const [favoriteCodes, setFavoriteCodes] = useState<Set<string>>(new Set());
   const [listingDates, setListingDates] = useState<Record<string, string | null>>({});
   const scrollRestored = useRef(false);
 
   useEffect(() => {
     etfApi.getCategories().then(setMeta).catch(() => {});
-    etfApi.getMyHoldings().then((r) => setOwnedCodes(new Set(r.codes))).catch(() => {});
+    etfApi.getMyHoldings().then((r) => {
+      setOwnedCodes(new Set(r.codes));
+      const qtyMap: Record<string, number> = {};
+      for (const h of r.holdings ?? []) qtyMap[h.code] = h.qty;
+      setOwnedQty(qtyMap);
+      setMyHoldings(r.holdings ?? []);
+    }).catch(() => {});
     etfApi.getFavorites().then((r) => setFavoriteCodes(new Set(r.codes))).catch(() => {});
   }, []);
 
@@ -517,7 +525,7 @@ export default function EtfPage() {
     setLoading(true);
     setError("");
     try {
-      const res = await etfApi.getRankings({ category, sort, order, limit: 50 });
+      const res = await etfApi.getRankings({ category, sort, order, limit: 100 });
       setItems(res.items);
     } catch (e) {
       setError(e instanceof Error ? e.message : "ETF 랭킹을 불러오지 못했습니다.");
@@ -573,8 +581,26 @@ export default function EtfPage() {
   }
 
   // 보유 → 즐겨찾기(비보유) → 나머지 순서로 정렬
+  // 랭킹에 없는 보유 종목도 상단에 포함
   const sortedItems = useMemo(() => {
-    const owned: EtfRankingItem[] = [];
+    const itemCodes = new Set(items.map((it) => it.code));
+    const missingOwned: EtfRankingItem[] = myHoldings
+      .filter((h) => !itemCodes.has(h.code))
+      .map((h) => ({
+        code: h.code,
+        name: h.name,
+        category: 0,
+        current_price: h.current_price || null,
+        change_value: null,
+        change_rate: h.change_rate || null,
+        nav: null,
+        return_3m: h.return_3m ?? null,
+        volume: null,
+        trading_value: null,
+        market_cap: h.market_cap ?? null,
+        listing_date: null,
+      }));
+    const owned: EtfRankingItem[] = [...missingOwned];
     const favOnly: EtfRankingItem[] = [];
     const rest: EtfRankingItem[] = [];
     for (const it of items) {
@@ -583,7 +609,7 @@ export default function EtfPage() {
       else rest.push(it);
     }
     return [...owned, ...favOnly, ...rest];
-  }, [items, favoriteCodes, ownedCodes]);
+  }, [items, favoriteCodes, ownedCodes, myHoldings]);
 
   const ownedCount = useMemo(
     () => sortedItems.filter((it) => ownedCodes.has(it.code)).length,
@@ -621,6 +647,78 @@ export default function EtfPage() {
       </div>
 
       <div className="space-y-3">
+        {/* 내 보유 ETF */}
+        {myHoldings.length > 0 && (
+          <div className="rounded-lg border border-violet-200 bg-violet-50/50 dark:border-violet-800/50 dark:bg-violet-950/20">
+            <div className="flex items-center gap-2 border-b border-violet-200 px-4 py-2.5 dark:border-violet-800/50">
+              <Pin size={13} className="text-violet-500" />
+              <span className="text-sm font-semibold text-violet-800 dark:text-violet-300">
+                내 보유 ETF ({myHoldings.length}종목)
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-neutral-400">
+                    <th className="px-4 py-2 font-medium">종목</th>
+                    <th className="px-4 py-2 text-right font-medium">보유수량</th>
+                    <th className="px-4 py-2 text-right font-medium">평균단가</th>
+                    <th className="px-4 py-2 text-right font-medium">현재가</th>
+                    <th className="px-4 py-2 text-right font-medium">등락률</th>
+                    <th className="px-4 py-2 text-right font-medium">3개월수익률</th>
+                    <th className="px-4 py-2 text-right font-medium">시가총액</th>
+                    <th className="px-4 py-2 text-right font-medium">평가손익</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {myHoldings.map((h) => {
+                    const pnl = (h.current_price - h.avg_price) * h.qty;
+                    const pnlRate = h.avg_price > 0 ? ((h.current_price - h.avg_price) / h.avg_price) * 100 : 0;
+                    const pnlCls = pnl > 0 ? "text-red-600 dark:text-red-400" : pnl < 0 ? "text-blue-600 dark:text-blue-400" : "text-neutral-400";
+                    return (
+                      <tr
+                        key={h.code}
+                        onClick={() => { sessionStorage.setItem("etf-scroll", String(window.scrollY)); router.push(`/etf/${h.code}`); }}
+                        className="cursor-pointer border-t border-violet-100 transition-colors hover:bg-violet-100/60 dark:border-violet-800/30 dark:hover:bg-violet-900/20"
+                      >
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-medium text-violet-900 dark:text-violet-100">{h.name}</span>
+                            <span className="text-[10px] text-neutral-400">{h.code}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-violet-700 dark:text-violet-300">
+                          {h.qty.toLocaleString("ko-KR")}주
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-neutral-500 dark:text-neutral-400">
+                          {h.avg_price > 0 ? Math.round(h.avg_price).toLocaleString("ko-KR") : "—"}
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-neutral-700 dark:text-neutral-300">
+                          {h.current_price > 0 ? h.current_price.toLocaleString("ko-KR") : "—"}
+                        </td>
+                        <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${krChangeClass(h.change_rate)}`}>
+                          {h.change_rate !== 0 ? `${h.change_rate > 0 ? "+" : ""}${h.change_rate.toFixed(2)}%` : "—"}
+                        </td>
+                        <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${h.return_3m != null ? krChangeClass(h.return_3m) : "text-neutral-400"}`}>
+                          {h.return_3m != null ? `${h.return_3m > 0 ? "+" : ""}${h.return_3m.toFixed(2)}%` : "—"}
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-neutral-600 dark:text-neutral-400">
+                          {h.market_cap != null ? `${h.market_cap.toLocaleString("ko-KR")}억` : "—"}
+                        </td>
+                        <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${pnlCls}`}>
+                          {h.avg_price > 0 && h.current_price > 0
+                            ? `${pnl > 0 ? "+" : ""}${Math.round(pnl).toLocaleString("ko-KR")} (${pnlRate > 0 ? "+" : ""}${pnlRate.toFixed(2)}%)`
+                            : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* 카테고리 필터 */}
         <div className="flex flex-wrap items-center gap-1.5">
           <ListFilter size={13} className="text-neutral-400" />
@@ -706,6 +804,7 @@ export default function EtfPage() {
                 sortedItems.map((it, idx) => {
                   const isFavorite = favoriteCodes.has(it.code);
                   const owned = ownedCodes.has(it.code);
+                  const qty = owned ? (ownedQty[it.code] ?? 0) : 0;
                   const listingDate = listingDates[it.code] ?? it.listing_date;
                   const isNew = isNewEtf(listingDate);
 
@@ -787,7 +886,7 @@ export default function EtfPage() {
                             </span>
                             {owned && (
                               <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-900/50 dark:text-violet-300">
-                                보유
+                                보유 {qty.toLocaleString("ko-KR")}주
                               </span>
                             )}
                             {isNew && (

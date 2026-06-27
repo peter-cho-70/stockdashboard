@@ -13,6 +13,7 @@ from config.settings import get_settings
 from core.etf_data import (
     ETF_CATEGORIES,
     SORT_COLUMNS,
+    fetch_etf_basic_stats,
     fetch_etf_holdings,
     fetch_etf_listing_dates,
     fetch_etf_rankings,
@@ -75,11 +76,45 @@ def api_toggle_favorite(body: EtfFavoriteBody, db: Session = Depends(get_db)):
     return {"code": body.code, "favorited": True}
 
 
+_ETF_PREFIXES = (
+    "KODEX", "TIGER", "PLUS", "RISE", "ACE", "SOL", "HANARO",
+    "ARIRANG", "KBSTAR", "KoAct", "FOCUS", "파워", "히어로즈", "마이다스",
+)
+
+def _is_etf(name: str, sector: str | None) -> bool:
+    if sector == "ETF":
+        return True
+    return any(name.startswith(p) for p in _ETF_PREFIXES)
+
+
 @etf_router.get("/my-holdings")
 def api_etf_my_holdings(db: Session = Depends(get_db)):
-    """포트폴리오에서 보유 중(qty > 0)인 종목 코드 목록 반환 — ETF 랭킹과 교차해 보유 여부 표시용"""
-    rows = db.query(Stock.symbol).filter(Stock.qty > 0).all()
-    return {"codes": [r.symbol for r in rows]}
+    """포트폴리오에서 보유 중(qty > 0)인 ETF 코드 + 수량 + 가격 + 시가총액 + 3개월수익률 반환"""
+    rows = db.query(
+        Stock.symbol, Stock.name, Stock.qty,
+        Stock.avg_price, Stock.current_price, Stock.change_rate,
+        Stock.sector,
+    ).filter(Stock.qty > 0).all()
+    etf_rows = [r for r in rows if _is_etf(r.name, r.sector)]
+
+    # 시가총액·3개월수익률을 네이버 API에서 병렬 조회
+    codes = [r.symbol for r in etf_rows]
+    stats = fetch_etf_basic_stats(codes) if codes else {}
+
+    holdings = [
+        {
+            "code": r.symbol,
+            "name": r.name,
+            "qty": r.qty,
+            "avg_price": r.avg_price or 0,
+            "current_price": r.current_price or 0,
+            "change_rate": r.change_rate or 0,
+            "market_cap": stats.get(r.symbol, {}).get("market_cap"),
+            "return_3m": stats.get(r.symbol, {}).get("return_3m"),
+        }
+        for r in etf_rows
+    ]
+    return {"codes": [h["code"] for h in holdings], "holdings": holdings}
 
 
 @etf_router.get("/{code}/memo")

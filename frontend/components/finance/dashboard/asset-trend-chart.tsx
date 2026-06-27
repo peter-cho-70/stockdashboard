@@ -55,17 +55,32 @@ export function AssetTrendChart() {
         ) : (
           <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+              <LineChart data={chartData} margin={{ top: 5, right: 56, left: -10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                 <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                <YAxis tickFormatter={formatCompact} tick={{ fontSize: 11, fill: '#9ca3af' }} width={56} />
+                <YAxis
+                  yAxisId="total"
+                  orientation="left"
+                  tickFormatter={formatCompact}
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  width={56}
+                  domain={['auto', 'auto']}
+                />
+                <YAxis
+                  yAxisId="liquid"
+                  orientation="right"
+                  tickFormatter={formatCompact}
+                  tick={{ fontSize: 11, fill: '#10b981' }}
+                  width={56}
+                  domain={['auto', 'auto']}
+                />
                 <Tooltip
-                  formatter={(value) => formatKRWFull(Number(value ?? 0))}
+                  formatter={(value, name) => [formatKRWFull(Number(value ?? 0)), name]}
                   contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e7eb' }}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Line type="monotone" dataKey="총자산" stroke="#111827" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="유동성자산" stroke="#10b981" strokeWidth={2} dot={false} />
+                <Line yAxisId="total" type="monotone" dataKey="총자산" stroke="#111827" strokeWidth={2} dot={false} />
+                <Line yAxisId="liquid" type="monotone" dataKey="유동성자산" stroke="#10b981" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>

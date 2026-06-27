@@ -148,6 +148,60 @@ def api_holdings_analysis(
         raise HTTPException(status_code=502, detail=f"보유 종목 분석 실패: {e}") from e
 
 
+@market_router.get("/research/report-links")
+def api_report_links(nid: int = Query(..., description="네이버 리서치 리포트 ID")):
+    """네이버 리서치 리포트 페이지에서 PDF URL과 관련 링크를 추출합니다."""
+    import httpx
+    from bs4 import BeautifulSoup
+
+    naver_url = f"https://finance.naver.com/research/company_read.naver?nid={nid}"
+    try:
+        resp = httpx.get(
+            naver_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            timeout=10,
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"리포트 페이지 조회 실패: {e}") from e
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    pdf_url: Optional[str] = None
+
+    # pstatic.net PDF 링크 추출
+    for a in soup.find_all("a", href=True):
+        href = str(a.get("href", ""))
+        if "pstatic.net" in href and ".pdf" in href.lower():
+            pdf_url = href
+            break
+
+    # 리포트 제목·증권사 추출
+    title = ""
+    broker = ""
+    title_el = soup.select_one(".view_tit") or soup.select_one(".tit_type")
+    if title_el:
+        title = title_el.get_text(strip=True)
+    broker_el = soup.select_one(".source") or soup.select_one(".writer")
+    if broker_el:
+        broker = broker_el.get_text(strip=True)
+
+    news_search_url = (
+        f"https://search.naver.com/search.naver?where=news&query={nid}"
+        if not title
+        else f"https://search.naver.com/search.naver?where=news&query={title.replace(' ', '+')}"
+    )
+
+    return {
+        "nid": nid,
+        "naver_url": naver_url,
+        "pdf_url": pdf_url,
+        "title": title,
+        "broker": broker,
+        "news_search_url": news_search_url,
+    }
+
+
 # ── 미국 증시 리포트 ──────────────────────────────────────────────
 
 @market_router.get("/reports/us/daily")

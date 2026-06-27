@@ -1,19 +1,95 @@
 "use client";
 
-import { ExternalLink, HelpCircle, Loader2, TrendingDown, TrendingUp } from "lucide-react";
+import { useState } from "react";
+import { ExternalLink, FileText, HelpCircle, Loader2, Newspaper, TrendingDown, TrendingUp } from "lucide-react";
 import type {
   HoldingsAnalysis,
   StockBasicsTableRow,
   StockFinanceTable,
   StockInvestorTrendRow,
   StockInvestmentInfo,
+  StockIndustryPeer,
+  StockResearchReport,
 } from "@/lib/api";
+import { marketApi } from "@/lib/api";
 import { krSignedBoldClass } from "@/lib/krMarketColors";
-import { getValuationDefinition, getValuationHint } from "@/lib/valuationHints";
+
+function fmtNewsDate(raw: string): string {
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return raw;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}.${m}.${day}`;
+}
+
+import { getValuationDefinition, getValuationHint, buildValuationSummary } from "@/lib/valuationHints";
+import { getFinanceTermHint } from "@/lib/financeTermGlossary";
 import { VALUATION_LABEL_LESSONS } from "@/lib/studyTermGlossary";
 import { renderStudyTerms } from "@/lib/renderStudyTerms";
 import { StudyLessonChip } from "@/components/study-term-link";
 
+// ── 순매수 값 파싱 ("+1,234" → 1234, "-5,678" → -5678) ──────────────
+function parseNetBuy(raw?: string | null): number | null {
+  if (!raw || raw === "—" || raw === "-") return null;
+  const cleaned = raw.replace(/,/g, "").replace(/\s/g, "");
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? null : n;
+}
+
+function netBuyClass(raw?: string | null): string {
+  const v = parseNetBuy(raw);
+  if (v === null) return "text-neutral-500";
+  if (v > 0) return "text-red-600 dark:text-red-400 font-semibold";
+  if (v < 0) return "text-blue-600 dark:text-blue-400 font-semibold";
+  return "text-neutral-500";
+}
+
+// ── 재무 수치 파싱 ───────────────────────────────────────────────────
+function parseFinanceVal(raw?: string | null): number | null {
+  if (!raw || raw === "—" || raw === "N/A" || raw.trim() === "") return null;
+  const cleaned = raw.replace(/,/g, "").replace(/%$/, "").trim();
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? null : n;
+}
+
+// 항목명 기준 "높을수록 좋음" 여부
+function higherIsBetter(title: string): boolean | null {
+  const t = title.replace(/\s/g, "");
+  if (/부채비율|차입금|부채총계/.test(t)) return false;
+  if (/매출|영업이익|순이익|당기순이익|지배주주|자산총계|자본총계|EPS|BPS|DPS|FCF|ROE|ROA|영업이익률|순이익률|유보율/.test(t)) return true;
+  return null;
+}
+
+function trendLabel(title: string, prev: number, curr: number): { arrow: string; cls: string; desc: string } | null {
+  if (prev === 0 || prev === curr) return null;
+  const up = curr > prev;
+  const hib = higherIsBetter(title);
+  const good = hib === null ? null : up === hib;
+  const arrow = up ? "▲" : "▼";
+  const cls =
+    good === true  ? "text-red-500"  :
+    good === false ? "text-blue-500" :
+    "text-neutral-400";
+  const pct = ((curr - prev) / Math.abs(prev) * 100).toFixed(1);
+  const desc = up ? `전기 대비 +${pct}% 증가` : `전기 대비 ${pct}% 감소`;
+  return { arrow, cls, desc };
+}
+
+// ── 시총 파싱 (정렬용, "24조 5,000억" → 숫자) ────────────────────────
+function parseMarketCap(raw?: string | null): number {
+  if (!raw) return 0;
+  const t = raw.replace(/,/g, "").replace(/\s/g, "");
+  let val = 0;
+  const jo = t.match(/([0-9.]+)조/);
+  const eok = t.match(/([0-9.]+)억/);
+  if (jo)  val += parseFloat(jo[1])  * 1e12;
+  if (eok) val += parseFloat(eok[1]) * 1e8;
+  if (!jo && !eok) val = parseFloat(t) || 0;
+  return val;
+}
+
+// ── 공통 InfoRow ────────────────────────────────────────────────────
 function InfoRow({
   label,
   value,
@@ -126,29 +202,24 @@ function mergeNaverInvestmentRows(
 ): StockBasicsTableRow[] {
   const merged: StockBasicsTableRow[] = [];
   const seen = new Set<string>();
-
   for (const row of investmentTable ?? []) {
     const key = normalizeNaverLabel(row.label);
     if (!key || seen.has(key)) continue;
     seen.add(key);
     merged.push(row);
   }
-
   for (const row of quoteTable ?? []) {
     const key = normalizeNaverLabel(row.label);
     if (!key || seen.has(key)) continue;
     seen.add(key);
     merged.push(row);
   }
-
   return merged;
 }
 
+// ── 투자·시세 섹션 ───────────────────────────────────────────────────
 function NaverQuoteInvestmentSection({
-  quote,
-  info,
-  investmentTable,
-  quoteTable,
+  quote, info, investmentTable, quoteTable,
 }: {
   quote?: HoldingsAnalysis["quote"];
   info: StockInvestmentInfo;
@@ -194,12 +265,7 @@ function NaverQuoteInvestmentSection({
           const valuationLabel = resolveValuationLabel(row.label);
           if (valuationLabel) {
             return (
-              <ValuationInfoRow
-                key={row.label}
-                label={valuationLabel}
-                value={row.value}
-                info={info}
-              />
+              <ValuationInfoRow key={row.label} label={valuationLabel} value={row.value} info={info} />
             );
           }
           return (
@@ -213,16 +279,47 @@ function NaverQuoteInvestmentSection({
         })}
         {hasConsensusDate && <InfoRow label="컨센서스 기준일" value={info.consensus_date} />}
       </div>
+
+      {/* 종합 밸류에이션 판정 카드 */}
+      {(() => {
+        const vs = buildValuationSummary(info);
+        if (!vs) return null;
+        const bgMap: Record<string, string> = {
+          저평가: "bg-red-50 border-red-200 dark:bg-red-950/20 dark:border-red-900",
+          고평가: "bg-blue-50 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900",
+          적정:   "bg-gray-50 border-gray-200 dark:bg-neutral-900 dark:border-neutral-700",
+          판단불가: "bg-gray-50 border-gray-200 dark:bg-neutral-900 dark:border-neutral-700",
+        };
+        return (
+          <div className={`mt-2 rounded-lg border px-3 py-2.5 ${bgMap[vs.grade] ?? bgMap["적정"]}`}>
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <span className="text-[10px] font-semibold text-neutral-500">밸류에이션 종합 판정</span>
+              <span className={`text-xs font-bold ${vs.gradeColor}`}>{vs.grade}</span>
+            </div>
+            <ul className="space-y-0.5">
+              {vs.bullets.map((b, i) => (
+                <li key={i} className="text-[10px] text-neutral-600 dark:text-neutral-400 leading-relaxed">
+                  • {b}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1.5 text-[9px] text-neutral-400">* 규칙 기반 참고치이며 투자 권유가 아닙니다.</p>
+          </div>
+        );
+      })()}
     </section>
   );
 }
 
+// ── 재무제표 (연간/분기 공통) ─────────────────────────────────────────
 function FinanceTable({ table, title }: { table?: StockFinanceTable; title: string }) {
+  const [hoveredTerm, setHoveredTerm] = useState<{ name: string; hint: string } | null>(null);
+
   if (!table?.rows?.length) return null;
   const periods = table.periods ?? [];
 
   return (
-    <section>
+    <section onMouseLeave={() => setHoveredTerm(null)}>
       <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">{title}</h4>
       <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)]">
         <table className="min-w-full text-[10px]">
@@ -231,30 +328,83 @@ function FinanceTable({ table, title }: { table?: StockFinanceTable; title: stri
               <th className="text-left px-2 py-1.5 font-medium text-neutral-500">항목</th>
               {periods.map((p) => (
                 <th key={p.key ?? p.title} className="text-right px-2 py-1.5 font-medium text-neutral-500 whitespace-nowrap">
-                  {p.title}
-                  {p.is_consensus ? " (E)" : ""}
+                  {p.title}{p.is_consensus ? " (E)" : ""}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {table.rows.map((row) => (
-              <tr key={row.title} className="border-b border-[var(--border-subtle)] last:border-0">
-                <td className="px-2 py-1.5 text-neutral-700 dark:text-neutral-300 whitespace-nowrap">{row.title}</td>
-                {periods.map((p) => (
-                  <td key={`${row.title}-${p.key}`} className="px-2 py-1.5 text-right text-neutral-600 dark:text-neutral-400 whitespace-nowrap">
-                    {row.columns?.[p.key ?? ""] ?? "—"}
+            {table.rows.map((row) => {
+              const hint = getFinanceTermHint(row.title ?? "");
+              const vals = periods.map((p) => parseFinanceVal(row.columns?.[p.key ?? ""]));
+              const isHovered = hoveredTerm?.name === row.title;
+              return (
+                <tr
+                  key={row.title}
+                  className={`border-b border-[var(--border-subtle)] last:border-0 transition-colors ${
+                    isHovered ? "bg-indigo-50 dark:bg-indigo-950/30" : "hover:bg-[var(--surface-elevated)]"
+                  }`}
+                  onMouseEnter={() => hint ? setHoveredTerm({ name: row.title ?? "", hint }) : setHoveredTerm(null)}
+                >
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    {hint ? (
+                      <span className="inline-flex items-center gap-0.5 font-medium text-neutral-700 dark:text-neutral-300 cursor-help">
+                        {row.title}
+                        <HelpCircle size={9} className="text-indigo-400 shrink-0" />
+                      </span>
+                    ) : (
+                      <span className="font-medium text-neutral-700 dark:text-neutral-300">{row.title}</span>
+                    )}
                   </td>
-                ))}
-              </tr>
-            ))}
+                  {periods.map((p, i) => {
+                    const raw = row.columns?.[p.key ?? ""] ?? "—";
+                    const curr = vals[i];
+                    const prev = i > 0 ? vals[i - 1] : null;
+                    const trend = (curr !== null && prev !== null)
+                      ? trendLabel(row.title ?? "", prev, curr)
+                      : null;
+                    return (
+                      <td key={`${row.title}-${p.key}`} className="px-2 py-1.5 text-right whitespace-nowrap">
+                        <span className="text-neutral-600 dark:text-neutral-400">{raw}</span>
+                        {trend && (
+                          <span className={`ml-1 text-[9px] ${trend.cls}`} title={trend.desc}>
+                            {trend.arrow}
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
+
+      {/* 항목 설명 패널 */}
+      <div className={`mt-1.5 rounded-lg border px-3 py-2 text-[10px] leading-relaxed transition-all ${
+        hoveredTerm
+          ? "border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/30 opacity-100"
+          : "border-transparent bg-transparent opacity-0 pointer-events-none h-0 py-0 overflow-hidden"
+      }`}>
+        {hoveredTerm && (
+          <>
+            <p className="font-semibold text-[11px] text-indigo-800 dark:text-indigo-300 mb-0.5">{hoveredTerm.name}</p>
+            <p className="text-neutral-600 dark:text-neutral-400">{hoveredTerm.hint}</p>
+          </>
+        )}
+      </div>
+
+      <p className="mt-1 text-[9px] text-neutral-400">
+        ▲<span className="text-red-500">빨강</span>=긍정적 증가 &nbsp;
+        ▼<span className="text-blue-500">파랑</span>=부정적 감소 &nbsp;
+        <span className="text-indigo-400">?</span> 항목에 마우스를 올리면 설명이 표시됩니다
+      </p>
     </section>
   );
 }
 
+// ── 투자자별 순매수 ────────────────────────────────────────────────────
 function InvestorTrendTable({ rows }: { rows?: StockInvestorTrendRow[] }) {
   if (!rows?.length) return null;
   return (
@@ -272,14 +422,104 @@ function InvestorTrendTable({ rows }: { rows?: StockInvestorTrendRow[] }) {
           <tbody>
             {rows.map((r) => (
               <tr key={r.date} className="border-b border-[var(--border-subtle)] last:border-0">
-                <td className="px-2 py-1.5 whitespace-nowrap">{r.date}</td>
-                <td className="px-2 py-1.5 whitespace-nowrap">{r.close_price}</td>
-                <td className="px-2 py-1.5 whitespace-nowrap">{r.foreign_net_buy}</td>
-                <td className="px-2 py-1.5 whitespace-nowrap">{r.institution_net_buy}</td>
-                <td className="px-2 py-1.5 whitespace-nowrap">{r.individual_net_buy}</td>
-                <td className="px-2 py-1.5 whitespace-nowrap">{r.foreign_holding_rate}</td>
+                <td className="px-2 py-1.5 text-neutral-500 whitespace-nowrap">{r.date}</td>
+                <td className="px-2 py-1.5 font-medium text-neutral-700 dark:text-neutral-300 whitespace-nowrap">{r.close_price}</td>
+                <td className={`px-2 py-1.5 whitespace-nowrap ${netBuyClass(r.foreign_net_buy)}`}>{r.foreign_net_buy}</td>
+                <td className={`px-2 py-1.5 whitespace-nowrap ${netBuyClass(r.institution_net_buy)}`}>{r.institution_net_buy}</td>
+                <td className={`px-2 py-1.5 whitespace-nowrap ${netBuyClass(r.individual_net_buy)}`}>{r.individual_net_buy}</td>
+                <td className="px-2 py-1.5 text-neutral-500 whitespace-nowrap">{r.foreign_holding_rate}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-1 text-[9px] text-neutral-400">
+        <span className="text-red-500">빨강</span>=순매수(매입 우세) &nbsp;<span className="text-blue-500">파랑</span>=순매도(매도 우세)
+      </p>
+    </section>
+  );
+}
+
+// ── 동종업종 비교 (시총 순위 포함, 현재 종목 강조) ─────────────────────
+function IndustryPeersTable({
+  peers,
+  currentSymbol,
+  currentName,
+  currentData,
+}: {
+  peers?: StockIndustryPeer[];
+  currentSymbol?: string;
+  currentName?: string;
+  currentData?: HoldingsAnalysis;
+}) {
+  if (!peers?.length) return null;
+
+  // 현재 종목이 peers에 없으면 추가
+  const allPeers: (StockIndustryPeer & { isCurrent?: boolean })[] = [];
+  let hasCurrent = false;
+  for (const p of peers) {
+    const isCurrent = p.symbol === currentSymbol || p.name === currentName;
+    allPeers.push({ ...p, isCurrent });
+    if (isCurrent) hasCurrent = true;
+  }
+  if (!hasCurrent && currentName) {
+    allPeers.push({
+      symbol: currentSymbol,
+      name: currentName,
+      close_price: currentData?.quote?.close_price ?? String(currentData?.current_price ?? ""),
+      change_pct: currentData?.quote?.change_pct ?? null,
+      change_direction: currentData?.quote?.change_direction ?? null,
+      market_cap: currentData?.investment_info?.market_cap ?? null,
+      isCurrent: true,
+    });
+  }
+
+  // 시총 기준 내림차순 정렬
+  const sorted = [...allPeers].sort((a, b) => parseMarketCap(b.market_cap) - parseMarketCap(a.market_cap));
+
+  return (
+    <section>
+      <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">동종업종 비교 (시총 순위)</h4>
+      <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)]">
+        <table className="min-w-full text-[10px]">
+          <thead>
+            <tr className="bg-[var(--surface-elevated)] border-b border-[var(--border-subtle)]">
+              {["순위", "종목", "현재가", "등락", "시총"].map((h) => (
+                <th key={h} className="px-2 py-1.5 font-medium text-neutral-500 text-left whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((p, i) => {
+              const isCurrent = (p as typeof p & { isCurrent?: boolean }).isCurrent;
+              const changeNum = parseNetBuy(p.change_pct);
+              const changeCls = changeNum == null
+                ? "text-neutral-500"
+                : changeNum > 0 ? "text-red-600 dark:text-red-400" : "text-blue-600 dark:text-blue-400";
+              return (
+                <tr
+                  key={p.symbol ?? p.name ?? i}
+                  className={`border-b border-[var(--border-subtle)] last:border-0 ${
+                    isCurrent ? "bg-amber-50 dark:bg-amber-950/30" : ""
+                  }`}
+                >
+                  <td className={`px-2 py-1.5 font-bold whitespace-nowrap ${i === 0 ? "text-amber-600" : "text-neutral-400"}`}>
+                    #{i + 1}
+                  </td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    {isCurrent
+                      ? <span className="font-bold text-neutral-900 dark:text-neutral-100">{p.name} <span className="text-[9px] text-amber-600">★현재</span></span>
+                      : <span className="text-neutral-700 dark:text-neutral-300">{p.name}</span>
+                    }
+                  </td>
+                  <td className="px-2 py-1.5 font-medium text-neutral-700 dark:text-neutral-300 whitespace-nowrap">{p.close_price ?? "—"}</td>
+                  <td className={`px-2 py-1.5 whitespace-nowrap ${changeCls}`}>
+                    {p.change_direction} {p.change_pct ? `${p.change_pct}%` : ""}
+                  </td>
+                  <td className="px-2 py-1.5 text-neutral-600 dark:text-neutral-400 whitespace-nowrap">{p.market_cap ?? "—"}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -287,6 +527,94 @@ function InvestorTrendTable({ rows }: { rows?: StockInvestorTrendRow[] }) {
   );
 }
 
+// ── 증권사 리포트 아이템 (링크 lazy fetch) ────────────────────────────
+function ReportItem({ r }: { r: StockResearchReport }) {
+  const [links, setLinks] = useState<{
+    naver_url: string; pdf_url: string | null; news_search_url: string;
+  } | null>(null);
+  const [fetching, setFetching] = useState(false);
+
+  async function handleFetchLinks() {
+    if (!r.report_id || fetching) return;
+    setFetching(true);
+    try {
+      const data = await marketApi.getReportLinks(r.report_id);
+      setLinks(data);
+    } catch {
+      setLinks({ naver_url: r.url ?? "", pdf_url: null, news_search_url: "" });
+    } finally {
+      setFetching(false);
+    }
+  }
+
+  return (
+    <li className="border-b border-[var(--border-subtle)] pb-2 last:border-0 last:pb-0">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <p className="text-[10px] text-neutral-500">{r.date} · {r.broker}</p>
+          {r.url ? (
+            <a
+              href={r.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-start gap-1 mt-0.5 text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              <ExternalLink size={10} className="mt-0.5 shrink-0" />
+              <span className="break-words leading-snug">{r.title}</span>
+            </a>
+          ) : (
+            <p className="mt-0.5 text-[11px] text-neutral-800 dark:text-neutral-200">{r.title}</p>
+          )}
+          {r.target_price && (
+            <p className="text-[10px] text-neutral-500 mt-0.5">목표가 {r.target_price}원</p>
+          )}
+        </div>
+        {/* 링크 버튼 묶음 */}
+        <div className="shrink-0 flex flex-col gap-1 items-end">
+          {!links && r.report_id && (
+            <button
+              onClick={handleFetchLinks}
+              disabled={fetching}
+              className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border border-[var(--border-subtle)] text-neutral-500 hover:text-neutral-800 hover:bg-[var(--surface-elevated)] disabled:opacity-50 transition-colors"
+            >
+              {fetching ? <Loader2 size={9} className="animate-spin" /> : <FileText size={9} />}
+              링크 보기
+            </button>
+          )}
+          {links && (
+            <>
+              {links.pdf_url && (
+                <a
+                  href={links.pdf_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400 transition-colors"
+                >
+                  <FileText size={9} /> PDF 원문
+                </a>
+              )}
+              {links.news_search_url && (
+                <a
+                  href={links.news_search_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border border-[var(--border-subtle)] text-neutral-500 hover:text-neutral-800 hover:bg-[var(--surface-elevated)] transition-colors"
+                >
+                  <Newspaper size={9} /> 관련 기사
+                </a>
+              )}
+              {!links.pdf_url && (
+                <span className="text-[10px] text-neutral-400">PDF 없음</span>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+// ── 이슈 리스트 ──────────────────────────────────────────────────────
 function IssueList({ items, period }: { items: HoldingsAnalysis["daily_issues"]; period: "daily" | "weekly" }) {
   if (!items?.length) {
     return (
@@ -295,7 +623,6 @@ function IssueList({ items, period }: { items: HoldingsAnalysis["daily_issues"];
       </p>
     );
   }
-
   return (
     <ul className="space-y-2">
       {items.map((item) => (
@@ -309,9 +636,7 @@ function IssueList({ items, period }: { items: HoldingsAnalysis["daily_issues"];
             ) : (
               <TrendingDown size={12} className="text-blue-500 shrink-0" />
             )}
-            <span className={`font-semibold ${krSignedBoldClass(item.change_pct)}`}>
-              {item.label}
-            </span>
+            <span className={`font-semibold ${krSignedBoldClass(item.change_pct)}`}>{item.label}</span>
             <span className="text-neutral-400">
               {period === "weekly" && item.week_start && item.week_end
                 ? `${item.week_start} ~ ${item.week_end}`
@@ -336,6 +661,7 @@ function IssueList({ items, period }: { items: HoldingsAnalysis["daily_issues"];
   );
 }
 
+// ── 메인 패널 ────────────────────────────────────────────────────────
 interface HoldingsAnalysisPanelProps {
   data: HoldingsAnalysis | null;
   loading: boolean;
@@ -389,6 +715,64 @@ export function HoldingsAnalysisPanel({ data, loading, error }: HoldingsAnalysis
         )}
       </div>
 
+      {/* ── 기업 개요 (최상단) ── */}
+      {(data.overview || data.business_profile) && (
+        <section className="rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/30 px-3 py-2.5">
+          <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">기업 개요</h4>
+
+          {/* 네이버 요약 (한 줄) */}
+          {data.overview && (
+            <p className="text-[11px] text-neutral-600 dark:text-neutral-400 leading-relaxed whitespace-pre-wrap mb-3">
+              {data.overview}
+            </p>
+          )}
+
+          {/* AI 구조화 프로파일 */}
+          {data.business_profile && (
+            <div className="space-y-2.5 border-t border-neutral-200 dark:border-neutral-700 pt-2.5">
+              {data.business_profile.core_business && (
+                <div>
+                  <p className="text-[10px] font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-0.5">핵심 사업</p>
+                  <p className="text-[11px] text-neutral-700 dark:text-neutral-300 leading-relaxed">{data.business_profile.core_business}</p>
+                </div>
+              )}
+              {data.business_profile.main_products && data.business_profile.main_products.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-1">주력 제품 / 서비스</p>
+                  <ul className="space-y-0.5">
+                    {data.business_profile.main_products.map((p, i) => (
+                      <li key={i} className="flex gap-1.5 text-[11px] text-neutral-700 dark:text-neutral-300">
+                        <span className="text-neutral-400 shrink-0">•</span>
+                        <span className="leading-relaxed">{p}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {data.business_profile.cash_cow && (
+                <div>
+                  <p className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wide mb-0.5">캐시카우</p>
+                  <p className="text-[11px] text-neutral-700 dark:text-neutral-300 leading-relaxed">{data.business_profile.cash_cow}</p>
+                </div>
+              )}
+              {data.business_profile.revenue_model && (
+                <div>
+                  <p className="text-[10px] font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-0.5">수익 구조</p>
+                  <p className="text-[11px] text-neutral-700 dark:text-neutral-300 leading-relaxed">{data.business_profile.revenue_model}</p>
+                </div>
+              )}
+              {data.business_profile.competitive_edge && (
+                <div>
+                  <p className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wide mb-0.5">핵심 경쟁력</p>
+                  <p className="text-[11px] text-neutral-700 dark:text-neutral-300 leading-relaxed">{data.business_profile.competitive_edge}</p>
+                </div>
+              )}
+              <p className="text-[9px] text-neutral-400 pt-1">AI 분석 · 참고용 (실제와 다를 수 있음)</p>
+            </div>
+          )}
+        </section>
+      )}
+
       <NaverQuoteInvestmentSection
         quote={quote}
         info={info}
@@ -401,54 +785,23 @@ export function HoldingsAnalysisPanel({ data, loading, error }: HoldingsAnalysis
       <FinanceTable table={data.financials?.annual} title="연간 재무 (네이버)" />
       <FinanceTable table={data.financials?.quarterly} title="분기 재무 (네이버)" />
 
-      {!!data.industry_peers?.length && (
-        <section>
-          <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">동종업종 비교</h4>
-          <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)]">
-            <table className="min-w-full text-[10px]">
-              <thead>
-                <tr className="bg-[var(--surface-elevated)] border-b border-[var(--border-subtle)]">
-                  {["종목", "현재가", "등락", "시총"].map((h) => (
-                    <th key={h} className="px-2 py-1.5 font-medium text-neutral-500 text-left">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {data.industry_peers.map((p) => (
-                  <tr key={p.symbol} className="border-b border-[var(--border-subtle)] last:border-0">
-                    <td className="px-2 py-1.5">{p.name}</td>
-                    <td className="px-2 py-1.5 whitespace-nowrap">{p.close_price}</td>
-                    <td className="px-2 py-1.5 whitespace-nowrap">
-                      {p.change_direction} {p.change_pct ? `${p.change_pct}%` : ""}
-                    </td>
-                    <td className="px-2 py-1.5 whitespace-nowrap">{p.market_cap}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+      <IndustryPeersTable
+        peers={data.industry_peers}
+        currentSymbol={data.symbol}
+        currentName={data.name}
+        currentData={data}
+      />
 
       {!!data.research_reports?.length && (
         <section>
-          <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">증권사 리포트</h4>
-          <ul className="space-y-1.5">
+          <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">
+            증권사 리포트 ({data.research_reports.length}건)
+          </h4>
+          <ul className="space-y-2.5">
             {data.research_reports.map((r) => (
-              <li key={r.report_id ?? `${r.broker}-${r.date}`} className="text-[11px] border-b border-[var(--border-subtle)] pb-1.5 last:border-0">
-                <span className="text-neutral-500">{r.date} · {r.broker}</span>
-                <p className="text-neutral-800 dark:text-neutral-200">{r.title}</p>
-                {r.target_price && <p className="text-neutral-500">목표 {r.target_price}</p>}
-              </li>
+              <ReportItem key={r.report_id ?? `${r.broker}-${r.date}`} r={r} />
             ))}
           </ul>
-        </section>
-      )}
-
-      {data.overview && (
-        <section>
-          <h4 className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-2">기업 개요</h4>
-          <p className="text-[11px] text-neutral-600 dark:text-neutral-400 leading-relaxed whitespace-pre-wrap">{data.overview}</p>
         </section>
       )}
 
@@ -480,7 +833,7 @@ export function HoldingsAnalysisPanel({ data, loading, error }: HoldingsAnalysis
                   <span>
                     <span className="line-clamp-2">{n.title}</span>
                     {n.published && (
-                      <span className="block text-[9px] text-neutral-400 mt-0.5">{n.published}</span>
+                      <span className="block text-[9px] text-neutral-400 mt-0.5">{fmtNewsDate(n.published)}</span>
                     )}
                   </span>
                 </a>

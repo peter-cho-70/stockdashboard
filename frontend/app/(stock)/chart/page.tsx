@@ -40,6 +40,7 @@ import {
   Minimize2,
   Link2,
   Layers,
+  X,
 } from "lucide-react";
 import {
   api,
@@ -148,6 +149,15 @@ function chartDateTick(period: Period, date: string): string {
 
 const CHART_SYMBOL_STORAGE = "stockmind-chart-symbol";
 const CHART_PERIOD_STORAGE = "stockmind-chart-period";
+const ANALYSIS_PANEL_MODE_STORAGE = "stockmind-analysis-panel-mode";
+
+type AnalysisPanelMode = "inline" | "popup" | "fullscreen";
+
+const PANEL_MODE_OPTIONS: { id: AnalysisPanelMode; label: string }[] = [
+  { id: "inline",      label: "인라인" },
+  { id: "popup",       label: "팝업창" },
+  { id: "fullscreen",  label: "전체화면" },
+];
 
 function fmtMoney(n: number, currency = "KRW") {
   if (currency === "USD") {
@@ -1422,6 +1432,13 @@ function ChartContent() {
     }
   }, []);
   const [analysisMode, setAnalysisMode] = useState(false);
+  const [analysisPanelMode, setAnalysisPanelMode] = useState<AnalysisPanelMode>("inline");
+  useEffect(() => {
+    const saved = localStorage.getItem(ANALYSIS_PANEL_MODE_STORAGE);
+    if (saved === "inline" || saved === "popup" || saved === "fullscreen") {
+      setAnalysisPanelMode(saved);
+    }
+  }, []);
   const [chartData, setChartData] = useState<ChartData | null>(null);
   const [loading, setLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
@@ -1472,6 +1489,9 @@ function ChartContent() {
   const [holdingsAnalysisLoading, setHoldingsAnalysisLoading] = useState(false);
   const [holdingsAnalysisError, setHoldingsAnalysisError] = useState<string | null>(null);
   const [chartExpanded, setChartExpanded] = useState(false);
+  const [expandedPeriod, setExpandedPeriod] = useState<Period>(period);
+  const [expandedRawData, setExpandedRawData] = useState<ChartBar[] | null>(null);
+  const [expandedFetching, setExpandedFetching] = useState(false);
 
   const fetchPeriod = chartFetchPeriod(period, analysisMode);
 
@@ -1557,6 +1577,41 @@ function ChartContent() {
     [allChartPriceTargets, showAnalystTargets],
   );
 
+  const changePanelMode = useCallback((mode: AnalysisPanelMode) => {
+    setAnalysisPanelMode(mode);
+    localStorage.setItem(ANALYSIS_PANEL_MODE_STORAGE, mode);
+  }, []);
+
+  const analysisPopup = analysisMode && analysisPanelMode === "popup";
+  const analysisFullscreen = analysisMode && analysisPanelMode === "fullscreen";
+
+  const handleExpandChart = useCallback(() => {
+    setExpandedPeriod(period);
+    setExpandedRawData(null);
+    setExpandedFetching(false);
+    setChartExpanded(true);
+  }, [period]);
+
+  const handleExpandedPeriodChange = useCallback(async (p: Period) => {
+    setExpandedPeriod(p);
+    const neededBars = PERIOD_DISPLAY_DAYS[p];
+    const haveBars = chartData?.data.length ?? 0;
+    if (haveBars >= neededBars) {
+      setExpandedRawData(null);
+      return;
+    }
+    if (!selectedSymbol) return;
+    setExpandedFetching(true);
+    try {
+      const data = await api.getStockChart(selectedSymbol, p);
+      if (Array.isArray(data.data)) setExpandedRawData(data.data);
+    } catch {
+      setExpandedRawData(null);
+    } finally {
+      setExpandedFetching(false);
+    }
+  }, [chartData, selectedSymbol]);
+
   useEffect(() => {
     if (!chartExpanded) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1565,6 +1620,15 @@ function ChartContent() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [chartExpanded]);
+
+  useEffect(() => {
+    if (!analysisPopup) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") changePanelMode("inline");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [analysisPopup, changePanelMode]);
 
   const baseChartHeight = analysisMode ? 280 : 320;
   const expandedChartHeight = analysisMode ? 480 : 560;
@@ -1974,6 +2038,13 @@ function ChartContent() {
 
   const displayPlotData = fullPlotData;
 
+  const expandedDisplayData: EnrichedChartBar[] = useMemo(() => {
+    const raw = expandedRawData ?? chartData?.data ?? [];
+    if (!raw.length) return displayPlotData;
+    const needed = PERIOD_DISPLAY_DAYS[expandedPeriod];
+    return enrichChartBars(raw, needed);
+  }, [expandedRawData, chartData, expandedPeriod, displayPlotData]);
+
   const plotDateSet = useMemo(
     () => new Set(displayPlotData.map((d) => d.date)),
     [displayPlotData],
@@ -2147,18 +2218,41 @@ function ChartContent() {
               : "1·3·6·12개월 구간 · 이동평균과 수익률 확인"}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={toggleAnalysisMode}
-          className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* 분석 패널 표시 방식 선택 */}
+          <div className={`flex items-center gap-1 rounded-lg border p-1 transition-opacity ${
             analysisMode
-              ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400"
-              : "border-[var(--border-subtle)] bg-[var(--surface)] text-neutral-600 hover:border-neutral-400 dark:text-neutral-400"
-          }`}
-        >
-          {analysisMode ? <LayoutGrid size={16} /> : <BarChart3 size={16} />}
-          {analysisMode ? "기본 보기" : "분석 모드"}
-        </button>
+              ? "border-emerald-300 bg-emerald-50/50 dark:border-emerald-800 dark:bg-emerald-900/10"
+              : "border-[var(--border-subtle)] bg-[var(--surface)] opacity-60"
+          }`}>
+            {PANEL_MODE_OPTIONS.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => changePanelMode(id)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  analysisPanelMode === id
+                    ? "bg-emerald-700 text-white dark:bg-emerald-600"
+                    : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={toggleAnalysisMode}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+              analysisMode
+                ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400"
+                : "border-[var(--border-subtle)] bg-[var(--surface)] text-neutral-600 hover:border-neutral-400 dark:text-neutral-400"
+            }`}
+          >
+            {analysisMode ? <LayoutGrid size={16} /> : <BarChart3 size={16} />}
+            {analysisMode ? "기본 보기" : "분석 모드"}
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3">
@@ -2344,14 +2438,14 @@ function ChartContent() {
       {/* 차트 + 분석 패널 */}
       <div
         className={
-          analysisMode
+          analysisMode && !analysisPopup
             ? "grid grid-cols-1 gap-4 lg:grid-cols-5"
             : ""
         }
       >
         <div
           className={`rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] overflow-hidden ${
-            analysisMode ? "lg:col-span-3" : ""
+            analysisMode && !analysisPopup ? "lg:col-span-3" : ""
           }`}
         >
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3">
@@ -2385,7 +2479,7 @@ function ChartContent() {
             <div className="flex gap-2 text-xs flex-wrap">
               <button
                 type="button"
-                onClick={() => setChartExpanded(true)}
+                onClick={handleExpandChart}
                 disabled={!chartData || displayPlotData.length === 0}
                 className="flex items-center gap-1 rounded-full px-2.5 py-1 font-medium border border-[var(--border-subtle)] text-neutral-600 dark:text-neutral-300 hover:bg-[var(--surface-elevated)] disabled:opacity-50"
                 title="목표가 포함 넓은 Y축으로 자세히 보기"
@@ -2614,7 +2708,7 @@ function ChartContent() {
                         <button
                           type="button"
                           className="text-violet-600 dark:text-violet-400 hover:underline font-medium"
-                          onClick={() => setChartExpanded(true)}
+                          onClick={handleExpandChart}
                         >
                           차트 확장
                         </button>
@@ -2671,31 +2765,92 @@ function ChartContent() {
           )}
         </div>
 
-        {analysisMode && chartData && isKrStockSymbol(selectedSymbol) && (
-          <div className="lg:col-span-2 space-y-4 overflow-y-auto max-h-[720px]">
-            <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
-              <h3 className="text-sm font-semibold text-neutral-800 dark:text-neutral-200 mb-3">
-                {hasHoldings ? "보유 종목 · 종목 기초정보" : "종목 기초정보"}
-              </h3>
-              <HoldingsAnalysisPanel
-                data={holdingsAnalysis}
-                loading={holdingsAnalysisLoading}
-                error={holdingsAnalysisError}
-              />
-            </div>
-            {analysisResult && (
+        {analysisMode && chartData && isKrStockSymbol(selectedSymbol) && (() => {
+          const panelContent = (
+            <div className="space-y-4">
               <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
-                <ChartAnalysisPanel
-                  analysis={analysisResult}
-                  stockName={chartData.name}
-                  periodLabel={periodLabel(period)}
-                  activeSignalId={activeSignalId}
-                  onSignalSelect={setActiveSignalId}
+                <h3 className="mb-3 text-sm font-semibold text-neutral-800 dark:text-neutral-200">
+                  {hasHoldings ? "보유 종목 · 종목 기초정보" : "종목 기초정보"}
+                </h3>
+                <HoldingsAnalysisPanel
+                  data={holdingsAnalysis}
+                  loading={holdingsAnalysisLoading}
+                  error={holdingsAnalysisError}
                 />
               </div>
-            )}
-          </div>
-        )}
+              {analysisResult && (
+                <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
+                  <ChartAnalysisPanel
+                    analysis={analysisResult}
+                    stockName={chartData.name}
+                    periodLabel={periodLabel(period)}
+                    activeSignalId={activeSignalId}
+                    onSignalSelect={setActiveSignalId}
+                  />
+                </div>
+              )}
+            </div>
+          );
+
+          if (analysisPanelMode === "popup") {
+            return (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+                onClick={() => changePanelMode("inline")}
+              >
+                <div
+                  className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] shadow-2xl"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border-subtle)] bg-[var(--surface-elevated)] shrink-0 rounded-t-xl">
+                    <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
+                      분석 패널 — {chartData.name}
+                    </span>
+                    <button
+                      onClick={() => changePanelMode("inline")}
+                      className="flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 transition-colors px-3 py-1.5 rounded-lg border border-[var(--border-subtle)] hover:bg-[var(--surface-elevated)]"
+                    >
+                      <X size={12} /> 닫기
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-5">
+                    {panelContent}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          if (analysisPanelMode === "fullscreen") {
+            return (
+              <>
+                <div className="lg:col-span-2" />
+                <div className="fixed inset-0 z-50 flex flex-col bg-[var(--background)] overflow-hidden">
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border-subtle)] bg-[var(--surface)] shrink-0">
+                    <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">
+                      분석 패널 — {chartData.name}
+                    </span>
+                    <button
+                      onClick={() => changePanelMode("inline")}
+                      className="flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 transition-colors px-3 py-1.5 rounded-lg border border-[var(--border-subtle)] hover:bg-[var(--surface-elevated)]"
+                    >
+                      <Minimize2 size={12} /> 전체화면 닫기
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-5 max-w-4xl w-full mx-auto">
+                    {panelContent}
+                  </div>
+                </div>
+              </>
+            );
+          }
+
+          return (
+            <div className="lg:col-span-2 space-y-4 overflow-y-auto h-full">
+              {panelContent}
+            </div>
+          );
+        })()}
       </div>
 
       {/* 날짜 메모 */}
@@ -2998,22 +3153,46 @@ function ChartContent() {
                     : "주가 구간 중심 (확대 시 증권사 목표가 전체 표시)"}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setChartExpanded(false)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--surface-elevated)]"
-              >
-                <Minimize2 size={14} />
-                닫기
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-elevated)] p-1">
+                  {PERIODS.map(({ id, label }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      disabled={expandedFetching}
+                      onClick={() => handleExpandedPeriodChange(id)}
+                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                        expandedPeriod === id
+                          ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                          : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  {expandedFetching && (
+                    <span className="flex items-center px-1 text-neutral-400">
+                      <Loader2 size={12} className="animate-spin" />
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setChartExpanded(false)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--surface-elevated)]"
+                >
+                  <Minimize2 size={14} />
+                  닫기
+                </button>
+              </div>
             </div>
             <div className="p-4">
               <PriceChart
-                plotData={displayPlotData}
+                plotData={expandedDisplayData}
                 chartData={chartData}
                 showMA={showMA}
                 analysisMode={analysisMode}
-                analysis={analysisResult ?? undefined}
+                analysis={expandedPeriod === period ? (analysisResult ?? undefined) : undefined}
                 annotationLayers={annotationLayers}
                 activeSignalId={activeSignalId}
                 eventAnnotations={priceEventData.annotations}
@@ -3032,7 +3211,7 @@ function ChartContent() {
                 targetBuyPrice={selectedWatchlist?.target_buy_price ?? null}
                 analystTargets={analystTargetLinesAll}
                 includeTargetsInYDomain={showTargetsOnExpanded}
-                period={period}
+                period={expandedPeriod}
               />
             </div>
           </div>

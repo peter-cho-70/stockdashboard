@@ -140,6 +140,7 @@ DEFAULT_US_STOCK_TICKERS: list[tuple[str, str, str, str]] = [
     ("RTX", "RTX(레이시온)", "defense_aerospace", "한화시스템, 현대로템"),
     ("NOC", "노스롭그루먼", "defense_aerospace", "방산주 전반"),
     ("BA", "보잉", "defense_aerospace", "한국항공우주(KAI), 한화에어로스페이스"),
+    ("SPCX", "스페이스X", "defense_aerospace", "한화에어로스페이스, 쎄트렉아이(항공우주)"),
     # 에너지
     ("XOM", "엑슨모빌", "energy", "HD현대중공업, 삼성중공업(유가 연동)"),
     ("CVX", "쉐브론", "energy", "HD현대중공업, 삼성중공업(유가 연동)"),
@@ -167,6 +168,37 @@ def seed_default_tracked_us_stocks() -> None:
             ))
         db.commit()
         logger.info("✅ 추적 미국 종목 기본값 시딩: %s개", len(DEFAULT_US_STOCK_TICKERS))
+    finally:
+        db.close()
+
+
+def migrate_add_spacex() -> None:
+    """기존 DB 스페이스X 중복/잘못된 티커 정리 후 SPCX 확보."""
+    from config.database import SessionLocal, TrackedUsStock
+
+    db = SessionLocal()
+    try:
+        # 잘못된 구 티커 삭제
+        for bad in ("SPACEX", "SAAQ"):
+            row = db.query(TrackedUsStock).filter(TrackedUsStock.ticker == bad).first()
+            if row:
+                db.delete(row)
+                logger.info(f"🗑 구 스페이스X 티커 제거: {bad}")
+        db.commit()
+
+        if db.query(TrackedUsStock).filter(TrackedUsStock.ticker == "SPCX").first():
+            return
+
+        sort_order = db.query(TrackedUsStock).count()
+        db.add(TrackedUsStock(
+            ticker="SPCX",
+            name_kr="스페이스X",
+            sector="defense_aerospace",
+            korea_related="한화에어로스페이스, 쎄트렉아이(항공우주)",
+            sort_order=sort_order,
+        ))
+        db.commit()
+        logger.info("✅ 스페이스X 추적 종목 추가 (SPCX)")
     finally:
         db.close()
 

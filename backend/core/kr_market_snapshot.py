@@ -467,18 +467,27 @@ def _fetch_popular_search(*, limit: int = 10) -> list[dict[str, Any]]:
                 if not name or name in {x["name"] for x in items}:
                     continue
                 rank += 1
-                price = None
-                for td in tr.select("td"):
-                    txt = td.get_text(strip=True).replace(",", "")
-                    if txt.isdigit() and len(txt) >= 3:
-                        price = int(txt)
-                        break
+                tds = tr.select("td")
+                # 컬럼 구조: [0]순위 [1]종목명 [2]검색비율% [3]현재가 [4]전일비(하락/상승+금액) [5]등락률% ...
+                price: int | None = None
+                change_pct: float | None = None
+                if len(tds) > 3:
+                    try:
+                        price = int(tds[3].get_text(strip=True).replace(",", ""))
+                    except ValueError:
+                        pass
+                if len(tds) > 5:
+                    try:
+                        change_pct = float(tds[5].get_text(strip=True).replace("%", "").replace(",", "").strip())
+                    except ValueError:
+                        pass
                 items.append(
                     {
                         "rank": rank,
                         "symbol": symbol,
                         "name": name,
                         "close": price,
+                        "change_pct": change_pct,
                     }
                 )
                 if len(items) >= limit:

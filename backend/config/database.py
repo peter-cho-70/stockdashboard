@@ -1041,6 +1041,16 @@ class AuctionBidAnalysis(Base):
     case = relationship("AuctionCase", back_populates="bid_analysis")
 
 
+class PortfolioAISnapshot(Base):
+    """AI 포트폴리오 분석 결과 스냅샷 (항상 최신 1행만 유지)."""
+    __tablename__ = "portfolio_ai_snapshots"
+
+    id          = Column(Integer, primary_key=True)
+    analysis    = Column(Text, nullable=False)   # JSON string
+    meta        = Column(Text, nullable=False)   # JSON string
+    analyzed_at = Column(DateTime, default=datetime.utcnow)
+
+
 def _migrate_intel_columns():
     """기존 DB에 새 컬럼 추가 (SQLite)"""
     from sqlalchemy import text
@@ -1413,8 +1423,9 @@ def init_db():
     _migrate_target_price_columns()
     _migrate_portfolio_trade_columns()
     _migrate_autotrade_broker_column()
-    from core.us_market_report import seed_default_tracked_us_stocks
+    from core.us_market_report import seed_default_tracked_us_stocks, migrate_add_spacex
     seed_default_tracked_us_stocks()
+    migrate_add_spacex()
     print("✅ 데이터베이스 초기화 완료")
 
 

@@ -314,6 +314,36 @@ export interface FinanceLedgerState {
   settings: import("@/lib/finance/types").LedgerSettings;
 }
 
+export interface PortfolioAIAnalysisResult {
+  analysis: {
+    characteristics: string;
+    sector_analysis: string;
+    daily_analysis: string;
+    market_comparison: string;
+    profit_loss_review: string;
+    concentration_risk: string;
+    strategy_assessment: string;
+    suggestions: string;
+    summary: string;
+  };
+  meta: {
+    stock_count: number;
+    total_buy: number;
+    total_eval: number;
+    total_pnl: number;
+    total_pnl_rate: number;
+    daily_change: number;
+    daily_change_rate: number;
+    profit_count: number;
+    loss_count: number;
+    market: {
+      kospi?: { name: string; index: string; change_rate: string };
+      kosdaq?: { name: string; index: string; change_rate: string };
+    };
+  };
+  analyzed_at?: string;
+}
+
 export interface CashflowOpinionResult {
   opinion: string;
   year: number;
@@ -321,6 +351,7 @@ export interface CashflowOpinionResult {
   income: number;
   expense: number;
   net: number;
+  generated_at?: string;
 }
 
 export interface FinanceStockSnapshot {
@@ -617,6 +648,8 @@ export const api = {
     }),
   getFinanceAssetSnapshots: (days = 180) =>
     fetchApi<{ items: FinanceAssetSnapshot[] }>(`/finance/asset-snapshot?days=${days}`),
+  getCashflowOpinion: (year: number, month: number) =>
+    fetchApi<CashflowOpinionResult | null>(`/finance/ledger/cashflow-opinion?year=${year}&month=${month}`),
   generateCashflowOpinion: (year: number, month: number, analysisProvider?: AnalysisProvider) =>
     fetchApi<CashflowOpinionResult>("/finance/ledger/cashflow-opinion", {
       method: "POST",
@@ -628,6 +661,17 @@ export const api = {
     fetchApi<FinanceBackupRestoreResult>("/finance/backup/restore", {
       method: "POST",
       body: JSON.stringify(body),
+    }),
+
+  // ── 포트폴리오 AI 분석 ─────────────────────────
+  getPortfolioAnalysis: () =>
+    fetchApi<PortfolioAIAnalysisResult | null>("/portfolio/ai-analysis"),
+
+  generatePortfolioAnalysis: (analysisProvider?: AnalysisProvider) =>
+    fetchApi<PortfolioAIAnalysisResult>("/portfolio/ai-analysis", {
+      method: "POST",
+      body: JSON.stringify({ analysis_provider: analysisProvider ?? null }),
+      signal: AbortSignal.timeout(REPORT_GENERATE_TIMEOUT_MS),
     }),
 
   // ── 헬스 ──────────────────────────────────────
@@ -1302,6 +1346,7 @@ export interface StockResearchReport {
   date?: string | null;
   target_price?: string | null;
   report_id?: number | null;
+  url?: string | null;
 }
 
 export interface StockBasics {
@@ -1373,6 +1418,13 @@ export interface HoldingsAnalysis {
   research_reports?: StockResearchReport[];
   corporation_summary?: Record<string, string>;
   overview?: string;
+  business_profile?: {
+    core_business?: string;
+    main_products?: string[];
+    cash_cow?: string;
+    revenue_model?: string;
+    competitive_edge?: string;
+  } | null;
   news?: StockBasicsNewsItem[];
   daily_issues?: VolatilityIssue[];
   weekly_issues?: VolatilityIssue[];
@@ -1486,6 +1538,7 @@ export interface KrMarketPopularItem {
   symbol: string;
   name: string;
   close?: number | null;
+  change_pct?: number | null;
 }
 
 export interface KrMarketChartPoint {
@@ -1670,6 +1723,16 @@ export const marketApi = {
 
   getHoldingsAnalysis: (symbol: string) =>
     fetchApi<HoldingsAnalysis>(`/stocks/${encodeURIComponent(symbol)}/holdings-analysis`),
+
+  getReportLinks: (nid: number) =>
+    fetchApi<{
+      nid: number;
+      naver_url: string;
+      pdf_url: string | null;
+      title: string;
+      broker: string;
+      news_search_url: string;
+    }>(`/research/report-links?nid=${nid}`),
 
   addPriceTarget: (
     symbol: string,
@@ -2122,6 +2185,11 @@ export const groupsApi = {
       body: JSON.stringify({ query, limit }),
     }),
   remove: (id: number) => fetchApi<{ ok: boolean }>(`/stock-groups/${id}`, { method: "DELETE" }),
+  syncPrices: () =>
+    fetchApi<{ updated: number; skipped: number; already_done?: boolean }>(
+      "/stock-groups/sync-prices",
+      { method: "POST" },
+    ),
 };
 
 // ── ETF ──────────────────────────────────
@@ -2253,7 +2321,7 @@ export const etfApi = {
     fetchApi<EtfOutlookResponse>(`/etf/${encodeURIComponent(code)}/outlook${force ? "?force=true" : ""}`),
   searchByStock: (query: string) =>
     fetchApi<EtfSearchByStockResponse>(`/etf/search-by-stock?query=${encodeURIComponent(query)}`),
-  getMyHoldings: () => fetchApi<{ codes: string[] }>("/etf/my-holdings"),
+  getMyHoldings: () => fetchApi<{ codes: string[]; holdings: { code: string; name: string; qty: number; avg_price: number; current_price: number; change_rate: number; market_cap: number | null; return_3m: number | null }[] }>("/etf/my-holdings"),
   getMemo: (code: string) => fetchApi<{ code: string; memo: string }>(`/etf/${encodeURIComponent(code)}/memo`),
   setMemo: (code: string, memo: string) =>
     fetchApi<{ code: string; memo: string }>(`/etf/${encodeURIComponent(code)}/memo`, {

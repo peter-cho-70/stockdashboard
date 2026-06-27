@@ -32,6 +32,7 @@ import {
 import { krChangeClass, krSignedMediumClass } from "@/lib/krMarketColors";
 import { netSellProceeds } from "@/lib/tax";
 import { computeTargetAverage } from "@/lib/priceTargetUtils";
+import { PortfolioAIAnalysis } from "@/components/portfolio/portfolio-ai-analysis";
 
 function tradeLookbackStart(years = 3): string {
   const d = new Date();
@@ -828,6 +829,8 @@ function PortfolioContent() {
 
   return (
     <div className="space-y-6">
+      <PortfolioAIAnalysis />
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">종목 현황</h1>
@@ -975,13 +978,13 @@ function PortfolioContent() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right font-medium text-neutral-900 dark:text-neutral-100">
+                    <td className="px-4 py-3 text-right font-bold text-neutral-900 dark:text-neutral-100">
                       {fmt(stock.current_price, stock.currency)}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <RateCell rate={stock.change_rate} />
                     </td>
-                    <td className="px-4 py-3 text-right text-neutral-700 dark:text-neutral-300">
+                    <td className="px-4 py-3 text-right font-bold text-neutral-700 dark:text-neutral-300">
                       {stock.qty.toLocaleString()}
                     </td>
                     <td className="px-4 py-3 text-right text-neutral-700 dark:text-neutral-300">

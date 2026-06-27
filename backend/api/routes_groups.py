@@ -11,6 +11,7 @@ api/routes_groups.py
   DELETE /api/stock-groups/{group_id}/members/{symbol} — 멤버 제거
   DELETE /api/stock-groups/{group_id}             — 그룹 삭제
 """
+from datetime import datetime, date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from config.database import Stock, StockGroup, StockGroupMember, get_db
+from core.price_updater import fetch_krx_prices
 from core.stock_group_discovery import (
     discover_related_stocks,
     get_group_live_news,
@@ -207,6 +209,45 @@ def add_group_members_bulk(group_id: int, body: MemberBulkAdd, db: Session = Dep
     db.commit()
     db.refresh(group)
     return {"added": added, "skipped": skipped, **_serialize_group(db, group)}
+
+
+@groups_router.post("/stock-groups/sync-prices")
+def sync_group_prices(db: Session = Depends(get_db)):
+    """그룹 내 모든 종목 오늘 등락률 갱신 — 당일 이미 갱신된 종목은 스킵."""
+    today = date.today()
+
+    symbols = [
+        r.symbol for r in db.query(StockGroupMember.symbol).distinct().all()
+    ]
+    if not symbols:
+        return {"updated": 0, "skipped": 0}
+
+    needs_update, skipped = [], 0
+    for sym in symbols:
+        stock = db.query(Stock).filter(Stock.symbol == sym).first()
+        if stock and stock.updated_at and stock.updated_at.date() >= today:
+            skipped += 1
+        else:
+            needs_update.append(sym)
+
+    if not needs_update:
+        return {"updated": 0, "skipped": skipped, "already_done": True}
+
+    prices = fetch_krx_prices(needs_update)
+    updated = 0
+    for sym in needs_update:
+        p = prices.get(sym)
+        if not p or not p.get("current_price"):
+            continue
+        stock = db.query(Stock).filter(Stock.symbol == sym).first()
+        if stock:
+            stock.current_price = p["current_price"]
+            stock.change_rate = p["change_rate"]
+            stock.updated_at = datetime.utcnow()
+            updated += 1
+
+    db.commit()
+    return {"updated": updated, "skipped": skipped}
 
 
 @groups_router.post("/stock-groups/discover")

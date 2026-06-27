@@ -265,15 +265,22 @@ class KISClient:
 
     def _order_to_fill(self, order, range_start: date, range_end: date) -> Optional[FillRecord]:
         # pykis는 ccld_yn=Y를 canceled=True로 매핑하지만 KIS 응답에서는 '체결됨' 의미인 경우가 많다.
+        symbol = str(getattr(order, "symbol", "") or "")
+        name = str(getattr(order, "name", "") or "")
         if getattr(order, "rejected", False):
+            logger.debug("⛔ [%s/%s] rejected=True → skip", symbol, name)
             return None
         qty = _to_float(getattr(order, "executed_qty", None))
         if qty <= 0:
             qty = _to_float(getattr(order, "executed_quantity", None))
         if qty <= 0:
+            logger.debug("⛔ [%s/%s] qty=0 → skip", symbol, name)
             return None
         price = _to_float(getattr(order, "price", None)) or _to_float(getattr(order, "unit_price", None))
         if price <= 0:
+            raw_price = getattr(order, "price", None)
+            raw_unit = getattr(order, "unit_price", None)
+            logger.warning("⛔ [%s/%s] price=0 (avg_prvs=%s, ord_unpr=%s) → skip", symbol, name, raw_price, raw_unit)
             return None
         traded_day = order.time_kst.date()
         if traded_day < range_start or traded_day > range_end:
@@ -326,7 +333,7 @@ class KISClient:
                                 "SLL_BUY_DVSN_CD": "00",
                                 "INQR_DVSN": "00",
                                 "PDNO": "",
-                                "CCLD_DVSN": "01",
+                                "CCLD_DVSN": "00",
                                 "ORD_GNO_BRNO": "",
                                 "ODNO": "",
                                 "INQR_DVSN_3": "00",
@@ -343,14 +350,23 @@ class KISClient:
                         if result.is_last:
                             break
                         page = result.next_page
+                    orders_count = len(first.orders) if first else 0
                     logger.info(
                         "국내 체결 %s (%s~%s, recent=%s): %s건",
-                        tr_id,
-                        start,
-                        end,
-                        is_recent,
-                        len(first.orders) if first else 0,
+                        tr_id, start, end, is_recent, orders_count,
                     )
+                    if first:
+                        for o in first.orders:
+                            logger.info(
+                                "  ↳ [%s] %s %s qty=%s price=%s unit=%s rejected=%s",
+                                getattr(o, "symbol", "?"),
+                                getattr(o, "name", "?"),
+                                getattr(o, "type", "?"),
+                                getattr(o, "executed_quantity", "?"),
+                                getattr(o, "price", "?"),
+                                getattr(o, "unit_price", "?"),
+                                getattr(o, "rejected", "?"),
+                            )
                     return first.orders if first else []
                 except Exception as e:
                     last_error = e

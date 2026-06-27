@@ -52,21 +52,29 @@ def fetch_all_broker_balances() -> dict[str, tuple[BalanceItem, str]]:
 def sync_trade_history(db: Session, start, end=None) -> dict:
     """
     KIS API에서 일별 체결내역을 가져와 PortfolioTrade에 기록 (잔고는 변경하지 않음, 분석용 history만 추가)
-    반환: {"added": N, "skipped": N}
+    반환: {"added": N, "updated": N, "skipped": N}
     """
     records = fetch_trade_history_from_settings(start, end)
     year_counts: dict[str, int] = {}
     for rec in records:
         year = rec.traded_at[:4]
         year_counts[year] = year_counts.get(year, 0) + 1
-    added, skipped = 0, 0
+    added, updated, skipped = 0, 0, 0
 
     for rec in records:
         existing = db.query(PortfolioTrade).filter(
             PortfolioTrade.external_id == rec.external_id
         ).first()
         if existing:
-            skipped += 1
+            # 부분체결 후 추가 체결로 qty/price가 달라졌으면 업데이트
+            qty_changed = abs(existing.qty - rec.qty) > 0.0001
+            price_changed = abs(existing.price - rec.price) > 0.001
+            if qty_changed or price_changed:
+                existing.qty = rec.qty
+                existing.price = rec.price
+                updated += 1
+            else:
+                skipped += 1
             continue
 
         stock = db.query(Stock).filter(Stock.symbol == rec.symbol).first()
@@ -98,6 +106,7 @@ def sync_trade_history(db: Session, start, end=None) -> dict:
     db.commit()
     result = {
         "added": added,
+        "updated": updated,
         "skipped": skipped,
         "fetched": len(records),
         "years": year_counts,

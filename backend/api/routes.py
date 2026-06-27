@@ -879,10 +879,11 @@ def sync_portfolio_trade_history(
             except Exception as be:
                 balance_result = {"error": str(be)}
 
+        updated_part = f", 수정 {result['updated']}건" if result.get("updated") else ""
         return {
             "message": (
                 f"체결내역 동기화 완료 ({start_date}~{end_date}, "
-                f"신규 {result['added']}건, 기존 {result['skipped']}건)"
+                f"신규 {result['added']}건{updated_part}, 기존 {result['skipped']}건)"
                 + (f" · 잔고 갱신: 추가 {balance_result['added']}건, 수정 {balance_result['updated']}건"
                    if balance_result and "added" in balance_result else "")
             ),
@@ -1176,15 +1177,15 @@ def list_analysis_providers():
 
 @router.get("/intel/contents")
 def get_intel_contents(
-    limit: int = 20,
+    limit: int = 500,
     source_type: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """분석 콘텐츠 목록 조회"""
+    """분석 콘텐츠 목록 조회 (analyzed_at 기준 최신순)"""
     query = db.query(IntelContent)
     if source_type:
         query = query.filter(IntelContent.source_type == source_type)
-    contents = query.order_by(IntelContent.created_at.desc()).limit(limit).all()
+    contents = query.order_by(IntelContent.analyzed_at.desc()).limit(limit).all()
     return [serialize_intel(c, db) for c in contents]
 
 

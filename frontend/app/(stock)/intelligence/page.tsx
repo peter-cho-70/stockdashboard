@@ -323,7 +323,14 @@ function ContentCard({
             {content.channel_name && <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">{content.channel_name}</span>}
             <ScopeBadge scope={scope} />
             <SentimentBadge sentiment={content.sentiment} />
-            {content.analyzed_at && <span className="text-xs text-neutral-400 ml-auto">{new Date(content.analyzed_at).toLocaleDateString("ko-KR")}</span>}
+            {content.analyzed_at && (
+              <span className="text-xs text-neutral-400 ml-auto tabular-nums" title="분석 요청 시각">
+                {new Date(content.analyzed_at).toLocaleString("ko-KR", {
+                  year: "numeric", month: "2-digit", day: "2-digit",
+                  hour: "2-digit", minute: "2-digit", hour12: false,
+                })}
+              </span>
+            )}
           </div>
           {content.source_title && <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200">{content.source_title}</p>}
           {content.summary && !expanded && (
@@ -974,6 +981,7 @@ function AnalyzePanel({
   const [knowledgeDomains, setKnowledgeDomains] = useState<KnowledgeDomain[]>([]);
   const [selectedDomainId, setSelectedDomainId] = useState<number | null>(null);
   const [detailedExtract, setDetailedExtract] = useState(false);
+  const [forceReanalyze, setForceReanalyze] = useState(false);
   const [analyzing,    setAnalyzing]    = useState(false);
   const [lastResult,   setLastResult]   = useState<AnalysisResult | null>(null);
   const [lastLogs,     setLastLogs]     = useState<AnalysisLog[]>([]);
@@ -1011,6 +1019,7 @@ function AnalyzePanel({
               channel_name: inputChannel.trim() || undefined,
               analysis_provider: marketImpact ? analysisProvider : undefined,
               market_impact: marketImpact,
+              force_reanalyze: forceReanalyze,
               ...(isYoutubeUrl ? { detailed_extract: detailedExtract } : {}),
               ...(marketImpact ? {} : { domain_id: selectedDomainId }),
             }
@@ -1019,6 +1028,7 @@ function AnalyzePanel({
               title: inputTitle.trim() || undefined,
               analysis_provider: marketImpact ? analysisProvider : undefined,
               market_impact: marketImpact,
+              force_reanalyze: forceReanalyze,
               ...(marketImpact ? {} : { domain_id: selectedDomainId }),
             };
 
@@ -1127,6 +1137,18 @@ function AnalyzePanel({
                 </span>
               </label>
             )}
+            <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={forceReanalyze}
+                onChange={(e) => setForceReanalyze(e.target.checked)}
+                className="rounded border-neutral-300"
+              />
+              <span>
+                <span className="font-medium text-neutral-800 dark:text-neutral-200">재분석 강제 실행</span>
+                {" "}— 이전에 분석한 URL이라도 다시 크롤링·분석
+              </span>
+            </label>
           </>
         ) : (
           <>
@@ -1136,6 +1158,18 @@ function AnalyzePanel({
             <textarea value={inputText} onChange={(e) => setInputText(e.target.value)} rows={5}
               placeholder="분석할 텍스트를 입력하세요 (뉴스 본문, 시황 메모 등)"
               className="w-full resize-none rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-3 py-2 text-sm placeholder:text-neutral-400 focus:outline-none" />
+            <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={forceReanalyze}
+                onChange={(e) => setForceReanalyze(e.target.checked)}
+                className="rounded border-neutral-300"
+              />
+              <span>
+                <span className="font-medium text-neutral-800 dark:text-neutral-200">재분석 강제 실행</span>
+                {" "}— 이전에 분석한 URL이라도 다시 크롤링·분석
+              </span>
+            </label>
           </>
         )}
         {error && (
@@ -1170,6 +1204,11 @@ function AnalyzePanel({
               <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">✅ 분석 완료</span>
               <ScopeBadge scope={lastResult.content_scope || (analyzeScope === "market" ? "market" : "knowledge")} />
               {analyzeScope === "market" && <SentimentBadge sentiment={lastResult.sentiment} />}
+              {lastResult.analyzed_at && (
+                <span className="text-xs text-neutral-400 tabular-nums">
+                  {new Date(lastResult.analyzed_at).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}
+                </span>
+              )}
             </div>
             <button
               type="button"
@@ -1269,7 +1308,10 @@ function BriefingPanel() {
                       <SentDot s={c.sentiment || "NEUTRAL"} />
                       <div className="flex-1 min-w-0">
                         <p className="truncate font-medium text-neutral-700 dark:text-neutral-300">{c.source_title || c.summary?.slice(0, 60)}</p>
-                        <p className="text-[10px] text-neutral-400">{c.channel_name} · {c.analyzed_at}</p>
+                        <p className="text-[10px] text-neutral-400">
+                          {c.channel_name && <>{c.channel_name} · </>}
+                          {c.analyzed_at ? new Date(c.analyzed_at).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—"}
+                        </p>
                       </div>
                     </div>
                   ))}

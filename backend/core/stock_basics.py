@@ -22,7 +22,7 @@ _NAVER_UA = (
 )
 _CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "stock_basics_cache"
 _CACHE_TTL_HOURS = 6
-_OVERVIEW_MAX_CHARS = 3000
+_OVERVIEW_MAX_CHARS = 6000
 _NEWS_MAX_ITEMS = 40
 
 INFO_CODE_MAP = {
@@ -164,16 +164,24 @@ def _table_to_list(table: dict[str, str]) -> list[dict[str, str]]:
     return [{"label": k, "value": v} for k, v in table.items()]
 
 
+_COMMENT_LABELS = {
+    "comment1": "사업 개요",
+    "comment2": "주력 제품 및 서비스",
+    "comment3": "수익 구조",
+    "comment4": "주요 리스크",
+    "comment5": "전망 및 기타",
+}
+
 def _build_corporation_overview(finance_annual: dict[str, Any], coinfo_text: str) -> tuple[str, dict[str, str]]:
     summary = finance_annual.get("corporationSummary") or {}
     parts: list[str] = []
     comments: dict[str, str] = {}
     if isinstance(summary, dict):
-        for key in ("comment1", "comment2", "comment3", "comment4", "comment5"):
+        for key, label in _COMMENT_LABELS.items():
             text = (summary.get(key) or "").strip()
             if text:
                 comments[key] = text
-                parts.append(text)
+                parts.append(f"▶ {label}\n{text}")
     combined = "\n\n".join(parts).strip()
     if not combined:
         combined = coinfo_text
@@ -183,22 +191,60 @@ def _build_corporation_overview(finance_annual: dict[str, Any], coinfo_text: str
 
 
 def _fetch_company_overview(symbol: str) -> str:
+    """네이버 기업정보 페이지에서 기업개요·주력상품·수익구조를 수집."""
     url = f"https://finance.naver.com/item/coinfo.naver?code={symbol}"
-    with httpx.Client(timeout=15.0, headers={"User-Agent": _NAVER_UA}) as client:
-        resp = client.get(url)
-        resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-    wrap = soup.select_one(".wrap_company")
-    if not wrap:
+    try:
+        with httpx.Client(timeout=15.0, headers={"User-Agent": _NAVER_UA}) as client:
+            resp = client.get(url)
+            resp.raise_for_status()
+    except Exception:
         return ""
-    text = wrap.get_text(" ", strip=True)
-    marker = "기업개요"
-    if marker in text:
-        idx = text.find(marker)
-        snippet = text[idx + len(marker) : idx + len(marker) + 1200]
-        snippet = re.sub(r"출처\s*:.*$", "", snippet).strip()
-        return snippet
-    return text[:1200]
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    sections: list[str] = []
+
+    # ① 기업개요 (.wrap_company)
+    wrap = soup.select_one(".wrap_company")
+    if wrap:
+        raw = wrap.get_text(" ", strip=True)
+        for marker in ("기업개요", "사업내용", "회사소개"):
+            if marker in raw:
+                idx = raw.find(marker)
+                snippet = raw[idx + len(marker): idx + len(marker) + 2000]
+                snippet = re.sub(r"출처\s*:.*$", "", snippet, flags=re.MULTILINE).strip()
+                if snippet:
+                    sections.append(f"[기업개요]\n{snippet}")
+                break
+        if not sections:
+            sections.append(f"[기업개요]\n{raw[:2000]}")
+
+    # ② 제품·서비스 정보 (tab_con1, coinfo_tb_lay)
+    for sel in (".tb_type2", "#coinfo_tb_lay", ".wrap_coinfo"):
+        tbl = soup.select_one(sel)
+        if tbl:
+            rows_text = []
+            for tr in tbl.find_all("tr"):
+                th = tr.find("th")
+                tds = tr.find_all("td")
+                if th and tds:
+                    key = th.get_text(strip=True)
+                    val = " ".join(td.get_text(" ", strip=True) for td in tds)
+                    if val and key:
+                        rows_text.append(f"{key}: {val[:300]}")
+            if rows_text:
+                sections.append("[사업 현황]\n" + "\n".join(rows_text[:10]))
+            break
+
+    # ③ 주요 제품/서비스 키워드 블록
+    for sel in (".product_area", ".goods_area", ".biz_sum"):
+        blk = soup.select_one(sel)
+        if blk:
+            txt = blk.get_text(" ", strip=True)
+            if txt:
+                sections.append(f"[주력 제품·서비스]\n{txt[:800]}")
+            break
+
+    return "\n\n".join(sections)
 
 
 def _fetch_stock_news(stock_name: str, symbol: str, max_items: int = _NEWS_MAX_ITEMS) -> list[dict[str, str]]:
@@ -315,12 +361,14 @@ def _serialize_research_reports(integration: dict[str, Any], *, limit: int = 8) 
         wdt = str(item.get("wdt") or "")
         if len(wdt) == 8:
             wdt = f"{wdt[:4]}-{wdt[4:6]}-{wdt[6:8]}"
+        rid = item.get("id")
         reports.append({
             "broker": item.get("bnm"),
             "title": item.get("tit"),
             "date": wdt,
             "target_price": item.get("rcnt"),
-            "report_id": item.get("id"),
+            "report_id": rid,
+            "url": f"https://finance.naver.com/research/company_read.naver?nid={rid}" if rid else None,
         })
     return reports
 
@@ -411,6 +459,53 @@ def _build_investment_info(
     return info
 
 
+def _generate_business_profile(
+    name: str, symbol: str, overview: str, corp_summary: dict[str, str]
+) -> dict[str, str] | None:
+    """Gemini AI로 기업의 주력상품·캐시카우·수익구조를 생성."""
+    try:
+        from core.ai_analyzer import create_analyzer
+        from sqlalchemy.orm import Session
+        # DB 없이도 동작하도록 간단한 analyzer 생성
+        analyzer = create_analyzer(None)
+    except Exception:
+        return None
+
+    # 기존 요약 조합
+    existing = "\n".join(v for v in corp_summary.values() if v).strip() or overview[:600]
+
+    prompt = f"""당신은 한국 주식시장 전문 기업 분석가입니다.
+아래 기업에 대해 투자자에게 유용한 구조적 정보를 JSON으로 작성하세요.
+
+종목명: {name} ({symbol})
+기존 개요: {existing}
+
+다음 항목을 한국어로 작성하세요 (각 항목 2~4문장, 구체적 수치·제품명 포함):
+
+1. core_business: 이 기업이 무슨 사업을 하는지 핵심 설명
+2. main_products: 주력 제품/서비스 목록 (배열, 각 항목에 제품명과 특징 포함)
+3. cash_cow: 가장 안정적이고 높은 이익을 내는 캐시카우 사업/제품 설명
+4. revenue_model: 돈 버는 구조 — 어떤 방식으로 매출이 발생하는지 (B2B/B2C, 구독/일회성, 계약/스팟 등)
+5. competitive_edge: 이 기업만의 핵심 경쟁력 또는 해자(moat)
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{{
+  "core_business": "...",
+  "main_products": ["제품1: 설명", "제품2: 설명", "제품3: 설명"],
+  "cash_cow": "...",
+  "revenue_model": "...",
+  "competitive_edge": "..."
+}}"""
+
+    try:
+        result = analyzer.analyze_json_prompt(prompt, log_label=f"기업프로파일:{name}")
+        if isinstance(result, dict) and "core_business" in result:
+            return result
+    except Exception as e:
+        logger.debug("기업 프로파일 생성 실패 %s: %s", name, e)
+    return None
+
+
 def fetch_stock_basics(symbol: str, *, use_cache: bool = True) -> dict[str, Any]:
     symbol = symbol.strip()
     if not _is_kr_symbol(symbol):
@@ -432,6 +527,8 @@ def fetch_stock_basics(symbol: str, *, use_cache: bool = True) -> dict[str, Any]
     name = integration.get("stockName") or basic.get("stockName") or symbol
     news = _fetch_stock_news(name, symbol)
 
+    business_profile = _generate_business_profile(name, symbol, overview, corporation_comments)
+
     payload = {
         "symbol": symbol,
         "name": name,
@@ -450,6 +547,7 @@ def fetch_stock_basics(symbol: str, *, use_cache: bool = True) -> dict[str, Any]
         "research_reports": _serialize_research_reports(integration),
         "corporation_summary": corporation_comments,
         "overview": overview,
+        "business_profile": business_profile,
         "news": news,
     }
     _save_cache(symbol, payload)

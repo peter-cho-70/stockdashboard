@@ -16,9 +16,14 @@ function loadSavedView(): "kr" | "us" | null {
 
 /** 국내/미국 토글 — 기본은 장 마감 여부에 따라 결정 */
 export function MarketBriefingCard() {
-  const [view, setView] = useState<"kr" | "us">(() => {
-    return loadSavedView() ?? (isKrMarketFocusKST() ? "kr" : "us");
-  });
+  // SSR과 클라이언트 초기값이 일치하도록 sessionStorage를 초기값에 사용하지 않음
+  const [view, setView] = useState<"kr" | "us">(() => isKrMarketFocusKST() ? "kr" : "us");
+
+  useEffect(() => {
+    // 하이드레이션 후 저장된 탭 선택을 복원
+    const saved = loadSavedView();
+    if (saved) setView(saved);
+  }, []);
 
   useEffect(() => {
     sessionStorage.setItem(VIEW_KEY, view);

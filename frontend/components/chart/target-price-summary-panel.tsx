@@ -69,7 +69,8 @@ export function TargetPriceSummaryPanel({
   }, [buyPrice, customProfitPct]);
 
   return (
-    <div className="space-y-3">
+    <div className="overflow-x-auto">
+    <div className="space-y-3 min-w-[360px]">
       <div className="flex items-center gap-2">
         <Target size={13} className="text-violet-500" />
         <span className="font-medium text-neutral-600 dark:text-neutral-400">매수적절가 계산</span>
@@ -77,7 +78,7 @@ export function TargetPriceSummaryPanel({
       </div>
 
       <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4 whitespace-nowrap">
           <span className="text-[11px] text-neutral-500">평균 목표가 산정 기간</span>
           <div className="flex gap-1">
             {WINDOW_OPTIONS.map((d) => (
@@ -129,8 +130,8 @@ export function TargetPriceSummaryPanel({
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-neutral-500">가중치 (평균 목표가 × 가중치 = 매수적절가)</span>
+      <div className="flex items-center justify-between gap-4 whitespace-nowrap">
+        <span className="text-[11px] text-neutral-500 shrink-0">가중치 (평균 목표가 × 가중치 = 매수적절가)</span>
         <div className="flex items-center gap-1">
           <input
             type="number"
@@ -208,6 +209,7 @@ export function TargetPriceSummaryPanel({
           </ul>
         )}
       </div>
+    </div>
     </div>
   );
 }

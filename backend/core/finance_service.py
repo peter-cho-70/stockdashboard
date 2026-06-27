@@ -333,10 +333,28 @@ def _build_cashflow_opinion_prompt(year: int, month: int, txns: list[dict[str, A
 {{"opinion": "한국어 존댓말로 3~5문단. 수입 대비 지출 수준 평가, 주의할 지출 패턴, 구체적 개선 제안을 포함."}}"""
 
 
+def _cashflow_opinion_key(year: int, month: int) -> str:
+    return f"cashflow_opinion_{year}_{month:02d}"
+
+
+def get_saved_cashflow_opinion(db: Session, year: int, month: int) -> dict[str, Any] | None:
+    from config.database import FinanceJsonStore
+    import json
+
+    key = _cashflow_opinion_key(year, month)
+    row = db.query(FinanceJsonStore).filter(FinanceJsonStore.store_key == key).first()
+    if not row:
+        return None
+    return json.loads(row.data_json)
+
+
 def generate_cashflow_opinion(
     db: Session, year: int, month: int, provider: str | None = None
 ) -> dict[str, Any]:
     from core.ai_analyzer import create_analyzer
+    from config.database import FinanceJsonStore
+    import json
+    from datetime import datetime as _dt
 
     state = get_ledger_state(db)
     txns = _month_transactions(state, year, month)
@@ -349,14 +367,28 @@ def generate_cashflow_opinion(
     opinion = (result or {}).get("opinion")
     if not opinion:
         raise RuntimeError("AI 의견 생성에 실패했습니다. 로그를 확인하세요.")
-    return {
+
+    payload: dict[str, Any] = {
         "opinion": opinion,
         "year": year,
         "month": month,
         "income": income,
         "expense": expense,
         "net": income - expense,
+        "generated_at": _dt.utcnow().isoformat(),
     }
+
+    # DB에 월별로 저장 (재생성 시 덮어쓰기)
+    key = _cashflow_opinion_key(year, month)
+    row = db.query(FinanceJsonStore).filter(FinanceJsonStore.store_key == key).first()
+    if row:
+        row.data_json = json.dumps(payload, ensure_ascii=False)
+        row.updated_at = _dt.utcnow()
+    else:
+        db.add(FinanceJsonStore(store_key=key, data_json=json.dumps(payload, ensure_ascii=False)))
+    db.commit()
+
+    return payload
 
 
 def restore_backup(db: Session, payload: dict[str, Any]) -> dict[str, Any]:

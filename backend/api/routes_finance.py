@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,7 @@ from core.demo_mode import demo_write_blocked
 from core.finance_service import (
     export_backup,
     generate_cashflow_opinion,
+    get_saved_cashflow_opinion,
     get_finance_state,
     get_ledger_state,
     get_stock_snapshot,
@@ -90,6 +92,17 @@ class CashflowOpinionBody(BaseModel):
     year: int
     month: int
     analysis_provider: str | None = None
+
+
+@finance_router.get("/ledger/cashflow-opinion")
+def get_cashflow_opinion(
+    year: int = Query(...), month: int = Query(...), db: Session = Depends(get_db)
+):
+    """저장된 월별 AI 현금흐름 의견 조회"""
+    saved = get_saved_cashflow_opinion(db, year, month)
+    if not saved:
+        return JSONResponse(content=None)
+    return saved
 
 
 @finance_router.post("/ledger/cashflow-opinion")
