@@ -203,8 +203,8 @@ def migrate_add_spacex() -> None:
         db.close()
 
 
-def _load_tracked_us_stocks() -> tuple[list[tuple[str, str, str]], dict[str, str], dict[str, str]]:
-    """DB에 등록된 추적 종목 → ((name_kr, ticker, "stock") 목록, {ticker: korea_related}, {ticker: sector}).
+def _load_tracked_us_stocks() -> tuple[list[tuple[str, str, str]], dict[str, str], dict[str, str], dict[str, str]]:
+    """DB에 등록된 추적 종목 → ((name_kr, ticker, "stock") 목록, {ticker: korea_related}, {ticker: sector}, {ticker: compare_krx_symbol}).
     DB가 비어있으면(시딩 전이거나 조회 실패) 기본값으로 폴백."""
     try:
         from config.database import SessionLocal, TrackedUsStock
@@ -226,12 +226,13 @@ def _load_tracked_us_stocks() -> tuple[list[tuple[str, str, str]], dict[str, str
         specs = [(name_kr, ticker, "stock") for ticker, name_kr, _, _ in DEFAULT_US_STOCK_TICKERS]
         korea_map = {ticker: korea for ticker, _, _, korea in DEFAULT_US_STOCK_TICKERS}
         sector_map = {ticker: sector for ticker, _, sector, _ in DEFAULT_US_STOCK_TICKERS}
-        return specs, korea_map, sector_map
+        return specs, korea_map, sector_map, {}
 
     specs = [(r.name_kr, r.ticker, "stock") for r in rows]
     korea_map = {r.ticker: r.korea_related for r in rows if r.korea_related}
     sector_map = {r.ticker: r.sector for r in rows}
-    return specs, korea_map, sector_map
+    compare_map = {r.ticker: r.compare_krx_symbol for r in rows if r.compare_krx_symbol}
+    return specs, korea_map, sector_map, compare_map
 
 
 def list_tracked_us_stocks(db: Session) -> list[dict[str, Any]]:
@@ -250,6 +251,7 @@ def list_tracked_us_stocks(db: Session) -> list[dict[str, Any]]:
             "sector": r.sector,
             "sector_label": SECTOR_LABELS.get(r.sector, r.sector),
             "korea_related": r.korea_related,
+            "compare_krx_symbol": r.compare_krx_symbol,
         }
         for r in rows
     ]
@@ -262,6 +264,7 @@ def add_tracked_us_stock(
     name_kr: str,
     sector: str = "other",
     korea_related: Optional[str] = None,
+    compare_krx_symbol: Optional[str] = None,
 ) -> dict[str, Any]:
     """추적 종목 추가 — yfinance로 티커 유효성을 먼저 확인한다."""
     from config.database import TrackedUsStock
@@ -282,6 +285,7 @@ def add_tracked_us_stock(
         name_kr=(name_kr or ticker).strip(),
         sector=sector if sector in SECTOR_LABELS else "other",
         korea_related=(korea_related or "").strip() or None,
+        compare_krx_symbol=(compare_krx_symbol or "").strip() or None,
         sort_order=sort_order,
     )
     db.add(row)
@@ -292,6 +296,7 @@ def add_tracked_us_stock(
         "sector": row.sector,
         "sector_label": SECTOR_LABELS.get(row.sector, row.sector),
         "korea_related": row.korea_related,
+        "compare_krx_symbol": row.compare_krx_symbol,
     }
 
 
@@ -302,6 +307,7 @@ def update_tracked_us_stock(
     name_kr: Optional[str] = None,
     sector: Optional[str] = None,
     korea_related: Optional[str] = None,
+    compare_krx_symbol: Optional[str] = None,
 ) -> dict[str, Any]:
     """등록된 추적 종목의 이름/섹터/한국 연동 종목 메모를 수정 (티커는 변경 불가)."""
     from config.database import TrackedUsStock
@@ -320,6 +326,8 @@ def update_tracked_us_stock(
         row.sector = sector if sector in SECTOR_LABELS else "other"
     if korea_related is not None:
         row.korea_related = korea_related.strip() or None
+    if compare_krx_symbol is not None:
+        row.compare_krx_symbol = compare_krx_symbol.strip() or None
 
     db.commit()
     return {
@@ -328,6 +336,7 @@ def update_tracked_us_stock(
         "sector": row.sector,
         "sector_label": SECTOR_LABELS.get(row.sector, row.sector),
         "korea_related": row.korea_related,
+        "compare_krx_symbol": row.compare_krx_symbol,
     }
 
 
@@ -577,6 +586,90 @@ def _fetch_ticker_group(
     return results
 
 
+VALID_HISTORY_PERIODS = {"1mo", "3mo", "6mo", "1y"}
+
+# 원화 교차환율(합성) — (원/달러 티커, 상대통화/달러 티커, 배율). close = krw_close / quote_close * 배율
+CROSS_RATE_COMPONENTS: dict[str, tuple[str, str, float]] = {
+    "CNY_KRW": ("KRW=X", "CNY=X", 1.0),
+    "JPY_KRW": ("KRW=X", "JPY=X", 100.0),
+}
+
+
+def _yfinance_daily_closes(ticker: str, period: str) -> dict[str, float]:
+    import yfinance as yf
+
+    hist = yf.Ticker(ticker).history(period=period, interval="1d")
+    if hist is None or hist.empty:
+        return {}
+    closes: dict[str, float] = {}
+    for idx, row in hist.iterrows():
+        v = _safe_float(row["Close"], ndigits=4)
+        if v is None:
+            continue
+        d = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
+        closes[d] = v
+    return closes
+
+
+def _fetch_cross_rate_history(ticker: str, period: str) -> dict[str, Any]:
+    """위안화(한화)/100엔(한화) 등 합성 교차환율 시계열 — 원/달러 ÷ 상대통화/달러."""
+    krw_ticker, quote_ticker, multiplier = CROSS_RATE_COMPONENTS[ticker]
+    try:
+        krw_closes = _yfinance_daily_closes(krw_ticker, period)
+        quote_closes = _yfinance_daily_closes(quote_ticker, period)
+    except ImportError:
+        return {"ticker": ticker, "period": period, "points": [], "error": "yfinance 미설치"}
+    except Exception as e:
+        logger.warning("교차환율 시계열 조회 실패 %s: %s", ticker, e)
+        return {"ticker": ticker, "period": period, "points": [], "error": str(e)[:120]}
+
+    points: list[dict[str, Any]] = []
+    for d in sorted(krw_closes):
+        qv = quote_closes.get(d)
+        kv = krw_closes.get(d)
+        if not qv or kv is None:
+            continue
+        points.append({"date": d, "close": round(kv / qv * multiplier, 4)})
+
+    if not points:
+        return {"ticker": ticker, "period": period, "points": [], "error": "no_data"}
+
+    return {"ticker": ticker, "period": period, "points": points}
+
+
+def fetch_ticker_history(ticker: str, period: str = "3mo") -> dict[str, Any]:
+    """티커의 일별 종가 시계열 (차트용). period: 1mo|3mo|6mo|1y."""
+    if period not in VALID_HISTORY_PERIODS:
+        period = "3mo"
+
+    if ticker in CROSS_RATE_COMPONENTS:
+        return _fetch_cross_rate_history(ticker, period)
+
+    try:
+        import yfinance as yf
+    except ImportError:
+        return {"ticker": ticker, "period": period, "points": [], "error": "yfinance 미설치"}
+
+    try:
+        hist = yf.Ticker(ticker).history(period=period, interval="1d")
+    except Exception as e:
+        logger.warning("시계열 조회 실패 %s: %s", ticker, e)
+        return {"ticker": ticker, "period": period, "points": [], "error": str(e)[:120]}
+
+    if hist is None or hist.empty:
+        return {"ticker": ticker, "period": period, "points": [], "error": "no_data"}
+
+    points: list[dict[str, Any]] = []
+    for idx, row in hist.iterrows():
+        close = _safe_float(row["Close"], ndigits=4)
+        if close is None:
+            continue
+        d = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
+        points.append({"date": d, "close": close})
+
+    return {"ticker": ticker, "period": period, "points": points}
+
+
 def _fetch_rss_query(
     query: str,
     max_per_query: int = 4,
@@ -719,7 +812,7 @@ def _extract_issue_stocks(client: GeminiClient, articles: list[dict[str, Any]]) 
     """뉴스에서 고정 추적 종목 외 '이슈 종목'(예: 실적 서프라이즈로 급등한 마이크론)을 추출."""
     if not articles:
         return []
-    stock_specs, _, _ = _load_tracked_us_stocks()
+    stock_specs, _, _, _ = _load_tracked_us_stocks()
     fixed_names = ", ".join(f"{name}({ticker})" for name, ticker, _ in stock_specs)
     prompt = ISSUE_STOCK_PROMPT.format(
         articles_block=_format_articles_block(articles),
@@ -778,7 +871,7 @@ def fetch_issue_stock_quotes(client: GeminiClient, articles: list[dict[str, Any]
 
 
 def fetch_us_market_snapshot() -> dict[str, Any]:
-    stock_specs, korea_map, sector_map = _load_tracked_us_stocks()
+    stock_specs, korea_map, sector_map, compare_map = _load_tracked_us_stocks()
     us_stocks = _fetch_ticker_group(stock_specs, "us_stock")
     post_market = _fetch_post_market_quotes(stock_specs)
     for item in us_stocks:
@@ -791,6 +884,9 @@ def fetch_us_market_snapshot() -> dict[str, Any]:
         sector = sector_map.get(item.get("ticker"))
         if sector:
             item["sector"] = sector
+        compare_symbol = compare_map.get(item.get("ticker"))
+        if compare_symbol:
+            item["compare_krx_symbol"] = compare_symbol
     return {
         "us_indices": _fetch_ticker_group(US_INDEX_TICKERS, "us_index"),
         "commodity": _fetch_ticker_group(COMMODITY_TICKERS, "commodity", intraday=True),
@@ -808,7 +904,7 @@ def fetch_live_snapshot(mode: QuoteMode = "auto") -> dict[str, Any]:
     """실시간 시세 스냅샷 — KST 낮에는 미국 선물 포함."""
     use_futures = mode == "futures" or (mode == "auto" and is_us_daytime_kst())
     now_kst = _kst_now()
-    stock_specs, korea_map, sector_map = _load_tracked_us_stocks()
+    stock_specs, korea_map, sector_map, compare_map = _load_tracked_us_stocks()
     us_stocks = _fetch_ticker_group(stock_specs, "us_stock")
     for item in us_stocks:
         related = korea_map.get(item.get("ticker"))
@@ -817,6 +913,9 @@ def fetch_live_snapshot(mode: QuoteMode = "auto") -> dict[str, Any]:
         sector = sector_map.get(item.get("ticker"))
         if sector:
             item["sector"] = sector
+        compare_symbol = compare_map.get(item.get("ticker"))
+        if compare_symbol:
+            item["compare_krx_symbol"] = compare_symbol
     snap: dict[str, Any] = {
         "us_indices": _fetch_ticker_group(US_INDEX_TICKERS, "us_index"),
         "us_futures": (

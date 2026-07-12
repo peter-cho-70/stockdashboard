@@ -7,6 +7,7 @@ export type FundingStatus = 'planned' | 'fundraising' | 'completed' | 'cancelled
 export type FundingMethod = 'cash' | 'stock_sale' | 'loan' | 'savings_withdrawal' | 'other';
 
 export type CashAccountType = 'securities' | 'bank';
+export type CashSyncSource = 'manual' | 'openbanking' | 'kis_deposit' | 'kiwoom_deposit';
 
 export interface CashAsset {
   id: string;
@@ -15,6 +16,10 @@ export interface CashAsset {
   accountType: CashAccountType;
   amount: number;
   updatedAt: string;
+  /** 자동 동기화 소스 (없으면 수동 입력) */
+  syncSource?: CashSyncSource;
+  /** 동기화 식별자 (오픈뱅킹: fintechUseNum, 브로커: accountNo) */
+  syncMeta?: { fintechUseNum?: string; accountNo?: string };
 }
 
 export interface IlliquidAsset {
@@ -83,6 +88,8 @@ export interface Income {
   amount: number;
   cycle: 'monthly' | 'irregular';
   receivedDate?: string;
+  /** 월급 등 입금 은행 계좌 (CashAsset.id, accountType: bank) */
+  depositAccountId?: string;
 }
 
 export interface FundingPlanItem {
@@ -176,6 +183,8 @@ export interface Transaction {
   isFixed: boolean;
   user?: string;
   createdAt: string;
+  /** 연결된 부채 (Liability.id) — 이 거래를 해당 부채의 이자 납입으로 연동 */
+  linkedLiabilityId?: string;
 }
 
 export interface Budget {

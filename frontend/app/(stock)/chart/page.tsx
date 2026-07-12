@@ -57,6 +57,7 @@ import {
   type SharedSignalsResponse,
   type RelatedAnalysisItem,
   type BuyScoreResult,
+  type VolatilityResult,
   type ChartDateMemoItem,
   type WatchlistItem,
   type PriceTarget,
@@ -666,6 +667,8 @@ function PriceChart({
             { color: "#3b82f6", label: "거래량 급증" },
             { color: KR_UP_HEX_STRONG, label: "▲ 급등 (AI)" },
             { color: KR_DOWN_HEX_STRONG, label: "▼ 급락 (AI)" },
+            { color: "#16a34a", label: "✓ 패턴 적중" },
+            { color: "#9ca3af", label: "✗ 패턴 실패" },
           ].map(({ color, label }) => (
             <span
               key={label}
@@ -1473,6 +1476,9 @@ function ChartContent() {
   );
   const [buyScore, setBuyScore] = useState<BuyScoreResult | null>(null);
   const [buyScoreLoading, setBuyScoreLoading] = useState(false);
+  const [volatility, setVolatility] = useState<VolatilityResult | null>(null);
+  const [matrixSignal, setMatrixSignal] = useState<string | null>(null);
+  const [matrixReason, setMatrixReason] = useState<string | null>(null);
   const [dateMemos, setDateMemos] = useState<ChartDateMemoItem[]>([]);
   const [activeMemoId, setActiveMemoId] = useState<string | null>(null);
   const [memoDate, setMemoDate] = useState("");
@@ -1824,13 +1830,26 @@ function ChartContent() {
   useEffect(() => {
     if (!selectedSymbol) {
       setBuyScore(null);
+      setVolatility(null);
+      setMatrixSignal(null);
+      setMatrixReason(null);
       return;
     }
     setBuyScoreLoading(true);
     scoreApi
-      .getBuyScore(selectedSymbol, 30)
-      .then(setBuyScore)
-      .catch(() => setBuyScore(null))
+      .getForecast(selectedSymbol, 30)
+      .then((res) => {
+        setBuyScore(res.buy_score);
+        setVolatility(res.volatility);
+        setMatrixSignal(res.matrix_signal);
+        setMatrixReason(res.matrix_reason);
+      })
+      .catch(() => {
+        setBuyScore(null);
+        setVolatility(null);
+        setMatrixSignal(null);
+        setMatrixReason(null);
+      })
       .finally(() => setBuyScoreLoading(false));
   }, [selectedSymbol]);
 
@@ -2270,30 +2289,6 @@ function ChartContent() {
             ))}
           </select>
         </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-1">
-            {PERIODS.map(({ id, label }) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => selectPeriod(id)}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  period === id
-                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                    : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {analysisMode && (
-            <span className="text-[10px] text-emerald-700 dark:text-emerald-400">
-              지표 계산 · {periodLabel(chartFetchPeriod(period, true))} 데이터
-            </span>
-          )}
-        </div>
       </div>
 
       {chartData && currentStock && (
@@ -2402,7 +2397,29 @@ function ChartContent() {
                 <span className="rounded-md bg-neutral-100 px-2 py-0.5 text-xs font-semibold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
                   {buyScore.grade} · {buyScore.grade_label}
                 </span>
+                {volatility && volatility.level !== "UNKNOWN" && (
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
+                      volatility.level === "HIGH"
+                        ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
+                        : volatility.level === "MEDIUM"
+                          ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                    }`}
+                    title={volatility.factors.map((f) => f.desc).join(" · ")}
+                  >
+                    변동성 {volatility.level} ({volatility.score})
+                  </span>
+                )}
+                {matrixSignal && (
+                  <span className="rounded-md bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
+                    {matrixSignal}
+                  </span>
+                )}
               </div>
+              {matrixReason && (
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">{matrixReason}</p>
+              )}
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 {buyScore.components.map((c) => (
                   <div
@@ -2476,7 +2493,28 @@ function ChartContent() {
               )}
             </div>
 
-            <div className="flex gap-2 text-xs flex-wrap">
+            <div className="flex gap-2 text-xs flex-wrap items-center">
+              <div className="flex gap-0.5 rounded-full border border-[var(--border-subtle)] bg-[var(--surface)] p-0.5">
+                {PERIODS.map(({ id, label }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => selectPeriod(id)}
+                    className={`rounded-full px-2.5 py-1 font-medium transition-colors ${
+                      period === id
+                        ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                        : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {analysisMode && (
+                <span className="text-[10px] text-emerald-700 dark:text-emerald-400">
+                  지표 계산 · {periodLabel(chartFetchPeriod(period, true))} 데이터
+                </span>
+              )}
               <button
                 type="button"
                 onClick={handleExpandChart}

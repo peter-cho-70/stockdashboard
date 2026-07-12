@@ -1,13 +1,18 @@
 'use client';
 
 import { useFinanceStore } from '@/lib/finance/store/finance-store';
+import { useLedgerStore } from '@/lib/finance/store/ledger-store';
 import { Fragment, useState } from 'react';
 import { LiabilityType, Liability } from '@/lib/finance/types';
-import { Plus, CreditCard, Percent, Trash2, Pencil, X, AlertTriangle, TrendingUp } from 'lucide-react';
+import { Plus, CreditCard, Percent, Trash2, Pencil, X, AlertTriangle, TrendingUp, BookOpen } from 'lucide-react';
 import { LeverageAnalysisPanel } from '@/components/finance/leverage-analysis-panel';
 
 export default function LiabilitiesPage() {
   const store = useFinanceStore();
+  const ledger = useLedgerStore();
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth() + 1;
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -63,6 +68,12 @@ export default function LiabilitiesPage() {
   const totalPrincipal = store.liabilities.reduce((s, l) => s + l.principal, 0);
   const totalMonthlyInterest = store.liabilities.reduce((s, l) => s + l.monthlyInterest, 0);
 
+  // 가계부 연동 실제 이자
+  const actualInterestThisMonth = (id: string) => ledger.getLiabilityInterest(id, curYear, curMonth);
+  const actualInterestTotal = (id: string) => ledger.getLiabilityInterest(id);
+  const totalActualThisMonth = store.liabilities.reduce((s, l) => s + actualInterestThisMonth(l.id), 0);
+  const totalActualCumulative = store.liabilities.reduce((s, l) => s + actualInterestTotal(l.id), 0);
+
   const lenderTypeLabel = (t: LiabilityType) =>
     t === 'credit_line' ? '마이너스 통장' : t === 'bank_loan' ? '일반 대출' : '경락잔금대출';
 
@@ -87,14 +98,23 @@ export default function LiabilitiesPage() {
       </div>
 
       {/* Summary row */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="bg-white rounded-xl border border-gray-200 px-5 py-4 shadow-sm">
           <p className="text-xs text-gray-500 font-medium">총 부채 잔액</p>
           <p className="text-xl font-bold text-rose-500 mt-1 tabular-nums">{formatKRW(totalPrincipal)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 px-5 py-4 shadow-sm">
-          <p className="text-xs text-gray-500 font-medium">월 총 이자 납입액</p>
+          <p className="text-xs text-gray-500 font-medium">월 총 이자 (추정)</p>
           <p className="text-xl font-bold text-amber-600 mt-1 tabular-nums">{formatKRW(totalMonthlyInterest)}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">잔액 × 금리 ÷ 12</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 px-5 py-4 shadow-sm">
+          <p className="text-xs text-gray-500 font-medium flex items-center gap-1">
+            <BookOpen size={11} className="text-emerald-600" />
+            이번 달 실제 이자 (가계부)
+          </p>
+          <p className="text-xl font-bold text-emerald-600 mt-1 tabular-nums">{formatKRW(totalActualThisMonth)}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">누적 합계 {formatKRW(totalActualCumulative)}</p>
         </div>
       </div>
 
@@ -159,14 +179,15 @@ export default function LiabilitiesPage() {
               <th className="px-6 py-3 text-left">부채 내역</th>
               <th className="px-6 py-3 text-left">금융기관</th>
               <th className="px-6 py-3 text-right">금리</th>
-              <th className="px-6 py-3 text-right">월 이자</th>
+              <th className="px-6 py-3 text-right">월 이자 (추정)</th>
+              <th className="px-6 py-3 text-right">실제 이자 (이번 달)</th>
               <th className="px-6 py-3 text-right">잔액</th>
               <th className="px-4 py-3 w-16"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {store.liabilities.length === 0 ? (
-              <tr><td colSpan={6} className="px-6 py-8 text-center text-xs text-gray-400">등록된 부채가 없습니다.</td></tr>
+              <tr><td colSpan={7} className="px-6 py-8 text-center text-xs text-gray-400">등록된 부채가 없습니다.</td></tr>
             ) : (
               store.liabilities.map((liability) => (
                 <Fragment key={liability.id}>
@@ -182,6 +203,13 @@ export default function LiabilitiesPage() {
                       </div>
                     </td>
                     <td className="px-6 py-3.5 text-right text-gray-600 tabular-nums">{formatKRW(liability.monthlyInterest)}</td>
+                    <td className="px-6 py-3.5 text-right tabular-nums">
+                      {(() => {
+                        const actual = actualInterestThisMonth(liability.id);
+                        if (actual <= 0) return <span className="text-gray-300">—</span>;
+                        return <span className="font-semibold text-emerald-600">{formatKRW(actual)}</span>;
+                      })()}
+                    </td>
                     <td className="px-6 py-3.5 text-right font-semibold text-rose-500 tabular-nums">{formatKRW(liability.principal)}</td>
                     <td className="px-4 py-3.5">
                       <div className="flex items-center justify-end gap-1">
@@ -200,7 +228,7 @@ export default function LiabilitiesPage() {
                   </tr>
                   {expandedId === liability.id && liability.startDate && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-4 bg-gray-50">
+                      <td colSpan={7} className="px-6 py-4 bg-gray-50">
                         <LeverageAnalysisPanel
                           startDate={liability.startDate}
                           principal={liability.principal}
@@ -222,18 +250,26 @@ export default function LiabilitiesPage() {
           <h3 className="text-sm font-semibold text-gray-900">다음 납입 예정</h3>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {store.liabilities.map((liability) => (
-            <div key={liability.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors">
-              <div>
-                <p className="text-sm text-gray-800 font-medium">{liability.name}</p>
-                <p className="text-xs text-gray-400 mt-0.5">연 {liability.interestRate}% 적용</p>
+          {store.liabilities.map((liability) => {
+            const actual = actualInterestThisMonth(liability.id);
+            return (
+              <div key={liability.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors">
+                <div>
+                  <p className="text-sm text-gray-800 font-medium">{liability.name}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">연 {liability.interestRate}% 적용</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-semibold text-amber-600 tabular-nums">{formatKRW(liability.monthlyInterest)}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">월 이자 (추정)</p>
+                  {actual > 0 && (
+                    <p className="text-xs font-medium text-emerald-600 tabular-nums mt-1">
+                      실제 {formatKRW(actual)}
+                    </p>
+                  )}
+                </div>
               </div>
-              <div className="text-right">
-                <p className="text-sm font-semibold text-amber-600 tabular-nums">{formatKRW(liability.monthlyInterest)}</p>
-                <p className="text-xs text-gray-400 mt-0.5">월 이자</p>
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {store.liabilities.length === 0 && (
             <p className="text-xs text-gray-400 col-span-2 text-center py-4">등록된 부채가 없습니다.</p>
           )}

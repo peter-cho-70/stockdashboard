@@ -13,6 +13,7 @@ import {
   type UsMarketSnapshot,
 } from "@/lib/api";
 import { getUsMarketQuoteTooltip } from "@/lib/usMarketTooltips";
+import { UsTickerChartModal } from "@/components/us-ticker-chart-modal";
 import { loadUsReportCache, saveUsReportCache } from "@/lib/marketCache";
 import { todayKst } from "@/lib/marketDisplay";
 import { formatDateTimeKst, parseUtcIsoMs } from "@/lib/dateTimeKst";
@@ -212,13 +213,14 @@ function PostMarketRow({ item }: { item: UsMarketQuote }) {
   );
 }
 
-function QuoteCard({ item }: { item: UsMarketQuote }) {
+function QuoteCard({ item, onSelect }: { item: UsMarketQuote; onSelect?: (item: UsMarketQuote) => void }) {
   const koreaHint = item.korea_related ? `영향: ${item.korea_related}` : undefined;
   const tooltip =
     [item.issue_reason, koreaHint].filter(Boolean).join(" · ") ||
     getUsMarketQuoteTooltip(item.name, item.ticker);
   const asOf = formatQuoteAsOf(item);
   const sectorAccent = item.sector ? SECTOR_ACCENT_COLORS[item.sector] : undefined;
+  const clickable = Boolean(onSelect && item.ticker && !item.error);
 
   return (
     <div
@@ -228,8 +230,21 @@ function QuoteCard({ item }: { item: UsMarketQuote }) {
           : sectorAccent
             ? `border-[var(--border-subtle)] border-l-4 ${sectorAccent}`
             : "border-l border-[var(--border-subtle)]"
-      } ${tooltip ? "group cursor-help" : ""}`}
-      title={tooltip ?? undefined}
+      } ${tooltip ? "group cursor-help" : ""} ${clickable ? "cursor-pointer hover:border-blue-400 dark:hover:border-blue-500 transition-colors" : ""}`}
+      title={tooltip ?? (clickable ? `${item.name} 차트 보기` : undefined)}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={clickable ? () => onSelect?.(item) : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect?.(item);
+              }
+            }
+          : undefined
+      }
     >
       <p className="text-[10px] text-neutral-400 leading-tight flex items-start gap-0.5">
         <span className={tooltip ? "border-b border-dotted border-neutral-400/60" : ""}>
@@ -276,12 +291,18 @@ function QuoteCard({ item }: { item: UsMarketQuote }) {
   );
 }
 
-function QuoteGrid({ items }: { items: UsMarketQuote[] }) {
+function QuoteGrid({
+  items,
+  onSelect,
+}: {
+  items: UsMarketQuote[];
+  onSelect?: (item: UsMarketQuote) => void;
+}) {
   if (items.length === 0) return null;
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
       {items.map((idx) => (
-        <QuoteCard key={`${idx.ticker ?? idx.name}`} item={idx} />
+        <QuoteCard key={`${idx.ticker ?? idx.name}`} item={idx} onSelect={onSelect} />
       ))}
     </div>
   );
@@ -358,9 +379,11 @@ function InterpretationBlock({
 function SnapshotSections({
   snapshot,
   liveLabel,
+  onSelectQuote,
 }: {
   snapshot: UsMarketSnapshot;
   liveLabel?: string | null;
+  onSelectQuote?: (item: UsMarketQuote) => void;
 }) {
   const { interpretations, articles } = snapshot;
   const futures = snapshot.us_futures ?? [];
@@ -374,9 +397,9 @@ function SnapshotSections({
         <section>
           <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">
             미국 주요 지수
-            <span className="font-normal text-neutral-400 ml-1">(전일 마감)</span>
+            <span className="font-normal text-neutral-400 ml-1">(전일 마감 · 클릭 시 차트)</span>
           </h3>
-          <QuoteGrid items={snapshot.us_indices} />
+          <QuoteGrid items={snapshot.us_indices} onSelect={onSelectQuote} />
           <InterpretationBlock
             topic="us_indices"
             interpretation={interpretations.us_indices}
@@ -390,13 +413,19 @@ function SnapshotSections({
             미국 지수 선물
             <span className="font-normal text-neutral-400 ml-1">(실시간)</span>
           </h3>
-          <QuoteGrid items={futures} />
+          <QuoteGrid items={futures} onSelect={onSelectQuote} />
         </section>
       )}
       {(snapshot.commodity.length > 0 || snapshot.fx.length > 0) && (
         <section>
-          <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">유가 · 환율</h3>
-          <QuoteGrid items={[...snapshot.commodity, ...snapshot.fx, ...buildFxCrossRates(snapshot.fx)]} />
+          <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">
+            유가 · 환율
+            <span className="font-normal text-neutral-400 ml-1">(클릭 시 차트)</span>
+          </h3>
+          <QuoteGrid
+            items={[...snapshot.commodity, ...snapshot.fx, ...buildFxCrossRates(snapshot.fx)]}
+            onSelect={onSelectQuote}
+          />
           {snapshot.commodity.length > 0 && (
             <InterpretationBlock
               topic="commodity"
@@ -416,7 +445,7 @@ function SnapshotSections({
       {snapshot.treasury.length > 0 && (
         <section>
           <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">미국 국채 수익률</h3>
-          <QuoteGrid items={snapshot.treasury} />
+          <QuoteGrid items={snapshot.treasury} onSelect={onSelectQuote} />
           <InterpretationBlock
             topic="treasury"
             interpretation={interpretations.treasury}
@@ -428,10 +457,10 @@ function SnapshotSections({
         <section>
           <h3 className="text-[11px] font-semibold text-neutral-500 mb-2">
             주요 미국 주식
-            <span className="font-normal text-neutral-400 ml-1">(전일 마감 + 시간외)</span>
+            <span className="font-normal text-neutral-400 ml-1">(전일 마감 + 시간외 · 클릭 시 차트)</span>
           </h3>
           <SectorLegend items={snapshot.us_stocks} />
-          <QuoteGrid items={snapshot.us_stocks} />
+          <QuoteGrid items={snapshot.us_stocks} onSelect={onSelectQuote} />
           <InterpretationBlock
             topic="us_stocks"
             interpretation={interpretations.us_stocks}
@@ -458,6 +487,7 @@ export function UsMarketReportCard({
   const [displaySnapshot, setDisplaySnapshot] = useState<UsMarketSnapshot | null>(null);
   const [loading, setLoading] = useState(!cacheOnly);
   const [generating, setGenerating] = useState(false);
+  const [selectedQuote, setSelectedQuote] = useState<UsMarketQuote | null>(null);
   const [refreshingNews, setRefreshingNews] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -669,7 +699,9 @@ export function UsMarketReportCard({
         </div>
       ) : (
         <div className="p-4 space-y-4 overflow-visible">
-          {snapshot && <SnapshotSections snapshot={snapshot} liveLabel={liveLabel} />}
+          {snapshot && (
+            <SnapshotSections snapshot={snapshot} liveLabel={liveLabel} onSelectQuote={setSelectedQuote} />
+          )}
 
           {report.highlights.length > 0 && (
             <ul className="space-y-1 text-sm text-neutral-700 dark:text-neutral-300 border-t border-[var(--border-subtle)] pt-4">
@@ -688,6 +720,10 @@ export function UsMarketReportCard({
             </div>
           )}
         </div>
+      )}
+
+      {selectedQuote && (
+        <UsTickerChartModal item={selectedQuote} onClose={() => setSelectedQuote(null)} />
       )}
     </div>
   );

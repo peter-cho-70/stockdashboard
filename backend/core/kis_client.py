@@ -12,6 +12,29 @@ from core.broker_types import BalanceItem, FillRecord, PriceData, merge_balance_
 
 logger = logging.getLogger(__name__)
 
+
+def _patch_pykis_exchange_code_map() -> None:
+    """python-kis 2.1.6은 넥스트레이드(NXT) 도입 이전 라이브러리라, 일별체결조회
+    응답의 excg_dvsn_cd가 KRX 코드표(01~07 등)에 없는 새 값(예: '12', NXT/SOR 체결)이면
+    KeyError를 던지고 전체 조회가 실패한다 — 이게 2026-07-11 실사용자 데이터로 확인된,
+    KRX 밖 체결이 통째로 누락되던 버그의 원인이다. 라이브러리 v3(NXT enum 포함, 미출시:
+    github.com/Soju06/python-kis PR #85)가 나올 때까지 임시로 매핑을 관대하게 만든다 —
+    모르는 코드는 그냥 KRX로 취급(우리 쪽은 국내 거래소를 세분화해서 쓰지 않으므로 안전)."""
+    from pykis.api.account import daily_order as _daily_order
+
+    class _ResilientExchangeCodeMap(dict):
+        def __missing__(self, key):
+            logger.debug("알 수 없는 국내 거래소구분코드(excg_dvsn_cd)=%s → KRX로 처리 (NXT/SOR 추정)", key)
+            return ("KR", "KRX", None)
+
+    if not isinstance(_daily_order.DOMESTIC_EXCHANGE_CODE_MAP, _ResilientExchangeCodeMap):
+        _daily_order.DOMESTIC_EXCHANGE_CODE_MAP = _ResilientExchangeCodeMap(
+            _daily_order.DOMESTIC_EXCHANGE_CODE_MAP
+        )
+
+
+_patch_pykis_exchange_code_map()
+
 BALANCE_FETCH_DELAY_SEC = 0.6
 ACCOUNT_FETCH_DELAY_SEC = 1.0
 KIS_FILL_CHUNK_DAYS = 89
@@ -211,6 +234,24 @@ class KISClient:
         logger.info("✅ 해외주식 잔고 조회 완료: %s개 종목", len(result))
         return result
 
+    def get_deposit_krw(self) -> float | None:
+        """KIS 계좌 KRW 예수금 조회 (pykis KisDomesticBalance.deposit)"""
+        account = self._account()
+        if not account:
+            return None
+        try:
+            balance = account.balance(country="KR")
+            deposit = balance.deposit("KRW")
+            if deposit is None:
+                logger.info("KIS 예수금 없음 (계좌 %s)", self.account_no)
+                return None
+            amount = float(deposit.amount)
+            logger.info("✅ KIS 예수금: %s원 (계좌 %s)", amount, self.account_no)
+            return amount
+        except Exception as e:
+            logger.warning("KIS 예수금 조회 실패 (계좌 %s): %s", self.account_no, e)
+            return None
+
     def get_all_balance(self) -> list[BalanceItem]:
         """국내 + 해외 전체 잔고 조회"""
         domestic = self.get_domestic_balance()
@@ -338,6 +379,10 @@ class KISClient:
                                 "ODNO": "",
                                 "INQR_DVSN_3": "00",
                                 "INQR_DVSN_1": "",
+                                # 거래소ID구분코드 — 안 주면 KRX만 조회되어 넥스트레이드(NXT)·SOR
+                                # 체결 건이 통째로 누락된다 (2026-07-11 실사용자 데이터로 확인된 버그).
+                                # ALL로 KRX+NXT+SOR 통합 조회.
+                                "EXCG_ID_DVSN_CD": "ALL",
                             },
                             form=[account, page],
                             continuous=not page.is_first,

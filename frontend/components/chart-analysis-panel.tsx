@@ -12,7 +12,8 @@ import {
   BookOpen,
   MapPin,
 } from "lucide-react";
-import type { ChartAnalysisResult, ChartSignal, Sentiment } from "@/lib/chartAnalysis";
+import type { ChartAnalysisResult, ChartSignal, Sentiment, PatternAccuracySummary } from "@/lib/chartAnalysis";
+import { patternOutcomeDescription } from "@/lib/chartAnalysis";
 import {
   krBullishBorderClass,
   krBearishBorderClass,
@@ -193,6 +194,84 @@ function StageBlock({
   );
 }
 
+function PatternAccuracyCard({
+  summary,
+  active,
+  onSelect,
+}: {
+  summary: PatternAccuracySummary;
+  active: boolean;
+  onSelect: (id: string | null) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const insufficientData = summary.total < 3;
+
+  return (
+    <div
+      className={`rounded-lg border p-3 transition-all ${
+        active ? "border-blue-400 ring-2 ring-blue-400 dark:ring-blue-500" : "border-[var(--border-subtle)] bg-[var(--surface-elevated)]"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={() => onSelect(active ? null : "pattern_accuracy")}
+        className="w-full text-left"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200">{summary.label}</span>
+          {insufficientData ? (
+            <span className="text-[10px] font-medium text-neutral-400">데이터 부족</span>
+          ) : (
+            <span
+              className={`text-xs font-bold ${
+                summary.hitRate! >= 60
+                  ? "text-red-600 dark:text-red-400"
+                  : summary.hitRate! >= 40
+                    ? "text-amber-600 dark:text-amber-400"
+                    : "text-blue-600 dark:text-blue-400"
+              }`}
+            >
+              {summary.hitCount}/{summary.total} ({summary.hitRate}%)
+            </span>
+          )}
+        </div>
+      </button>
+      {summary.outcomes.length > 0 && (
+        <span
+          role="presentation"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+          className="mt-1.5 inline-flex items-center gap-0.5 text-[10px] text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 cursor-pointer"
+        >
+          <BookOpen size={10} />
+          발생 내역 {summary.outcomes.length}건
+          {expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+        </span>
+      )}
+      {expanded && (
+        <ul className="mt-1.5 space-y-1 max-h-48 overflow-y-auto pr-1">
+          {[...summary.outcomes].reverse().map((o) => (
+            <li
+              key={`${o.type}-${o.date}`}
+              className={`rounded bg-neutral-100/80 px-2 py-1 text-[10px] leading-relaxed dark:bg-neutral-800/50 ${
+                o.hit === true
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : o.hit === false
+                    ? "text-neutral-500 dark:text-neutral-400"
+                    : "text-blue-600 dark:text-blue-400"
+              }`}
+            >
+              {patternOutcomeDescription(o)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 interface ChartAnalysisPanelProps {
   analysis: ChartAnalysisResult;
   stockName: string;
@@ -262,6 +341,28 @@ export function ChartAnalysisPanel({
           <StageBlock stage={analysis.threeStage.stage3} />
         </div>
       </div>
+
+      {analysis.patternAccuracy.length > 0 && (
+        <div>
+          <p className="mb-2 text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+            이 종목 기술적 패턴 적중률
+          </p>
+          <p className="mb-2 text-[10px] leading-relaxed text-neutral-400">
+            과거 이 종목 차트에서 패턴이 나온 뒤 실제로 예측 방향대로 움직였는지 검증한 결과입니다.
+            차트의 ✓(적중)/✗(실패) 마커와 연결됩니다.
+          </p>
+          <div className="space-y-2">
+            {analysis.patternAccuracy.map((summary) => (
+              <PatternAccuracyCard
+                key={summary.type}
+                summary={summary}
+                active={activeSignalId === "pattern_accuracy"}
+                onSelect={onSignalSelect}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div>
         <div className="mb-2 flex items-center justify-between">

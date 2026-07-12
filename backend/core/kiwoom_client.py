@@ -190,6 +190,33 @@ class KiwoomClient:
         logger.info("✅ 키움 국내주식 잔고 조회 완료: %s개 종목", len(items))
         return items
 
+    def get_deposit_krw(self) -> float | None:
+        """키움 예수금 조회 — kt00018 응답 최상위 필드에서 추출 (미검증)."""
+        try:
+            data = self._post(
+                "/api/dostk/acnt",
+                TR_BALANCE,
+                {"qry_tp": "1", "dmst_stex_tp": "KRX"},
+            )
+            # 최상위 필드 시도
+            deposit = _to_float(_get(data, "dnca_tot_amt", "psbl_wtdrwl_amt", "cma_evlt_amt"))
+            if deposit:
+                logger.info("✅ 키움 예수금: %s원 (계좌 %s)", deposit, self.account_no)
+                return deposit
+            # output/output1/data 안쪽 시도
+            for key in ("output", "output1", "data"):
+                inner = data.get(key)
+                if isinstance(inner, dict):
+                    dep = _to_float(_get(inner, "dnca_tot_amt", "psbl_wtdrwl_amt", "cma_evlt_amt"))
+                    if dep:
+                        logger.info("✅ 키움 예수금 (%s): %s원 (계좌 %s)", key, dep, self.account_no)
+                        return dep
+            logger.info("키움 예수금 필드 없음 — 응답 구조 확인 필요 (계좌 %s)", self.account_no)
+            return None
+        except Exception as e:
+            logger.warning("키움 예수금 조회 실패 (계좌 %s): %s", self.account_no, e)
+            return None
+
     def get_all_balance(self) -> list[BalanceItem]:
         """국내주식 잔고만 지원 (해외주식은 범위 밖)."""
         return self.get_domestic_balance()

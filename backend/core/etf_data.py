@@ -16,7 +16,7 @@ from typing import Any, Optional
 import httpx
 from sqlalchemy.orm import Session
 
-from config.database import EtfOutlook
+from config.database import EtfOutlook, Stock
 from core.gemini_client import GeminiClient
 from core.stock_resolver import resolve_symbol
 
@@ -285,6 +285,76 @@ def find_etfs_by_stock(query: str, db: Optional[Session] = None) -> dict[str, An
     matches = list(_REVERSE_INDEX["by_symbol"].get(symbol, [])) if symbol else []
     matches.sort(key=lambda m: m.get("weight") or 0, reverse=True)
     return {"query": query, "symbol": symbol, "etfs": matches}
+
+
+def build_group_etf_panel(db: Session, symbols: list[str], *, hot_limit: int = 8) -> dict[str, Any]:
+    """종목 그룹(테마)의 관련 ETF를 찾아 보유 여부·최근 수익률로 정리.
+
+    관련 ETF = 그룹 멤버 중 하나 이상을 상위 구성종목으로 담고 있는 주요 ETF(상위 풀 기준
+    역인덱스, [[find_etfs_by_stock]]과 동일 소스) — 겹치는 멤버 수가 많을수록 관련도가 높다고 본다.
+    """
+    now = time.time()
+    if now - _REVERSE_INDEX["built_at"] > REVERSE_INDEX_TTL_SEC or not _REVERSE_INDEX["by_symbol"]:
+        _REVERSE_INDEX["by_symbol"] = _build_reverse_index()
+        _REVERSE_INDEX["built_at"] = now
+    by_symbol: dict[str, list[dict[str, Any]]] = _REVERSE_INDEX["by_symbol"]
+
+    agg: dict[str, dict[str, Any]] = {}
+    for sym in symbols:
+        for m in by_symbol.get(sym, []):
+            code = m["etf_code"]
+            entry = agg.setdefault(
+                code,
+                {"code": code, "name": m["etf_name"], "category": m["category"],
+                 "matched_symbols": [], "weight_sum": 0.0},
+            )
+            entry["matched_symbols"].append(sym)
+            entry["weight_sum"] += m.get("weight") or 0
+
+    if not agg:
+        return {"related": [], "held": [], "hot": []}
+
+    # 현재가·등락률·3개월수익률·거래대금 — 역인덱스와 동일한 랭킹 풀에서 조회(캐시 재사용, 추가 스크래핑 없음)
+    meta_by_code: dict[str, dict[str, Any]] = {}
+    for cat in (0, 1, 2, 4):
+        for item in fetch_etf_rankings(category=cat, sort="market_sum", order="desc", limit=25):
+            meta_by_code.setdefault(item["code"], item)
+
+    held_rows = {
+        s.symbol: s
+        for s in db.query(Stock).filter(Stock.symbol.in_(list(agg.keys())), Stock.qty > 0).all()
+    }
+
+    related = []
+    for code, entry in agg.items():
+        meta = meta_by_code.get(code, {})
+        held_stock = held_rows.get(code)
+        related.append({
+            "code": code,
+            "name": meta.get("name") or entry["name"],
+            "category": entry["category"],
+            "category_label": ETF_CATEGORIES.get(entry["category"], "기타"),
+            "match_count": len(entry["matched_symbols"]),
+            "matched_symbols": entry["matched_symbols"],
+            "weight_sum": round(entry["weight_sum"], 2),
+            "current_price": meta.get("current_price"),
+            "change_rate": meta.get("change_rate"),
+            "return_3m": meta.get("return_3m"),
+            "trading_value": meta.get("trading_value"),
+            "held": held_stock is not None,
+            "qty": held_stock.qty if held_stock else None,
+            "avg_price": held_stock.avg_price if held_stock else None,
+            "profit_rate": held_stock.profit_rate if held_stock else None,
+        })
+
+    related.sort(key=lambda r: (r["match_count"], r["weight_sum"]), reverse=True)
+
+    held = [r for r in related if r["held"]]
+    hot_candidates = [r for r in related if r.get("return_3m") is not None]
+    hot_candidates.sort(key=lambda r: r["return_3m"], reverse=True)
+    hot = hot_candidates[:hot_limit]
+
+    return {"related": related, "held": held, "hot": hot}
 
 
 OUTLOOK_SYSTEM = """당신은 한국 ETF를 분석하는 애널리스트입니다.

@@ -14,6 +14,7 @@ import {
   computePaymentCoverage,
   type PaymentCoverageResult,
 } from "@/lib/finance/payment-coverage";
+import { advanceDueDate } from "@/lib/finance/fixed-expense-utils";
 
 interface FinanceState {
   cashAssets: CashAsset[];
@@ -60,6 +61,7 @@ interface FinanceState {
   addFixedExpense: (expense: FixedExpense) => void;
   updateFixedExpense: (id: string, expense: Partial<FixedExpense>) => void;
   deleteFixedExpense: (id: string) => void;
+  markFixedExpensePaid: (id: string) => void;
   addIncome: (income: Income) => void;
   updateIncome: (id: string, income: Partial<Income>) => void;
   deleteIncome: (id: string) => void;
@@ -125,9 +127,12 @@ function computeAssetBreakdown(state: Pick<
 
 let lastSnapshotDate: string | null = null;
 
-function recordTodayAssetSnapshot(get: () => FinanceState) {
+function recordTodayAssetSnapshot(
+  get: () => FinanceState,
+  opts?: { force?: boolean }
+) {
   const today = new Date().toISOString().slice(0, 10);
-  if (lastSnapshotDate === today) return;
+  if (!opts?.force && lastSnapshotDate === today) return;
   lastSnapshotDate = today;
 
   const state = get();
@@ -169,6 +174,7 @@ function scheduleSave(get: () => FinanceState) {
       useFinanceStore.setState({ saving: true, error: null });
       await api.saveFinanceState(pickPersisted(get()));
       useFinanceStore.setState({ saving: false });
+      recordTodayAssetSnapshot(get, { force: true });
     } catch (err) {
       useFinanceStore.setState({
         saving: false,
@@ -337,6 +343,17 @@ export const useFinanceStore = create<FinanceState>()((set, get) => ({
     }));
     scheduleSave(get);
   },
+  markFixedExpensePaid: (id) => {
+    const expense = get().fixedExpenses.find((e) => e.id === id);
+    if (!expense) return;
+    const nextDueDate = advanceDueDate(expense.nextDueDate, expense.cycle);
+    set((s) => ({
+      fixedExpenses: s.fixedExpenses.map((e) =>
+        e.id === id ? { ...e, nextDueDate } : e
+      ),
+    }));
+    scheduleSave(get);
+  },
   addIncome: (income) => {
     set((s) => ({ incomes: [...s.incomes, income] }));
     scheduleSave(get);
@@ -410,6 +427,8 @@ export const useFinanceStore = create<FinanceState>()((set, get) => ({
     computePaymentCoverage(
       get().fixedExpenses,
       get().cashAssets,
-      windowDays
+      windowDays,
+      new Date(),
+      get().incomes
     ),
 }));

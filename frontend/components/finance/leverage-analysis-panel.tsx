@@ -18,10 +18,11 @@ function ProfitText({ value }: { value: number }) {
 
 function ItemRow({ item, basis }: { item: LeverageAnalysisItem; basis: 'post_loan' | 'overall' }) {
   const costBasis = basis === 'post_loan' ? item.post_loan_avg_price : item.overall_avg_price;
+  const qtyBasis = basis === 'post_loan' ? item.post_loan_remaining_qty : item.held_qty;
   const unrealized = basis === 'post_loan' ? item.unrealized_profit_post_loan_avg : item.unrealized_profit_overall_avg;
   const [sellPrice, setSellPrice] = useState(item.current_price);
 
-  const projectedProfit = (sellPrice - costBasis) * item.held_qty + item.realized_profit;
+  const projectedProfit = (sellPrice - costBasis) * qtyBasis + item.realized_profit;
 
   return (
     <tr className="border-b border-gray-100 last:border-0">
@@ -32,7 +33,10 @@ function ItemRow({ item, basis }: { item: LeverageAnalysisItem; basis: 'post_loa
         </p>
       </td>
       <td className="py-2.5 pr-3 text-right text-xs text-gray-500 tabular-nums">
-        {item.held_qty.toLocaleString()}주
+        {qtyBasis.toLocaleString()}주
+        {basis === 'post_loan' && item.post_loan_remaining_qty !== item.held_qty && (
+          <span className="block text-[10px] text-gray-400">(전체 보유 {item.held_qty.toLocaleString()}주)</span>
+        )}
         <br />
         <span className="text-[11px] text-gray-400">현재가 {formatKRW(item.current_price)}</span>
       </td>

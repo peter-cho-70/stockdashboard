@@ -47,7 +47,12 @@ async def job_domestic_market_close():
             except Exception as e:
                 logger.warning("⚠️ 체결내역 동기화 실패: %s", e)
 
-        save_daily_snapshot(db)
+        if result["updated"] > 0:
+            save_daily_snapshot(db)
+        else:
+            # pykrx가 전 종목 빈 결과 → 공휴일(비거래일) 가능성 — 그날 날짜로
+            # 전일 종가를 복제한 스냅샷이 쌓이는 것을 막는다.
+            logger.info("ℹ️ 시세 갱신 0건(휴장일 추정) — 일일 스냅샷 저장 생략")
         logger.info("✅ 국내 장 마감 동기화 완료")
     except Exception as e:
         logger.error("❌ 국내 장 마감 동기화 실패: %s", e)
@@ -197,6 +202,32 @@ async def job_us_market_open():
         db.close()
 
 
+async def job_sync_finance_deposits():
+    """[16:10 KST 평일] 장 마감 후 브로커 예수금 + 오픈뱅킹 잔액 자동 동기화"""
+    logger.info("⏰ [스케줄] 재정허브 자산 동기화 시작 (16:10)")
+    db = SessionLocal()
+    try:
+        if settings.kis_is_configured() or settings.kiwoom_is_configured():
+            from core.broker_deposit_sync import sync_broker_deposits_to_finance
+            result = sync_broker_deposits_to_finance(db)
+            logger.info("✅ 브로커 예수금 동기화: 업데이트=%s 추가=%s", result.get("updated"), result.get("added"))
+    except Exception as e:
+        logger.warning("⚠️ 브로커 예수금 동기화 실패: %s", e)
+    try:
+        from core.openbanking_client import get_ob_status, sync_openbanking_to_finance
+        status = get_ob_status(db)
+        agreed = [a for a in (status.get("accounts") or []) if a.get("inquiry_agree_yn") == "Y"]
+        if status.get("connected") and agreed:
+            result = sync_openbanking_to_finance(db)
+            logger.info("✅ 오픈뱅킹 동기화: 업데이트=%s 추가=%s", result.get("updated"), result.get("added"))
+        elif status.get("connected"):
+            logger.info("ℹ️ 오픈뱅킹 연결됨 — 잔액 조회 동의 계좌가 없어 동기화 생략")
+    except Exception as e:
+        logger.warning("⚠️ 오픈뱅킹 동기화 실패: %s", e)
+    finally:
+        db.close()
+
+
 async def job_health_check():
     logger.info("💚 헬스 체크: %s", datetime.now().strftime("%Y-%m-%d %H:%M"))
 
@@ -247,6 +278,64 @@ async def job_compute_lead_lag():
         )
     except Exception as e:
         logger.error("❌ Lead-Lag 분석 실패: %s", e)
+    finally:
+        db.close()
+
+
+async def job_extract_patterns():
+    """[일요일 02:00 KST] 매크로 이슈 → 섹터 반응 패턴 라이브러리 갱신"""
+    logger.info("⏰ [스케줄] 패턴 라이브러리 추출 시작 (일 02:00)")
+    db = SessionLocal()
+    try:
+        from core.pattern_library import extract_patterns
+
+        stats = extract_patterns(db)
+        logger.info(
+            "✅ 패턴 라이브러리: 갱신=%s 표본부족=%s",
+            stats.get("updated", 0),
+            stats.get("insufficient_data", 0),
+        )
+    except Exception as e:
+        logger.error("❌ 패턴 라이브러리 추출 실패: %s", e)
+    finally:
+        db.close()
+
+
+async def job_validate_theses():
+    """[16:00 KST, 장마감 후] 활성 투자 가설을 최근 7일 Signal과 대조해 재검증"""
+    logger.info("⏰ [스케줄] 투자 가설 검증 시작 (16:00)")
+    db = SessionLocal()
+    try:
+        from core.thesis_tracker import validate_theses
+
+        stats = validate_theses(db)
+        logger.info(
+            "✅ 투자 가설 검증: 점검=%s confirmed=%s invalidated=%s",
+            stats.get("checked", 0), stats.get("confirmed", 0), stats.get("invalidated", 0),
+        )
+    except Exception as e:
+        logger.error("❌ 투자 가설 검증 실패: %s", e)
+    finally:
+        db.close()
+
+
+async def job_weekly_retirement_review():
+    """[매주 일 18:00 KST] 노후 준비 주간 리뷰 — 포트폴리오·재정 데이터 기반 AI 방향성 조언"""
+    if not (settings.gemini_api_key or settings.openai_api_key or settings.anthropic_api_key):
+        logger.info("ℹ️ AI API 키 미설정 — 노후 주간 리뷰 생략")
+        return
+    logger.info("⏰ [스케줄] 노후 준비 주간 리뷰 시작 (일 18:00)")
+    db = SessionLocal()
+    try:
+        from core.retirement_service import run_weekly_retirement_review
+
+        entry = run_weekly_retirement_review(db)
+        logger.info(
+            "✅ 노후 주간 리뷰: 달성률=%s%% 순자산=%s",
+            entry.get("progress_pct"), entry.get("net_worth"),
+        )
+    except Exception as e:
+        logger.error("❌ 노후 주간 리뷰 실패: %s", e)
     finally:
         db.close()
 
@@ -380,6 +469,34 @@ def create_scheduler() -> AsyncIOScheduler:
         CronTrigger(hour=1, minute=0, timezone="Asia/Seoul"),
         id="compute_lead_lag",
         name="Signal Lead-Lag 분석",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_extract_patterns,
+        CronTrigger(day_of_week="sun", hour=2, minute=0, timezone="Asia/Seoul"),
+        id="extract_patterns",
+        name="패턴 라이브러리 추출",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_validate_theses,
+        CronTrigger(hour=16, minute=0, timezone="Asia/Seoul"),
+        id="validate_theses",
+        name="투자 가설 검증",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_weekly_retirement_review,
+        CronTrigger(day_of_week="sun", hour=18, minute=0, timezone="Asia/Seoul"),
+        id="weekly_retirement_review",
+        name="노후 준비 주간 리뷰",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_sync_finance_deposits,
+        CronTrigger(hour=16, minute=10, day_of_week="mon-fri", timezone="Asia/Seoul"),
+        id="sync_finance_deposits",
+        name="재정허브 자산 자동 동기화 (예수금+오픈뱅킹)",
         replace_existing=True,
     )
     scheduler.add_job(

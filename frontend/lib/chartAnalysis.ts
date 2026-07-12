@@ -107,6 +107,38 @@ export interface ChartAnalysisResult {
     verdict: string;
     summary: string;
   };
+  patternAccuracy: PatternAccuracySummary[];
+}
+
+// ── 기술적 패턴 적중률 검증(백테스트) — 한국주식_차트분석_실전가이드.md 기반 패턴이
+// 이 종목의 과거 데이터에서 실제로 예측대로 움직였는지 사후 검증. AI 호출 없음. ──
+export type PatternType = "ma_cross_gc" | "ma_cross_dc" | "bollinger_squeeze" | "volume_spike";
+
+export const PATTERN_TYPE_LABEL: Record<PatternType, string> = {
+  ma_cross_gc: "골든크로스",
+  ma_cross_dc: "데드크로스",
+  bollinger_squeeze: "볼린저 스퀴즈",
+  volume_spike: "거래량 급증",
+};
+
+export interface PatternOutcome {
+  date: string;
+  type: PatternType;
+  label: string;
+  predictedDirection: "up" | "down";
+  lookaheadDays: number;
+  actualPct: number | null;
+  hit: boolean | null;
+  y: number;
+}
+
+export interface PatternAccuracySummary {
+  type: PatternType;
+  label: string;
+  hitCount: number;
+  total: number;
+  hitRate: number | null;
+  outcomes: PatternOutcome[];
 }
 
 export const ANNOTATION_LAYERS = [
@@ -117,6 +149,7 @@ export const ANNOTATION_LAYERS = [
   { id: "bollinger", label: "볼린저", defaultOn: true },
   { id: "volume", label: "거래량", defaultOn: true },
   { id: "events", label: "급등·급락", defaultOn: true },
+  { id: "pattern_accuracy", label: "패턴 적중", defaultOn: true },
 ] as const;
 
 export type AnnotationLayerId = (typeof ANNOTATION_LAYERS)[number]["id"];
@@ -322,7 +355,20 @@ function analyzeDisparity(data: ChartBar[]): ChartSignal {
   };
 }
 
-function analyzeMaCross(data: ChartBar[]): ChartSignal {
+function hitRateSuffix(
+  patternAccuracy: PatternAccuracySummary[] | undefined,
+  types: PatternType[],
+): string {
+  if (!patternAccuracy) return "";
+  const relevant = patternAccuracy.filter((p) => types.includes(p.type));
+  const hitCount = relevant.reduce((a, p) => a + p.hitCount, 0);
+  const total = relevant.reduce((a, p) => a + p.total, 0);
+  if (total < 3) return "";
+  const rate = Math.round((hitCount / total) * 1000) / 10;
+  return ` — 이 종목 과거 적중률 ${rate}% (${hitCount}/${total}건)`;
+}
+
+function analyzeMaCross(data: ChartBar[], patternAccuracy?: PatternAccuracySummary[]): ChartSignal {
   if (data.length < 6) {
     return {
       id: "ma_cross",
@@ -352,11 +398,11 @@ function analyzeMaCross(data: ChartBar[]): ChartSignal {
   let passed: boolean;
 
   if (gc5_20) {
-    result = "최근 5일 내 MA5×MA20 골든크로스 발생 — 거래량 동반 확인 필요";
+    result = `최근 5일 내 MA5×MA20 골든크로스 발생 — 거래량 동반 확인 필요${hitRateSuffix(patternAccuracy, ["ma_cross_gc"])}`;
     sentiment = "bullish";
     passed = true;
   } else if (dc5_20) {
-    result = "최근 5일 내 MA5×MA20 데드크로스 발생 — 추세 약화 신호";
+    result = `최근 5일 내 MA5×MA20 데드크로스 발생 — 추세 약화 신호${hitRateSuffix(patternAccuracy, ["ma_cross_dc"])}`;
     sentiment = "bearish";
     passed = false;
   } else {
@@ -518,7 +564,7 @@ function analyzeRsi(data: ChartBar[], regime: MarketRegime): ChartSignal {
   };
 }
 
-function analyzeBollinger(data: ChartBar[]): ChartSignal {
+function analyzeBollinger(data: ChartBar[], patternAccuracy?: PatternAccuracySummary[]): ChartSignal {
   const closes = data.map((d) => d.close);
   if (closes.length < 25) {
     return {
@@ -549,7 +595,7 @@ function analyzeBollinger(data: ChartBar[]): ChartSignal {
   let passed: boolean;
 
   if (squeeze) {
-    result = `밴드 스퀴즈 (폭 ${bw.toFixed(1)}%) — 큰 움직임 예고, 방향은 MACD·RSI로 확인`;
+    result = `밴드 스퀴즈 (폭 ${bw.toFixed(1)}%) — 큰 움직임 예고, 방향은 MACD·RSI로 확인${hitRateSuffix(patternAccuracy, ["bollinger_squeeze"])}`;
     sentiment = "warning";
     passed = false;
   } else if (close > mid && pb > 0.8) {
@@ -634,7 +680,7 @@ function analyzeSupportResistance(data: ChartBar[], avgPrice: number, displayDay
   };
 }
 
-function analyzeVolume(data: ChartBar[]): ChartSignal {
+function analyzeVolume(data: ChartBar[], patternAccuracy?: PatternAccuracySummary[]): ChartSignal {
   if (data.length < 21) {
     return {
       id: "volume",
@@ -663,7 +709,7 @@ function analyzeVolume(data: ChartBar[]): ChartSignal {
   let passed: boolean;
 
   if (priceUp && volUp && volRatio >= 1) {
-    result = `상승 + 거래량 증가 (${(volRatio * 100).toFixed(0)}% of 20일 평균) — 신뢰 높은 상승`;
+    result = `상승 + 거래량 증가 (${(volRatio * 100).toFixed(0)}% of 20일 평균) — 신뢰 높은 상승${volRatio >= 1.5 ? hitRateSuffix(patternAccuracy, ["volume_spike"]) : ""}`;
     sentiment = "bullish";
     passed = true;
   } else if (priceUp && !volUp) {
@@ -671,7 +717,7 @@ function analyzeVolume(data: ChartBar[]): ChartSignal {
     sentiment = "warning";
     passed = false;
   } else if (!priceUp && volUp && volRatio >= 1.5) {
-    result = `하락 + 거래량 급증 (${(volRatio * 100).toFixed(0)}%) — 강한 매도세`;
+    result = `하락 + 거래량 급증 (${(volRatio * 100).toFixed(0)}%) — 강한 매도세${hitRateSuffix(patternAccuracy, ["volume_spike"])}`;
     sentiment = "bearish";
     passed = false;
   } else if (!priceUp && !volUp) {
@@ -857,6 +903,101 @@ function findMaCrossEvents(data: ChartBar[]): { date: string; type: "gc" | "dc";
   return events;
 }
 
+/**
+ * 기술적 패턴이 이 종목의 과거 데이터에서 실제로 예측대로 움직였는지 사후 검증(백테스트).
+ * AI 호출 없음 — 순수 가격 데이터만 사용. signal_tracker.py(AI Signal 적중률)의 기술적 지표 버전.
+ */
+export function evaluatePatternAccuracy(data: ChartBar[], lookaheadDays = 5): PatternAccuracySummary[] {
+  const outcomes: PatternOutcome[] = [];
+  const dateIndex = new Map(data.map((d, i) => [d.date, i]));
+
+  // ── MA 골든/데드크로스 (5×20, 20×60) ──
+  for (const ev of findMaCrossEvents(data)) {
+    const i = dateIndex.get(ev.date);
+    if (i == null) continue;
+    const direction: "up" | "down" = ev.type === "gc" ? "up" : "down";
+    const label =
+      ev.label === "GC20×60"
+        ? "MA20×MA60 골든크로스"
+        : ev.type === "gc"
+          ? "MA5×MA20 골든크로스"
+          : "MA5×MA20 데드크로스";
+    const j = i + lookaheadDays;
+    const actualPct = j < data.length ? ((data[j].close - data[i].close) / data[i].close) * 100 : null;
+    outcomes.push({
+      date: ev.date,
+      type: direction === "up" ? "ma_cross_gc" : "ma_cross_dc",
+      label,
+      predictedDirection: direction,
+      lookaheadDays,
+      actualPct: actualPct == null ? null : Math.round(actualPct * 100) / 100,
+      hit: actualPct == null ? null : direction === "up" ? actualPct > 0 : actualPct < 0,
+      y: ev.y,
+    });
+  }
+
+  // ── 볼린저 스퀴즈 → lookaheadDays 후 중심선 대비 위/아래로 돌파 방향 판정 ──
+  const closes = data.map((d) => d.close);
+  if (closes.length >= 40) {
+    const { bandwidth, middle } = computeBollinger(closes);
+    let wasSqueezed = false;
+    for (let i = 39; i < data.length; i++) {
+      const avgBw = bandwidth.slice(i - 20, i).reduce((a, b) => a + b, 0) / 20;
+      const squeezed = avgBw > 0 && bandwidth[i] < avgBw * 0.75;
+      if (squeezed && !wasSqueezed) {
+        const j = i + lookaheadDays;
+        const direction: "up" | "down" | null = j < data.length ? (data[j].close >= middle[i] ? "up" : "down") : null;
+        const actualPct = j < data.length ? ((data[j].close - closes[i]) / closes[i]) * 100 : null;
+        outcomes.push({
+          date: data[i].date,
+          type: "bollinger_squeeze",
+          label: "볼린저 스퀴즈",
+          predictedDirection: direction ?? "up",
+          lookaheadDays,
+          actualPct: actualPct == null ? null : Math.round(actualPct * 100) / 100,
+          hit: direction == null ? null : direction === "up" ? (actualPct ?? 0) > 0 : (actualPct ?? 0) < 0,
+          y: closes[i],
+        });
+      }
+      wasSqueezed = squeezed;
+    }
+  }
+
+  // ── 거래량 급증(20일 평균 대비 1.5배↑, enrichChartBars의 volSpike와 동일 기준) ──
+  for (let i = 20; i < data.length; i++) {
+    const avg20 = data.slice(i - 20, i).reduce((a, b) => a + b.volume, 0) / 20;
+    if (avg20 <= 0 || data[i].volume < avg20 * 1.5) continue;
+    const direction: "up" | "down" = data[i].close >= data[i].open ? "up" : "down";
+    const j = i + lookaheadDays;
+    const actualPct = j < data.length ? ((data[j].close - data[i].close) / data[i].close) * 100 : null;
+    outcomes.push({
+      date: data[i].date,
+      type: "volume_spike",
+      label: "거래량 급증",
+      predictedDirection: direction,
+      lookaheadDays,
+      actualPct: actualPct == null ? null : Math.round(actualPct * 100) / 100,
+      hit: actualPct == null ? null : direction === "up" ? actualPct > 0 : actualPct < 0,
+      y: data[i].close,
+    });
+  }
+
+  const types: PatternType[] = ["ma_cross_gc", "ma_cross_dc", "bollinger_squeeze", "volume_spike"];
+  return types.map((type) => {
+    const typeOutcomes = outcomes.filter((o) => o.type === type).sort((a, b) => a.date.localeCompare(b.date));
+    const verified = typeOutcomes.filter((o) => o.hit != null);
+    const hitCount = verified.filter((o) => o.hit).length;
+    return {
+      type,
+      label: PATTERN_TYPE_LABEL[type],
+      hitCount,
+      total: verified.length,
+      hitRate: verified.length > 0 ? Math.round((hitCount / verified.length) * 1000) / 10 : null,
+      outcomes: typeOutcomes,
+    };
+  });
+}
+
 function findPullbackRanges(
   data: ChartBar[],
   visibleDates: Set<string>
@@ -899,12 +1040,57 @@ function findPullbackRanges(
   return ranges;
 }
 
+/** 적중=초록, 실패=회색, 검증대기=옅은 파랑 */
+function patternOutcomeColor(hit: boolean | null): string {
+  if (hit === true) return "#16a34a";
+  if (hit === false) return "#9ca3af";
+  return "#93c5fd";
+}
+
+function patternOutcomeLabel(o: PatternOutcome): string {
+  const code = o.type === "ma_cross_gc" ? "GC" : o.type === "ma_cross_dc" ? "DC" : o.type === "bollinger_squeeze" ? "SQ" : "VOL";
+  if (o.hit == null) return `${code}·검증중`;
+  return `${code}${o.hit ? "✓" : "✗"}${o.actualPct != null ? `${o.actualPct >= 0 ? "+" : ""}${o.actualPct.toFixed(1)}%` : ""}`;
+}
+
+export function patternOutcomeDescription(o: PatternOutcome): string {
+  const dirText = o.predictedDirection === "up" ? "상승" : "하락";
+  if (o.hit == null) {
+    return `${o.label} 발생 (${o.date}) — 아직 ${o.lookaheadDays}거래일이 지나지 않아 적중 여부 검증 대기`;
+  }
+  const outcomeText = o.hit ? "적중 ✅" : "실패 ❌";
+  return `${o.label} 발생 (${o.date}) → 예측 방향: ${dirText} · ${o.lookaheadDays}거래일 후 ${o.actualPct?.toFixed(1)}% → ${outcomeText}`;
+}
+
+function buildPatternAccuracyAnnotations(summaries: PatternAccuracySummary[], visibleDates: string[]): ChartAnnotation[] {
+  const visible = new Set(visibleDates);
+  const annotations: ChartAnnotation[] = [];
+  for (const summary of summaries) {
+    for (const o of summary.outcomes) {
+      if (!visible.has(o.date)) continue;
+      annotations.push({
+        id: `pattern-${o.type}-${o.date}`,
+        signalId: "pattern_accuracy",
+        type: "dot",
+        label: patternOutcomeLabel(o),
+        color: patternOutcomeColor(o.hit),
+        date: o.date,
+        y: o.y,
+        description: patternOutcomeDescription(o),
+        changePct: o.actualPct ?? undefined,
+      });
+    }
+  }
+  return annotations;
+}
+
 export function buildChartAnnotations(
   data: ChartBar[],
   visibleDates: string[],
   support: number,
   resistance: number,
-  stopLoss: ChartAnalysisResult["stopLoss"]
+  stopLoss: ChartAnalysisResult["stopLoss"],
+  patternAccuracy?: PatternAccuracySummary[]
 ): ChartAnnotation[] {
   if (data.length === 0 || visibleDates.length === 0) return [];
 
@@ -997,6 +1183,10 @@ export function buildChartAnnotations(
     });
   }
 
+  if (patternAccuracy) {
+    annotations.push(...buildPatternAccuracyAnnotations(patternAccuracy, visibleDates));
+  }
+
   return annotations;
 }
 
@@ -1052,6 +1242,7 @@ export function filterAnnotations(
     bollinger: "bollinger",
     volume: "volume",
     events: "events",
+    pattern_accuracy: "pattern_accuracy",
   };
 
   return annotations.filter((a) => {
@@ -1073,16 +1264,17 @@ export function analyzeChart(
 
   const { regime, label: regimeLabel, hint: regimeHint } = detectMarketRegime(data);
   const windowDays = Math.min(displayDays, data.length);
+  const patternAccuracy = evaluatePatternAccuracy(data);
 
   const signals: ChartSignal[] = [
     analyzeTrend(data),
     analyzeDisparity(data),
-    analyzeMaCross(data),
+    analyzeMaCross(data, patternAccuracy),
     analyzeMacd(data),
     analyzeRsi(data, regime),
-    analyzeBollinger(data),
+    analyzeBollinger(data, patternAccuracy),
     analyzeSupportResistance(data, avgPrice, displayDays),
-    analyzeVolume(data),
+    analyzeVolume(data, patternAccuracy),
     analyzePullback(data, regime),
   ];
 
@@ -1104,12 +1296,13 @@ export function analyzeChart(
     text: stopParts.join(" · "),
   };
   const visibleDates = windowData.map((d) => d.date);
-  const annotations = buildChartAnnotations(data, visibleDates, support, resistance, stopLoss);
+  const annotations = buildChartAnnotations(data, visibleDates, support, resistance, stopLoss, patternAccuracy);
 
   return {
     regime,
     regimeLabel,
     regimeHint,
+    patternAccuracy,
     signals,
     annotations,
     support,

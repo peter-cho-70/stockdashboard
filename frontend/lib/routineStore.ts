@@ -161,6 +161,22 @@ export function phaseTime(n: number): string {
   return ["", "05:30", "06:00", "06:30", "07:30", "08:00", "09:00"][n] ?? "";
 }
 
+/** 특정 날짜에 그 종목코드로 세운 아침 계획(목표가·손절가 등)을 찾는다.
+ * 매매습관(체결 기록) 쪽에서 "오늘 아침 계획과 이 매수가 일치하는지" 확인할 때 쓴다. */
+export function findStockPlan(
+  routines: { today: DailyRoutine | null; archive: DailyRoutine[] },
+  date: string,
+  ticker: string,
+): StockPlan | null {
+  const normalized = ticker.trim().toUpperCase();
+  if (!normalized) return null;
+  const routine =
+    routines.archive.find((r) => r.date === date) ??
+    (routines.today?.date === date ? routines.today : null);
+  const plans = routine?.phase4?.stockPlans ?? [];
+  return plans.find((p) => p.ticker.trim().toUpperCase() === normalized) ?? null;
+}
+
 function archiveUpsert(archive: DailyRoutine[], entry: DailyRoutine): DailyRoutine[] {
   const idx = archive.findIndex((r) => r.date === entry.date);
   if (idx >= 0) {

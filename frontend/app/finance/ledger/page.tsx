@@ -7,6 +7,7 @@ import {
   Search, PieChart, ClipboardList,
 } from 'lucide-react';
 import { useLedgerStore } from '@/lib/finance/store/ledger-store';
+import { useFinanceStore } from '@/lib/finance/store/finance-store';
 import { CategoryBreakdownPanel } from '@/components/finance/ledger/category-breakdown-panel';
 import { BulkImportPanel } from '@/components/finance/ledger/bulk-import-panel';
 import {
@@ -78,6 +79,7 @@ function emptyForm() {
     memo: '',
     isFixed: false,
     user: '',
+    linkedLiabilityId: '',
   };
 }
 
@@ -99,6 +101,7 @@ function dateLabel(dateStr: string) {
 
 export default function LedgerPage() {
   const store = useLedgerStore();
+  const liabilities = useFinanceStore((s) => s.liabilities);
   const { categories, cardIssuers, users } = store.settings || { categories: [], cardIssuers: [], users: [] };
 
   const expenseCategories = useMemo(() => categories.filter(c => !c.incomeOk).map(c => c.name), [categories]);
@@ -198,6 +201,7 @@ export default function LedgerPage() {
       category: t.category, subCategory: t.subCategory ?? '',
       paymentMethod: t.paymentMethod, cardIssuer: t.cardIssuer ?? '',
       memo: t.memo ?? '', isFixed: t.isFixed, user: t.user ?? '',
+      linkedLiabilityId: t.linkedLiabilityId ?? '',
     });
     setEditingId(t.id);
     setFormOpen(true);
@@ -217,6 +221,10 @@ export default function LedgerPage() {
       memo: form.memo || undefined,
       isFixed: form.isFixed,
       user: form.user || undefined,
+      linkedLiabilityId:
+        form.type === 'expense' && form.linkedLiabilityId
+          ? form.linkedLiabilityId
+          : undefined,
       createdAt: new Date().toISOString(),
     };
     if (editingId) {
@@ -571,6 +579,28 @@ export default function LedgerPage() {
               </div>
             </div>
 
+            {/* 부채 이자 연결 (지출만) */}
+            {form.type === 'expense' && liabilities.length > 0 && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  부채 이자 연결 <span className="text-gray-400">(선택)</span>
+                </label>
+                <select
+                  value={form.linkedLiabilityId}
+                  onChange={e => setForm(f => ({ ...f, linkedLiabilityId: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-emerald-400 bg-white"
+                >
+                  <option value="">연결 안함</option>
+                  {liabilities.map(l => (
+                    <option key={l.id} value={l.id}>{l.name} ({l.lender})</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-gray-400">
+                  연결하면 이 지출이 해당 부채의 실제 이자 납입으로 집계됩니다.
+                </p>
+              </div>
+            )}
+
             {/* 고정비 여부 */}
             <label className="flex items-center gap-2 cursor-pointer">
               <input
@@ -736,6 +766,11 @@ export default function LedgerPage() {
                         {PAYMENT_LABELS[t.paymentMethod]}
                         {t.cardIssuer ? ` · ${t.cardIssuer}` : ''}
                         {t.isFixed && <span className="ml-1.5 text-indigo-400">고정</span>}
+                        {t.linkedLiabilityId && (
+                          <span className="ml-1.5 text-rose-400">
+                            이자 · {liabilities.find(l => l.id === t.linkedLiabilityId)?.name ?? '연결 부채'}
+                          </span>
+                        )}
                       </span>
                     </div>
                     {/* 금액 */}

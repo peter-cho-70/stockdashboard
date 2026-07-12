@@ -16,6 +16,10 @@ import {
 import {
   LineChart,
   Line,
+  BarChart,
+  Bar,
+  Cell,
+  ReferenceLine,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -29,7 +33,7 @@ import { TradeReportCard } from "@/components/trade-report-card";
 import { HoldingsMiniCard } from "@/components/holdings-mini-card";
 import { MorningRoutineCard } from "@/components/morning/morning-routine-card";
 import { isUsReportAtBottomKST } from "@/lib/marketDisplay";
-import { krChangeClass } from "@/lib/krMarketColors";
+import { krChangeClass, KR_UP_HEX, KR_DOWN_HEX } from "@/lib/krMarketColors";
 
 const CHART_PERIODS = [
   { days: 7, label: "7일" },
@@ -89,6 +93,7 @@ export default function DashboardPage() {
   const [lastUpdated, setLastUpdated] = useState("");
   const [refreshMsg, setRefreshMsg] = useState("");
   const [chartDays, setChartDays] = useState(30);
+  const [chartMode, setChartMode] = useState<"daily" | "cumulative">("daily");
   const [historyLoading, setHistoryLoading] = useState(false);
   const [usReportAtBottom, setUsReportAtBottom] = useState(() => isUsReportAtBottomKST());
 
@@ -173,6 +178,25 @@ export default function DashboardPage() {
     수익률: h.total_profit_rate,
     평가금액: Math.round(h.total_value / 10000),
   }));
+
+  // 일별 손익: 전일 대비 평가손익(원) 변화 = 그날 계좌 자산 증가액. 신규 매수/입금에는
+  // 영향받지 않고(평가손익 기준), 두 계좌(KIS)는 잔고 동기화 시 종목 단위로 합산되어
+  // 스냅샷에 이미 포함된다. (실제 매매 실현손익이 아님)
+  const dailyData = history.slice(1).map((h, i) => {
+    const prev = history[i];
+    const dayProfit = h.total_profit - prev.total_profit;
+    const dayRate = h.total_profit_rate - prev.total_profit_rate;
+    return {
+      date: chartLabelFormat(h.date),
+      fullDate: h.date,
+      일별손익: Math.round(dayProfit),
+      일별손익만원: Math.round(dayProfit / 10000),
+      일별수익률: Number(dayRate.toFixed(2)),
+    };
+  });
+
+  const dailyPnlTotal = dailyData.reduce((sum, d) => sum + d.일별손익, 0);
+  const dailyPnlHasData = dailyData.length > 0;
 
   const marketStack = (
     <div className="space-y-4">
@@ -303,33 +327,74 @@ export default function DashboardPage() {
         <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
-              포트폴리오 수익률 추이 (일별 · 최근 {chartPeriodLabel(chartDays)})
+              {chartMode === "daily" ? (
+                <>
+                  일별 손익 (전일 대비 자산 증가액 · 두 계좌 합산 · 최근 {chartPeriodLabel(chartDays)})
+                  {dailyPnlHasData && (
+                    <span className={`ml-2 text-xs font-bold ${krChangeClass(dailyPnlTotal)}`}>
+                      합계 {dailyPnlTotal >= 0 ? "+" : ""}{dailyPnlTotal.toLocaleString("ko-KR")}원
+                    </span>
+                  )}
+                </>
+              ) : (
+                `포트폴리오 수익률 추이 (누적 · 최근 ${chartPeriodLabel(chartDays)})`
+              )}
             </h2>
-            <div className="flex rounded-md border border-[var(--border-subtle)] p-0.5">
-              {CHART_PERIODS.map(({ days, label }) => (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex rounded-md border border-[var(--border-subtle)] p-0.5">
                 <button
-                  key={days}
                   type="button"
-                  onClick={() => setChartDays(days)}
+                  onClick={() => setChartMode("daily")}
                   className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                    chartDays === days
+                    chartMode === "daily"
                       ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
                       : "text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
                   }`}
                 >
-                  {label}
+                  일별 손익
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => setChartMode("cumulative")}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                    chartMode === "cumulative"
+                      ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                      : "text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
+                  }`}
+                >
+                  누적 수익률
+                </button>
+              </div>
+              <div className="flex rounded-md border border-[var(--border-subtle)] p-0.5">
+                {CHART_PERIODS.map(({ days, label }) => (
+                  <button
+                    key={days}
+                    type="button"
+                    onClick={() => setChartDays(days)}
+                    className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                      chartDays === days
+                        ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                        : "text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           {historyLoading ? (
             <div className="flex h-[200px] items-center justify-center text-sm text-neutral-400">
               차트 불러오는 중...
             </div>
-          ) : chartData.length === 0 ? (
+          ) : (chartMode === "daily" ? !dailyPnlHasData : chartData.length === 0) ? (
             <div className="flex h-[200px] flex-col items-center justify-center gap-1 text-center text-sm text-neutral-400">
               <BarChart2 size={28} className="text-neutral-300 dark:text-neutral-600" />
-              <p>이 기간에 저장된 일별 데이터가 없습니다.</p>
+              <p>
+                {chartMode === "daily"
+                  ? "일별 손익을 계산하려면 최소 2일치 데이터가 필요합니다."
+                  : "이 기간에 저장된 일별 데이터가 없습니다."}
+              </p>
               <p className="text-xs">KRX 시세 갱신 또는 KIS 동기화 후 며칠 지나면 표시됩니다.</p>
             </div>
           ) : (
@@ -341,46 +406,95 @@ export default function DashboardPage() {
               }
             >
             <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 11, fill: "var(--foreground)" }}
-                  tickLine={false}
-                  interval={chartData.length > 60 ? Math.floor(chartData.length / 8) : 0}
-                />
-                <YAxis
-                  tick={{ fontSize: 11, fill: "var(--foreground)" }}
-                  tickFormatter={(v) => `${v}%`}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <Tooltip
-                  labelFormatter={(_, payload) => {
-                    const row = payload?.[0]?.payload as { fullDate?: string } | undefined;
-                    return row?.fullDate ?? "";
-                  }}
-                  formatter={(value, name) => {
-                    if (name === "수익률") return [`${Number(value).toFixed(2)}%`, "수익률"];
-                    if (name === "평가금액") return [`${Number(value).toLocaleString("ko-KR")}만원`, "평가금액"];
-                    return [value, name];
-                  }}
-                  contentStyle={{
-                    background: "var(--surface)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                  }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="수익률"
-                  stroke="#10b981"
-                  strokeWidth={2}
-                  dot={chartData.length <= 14}
-                  activeDot={{ r: 4 }}
-                />
-              </LineChart>
+              {chartMode === "daily" ? (
+                <BarChart data={dailyData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 11, fill: "var(--foreground)" }}
+                    tickLine={false}
+                    interval={dailyData.length > 60 ? Math.floor(dailyData.length / 8) : 0}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: "var(--foreground)" }}
+                    tickFormatter={(v) => `${v}만`}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip
+                    cursor={{ fill: "var(--border-subtle)", opacity: 0.3 }}
+                    labelFormatter={(_, payload) => {
+                      const row = payload?.[0]?.payload as { fullDate?: string } | undefined;
+                      return row?.fullDate ?? "";
+                    }}
+                    formatter={(_value, _name, item) => {
+                      const row = item?.payload as { 일별손익?: number; 일별수익률?: number } | undefined;
+                      const amt = row?.일별손익 ?? 0;
+                      const rate = row?.일별수익률 ?? 0;
+                      return [
+                        `${amt >= 0 ? "+" : ""}${amt.toLocaleString("ko-KR")}원 (${rate >= 0 ? "+" : ""}${rate}%p)`,
+                        "일별 손익",
+                      ];
+                    }}
+                    contentStyle={{
+                      background: "var(--surface)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                    }}
+                  />
+                  <ReferenceLine y={0} stroke="var(--foreground)" strokeOpacity={0.4} />
+                  <Bar dataKey="일별손익만원" radius={[2, 2, 0, 0]} maxBarSize={28}>
+                    {dailyData.map((d) => (
+                      <Cell
+                        key={d.fullDate}
+                        fill={d.일별손익 >= 0 ? KR_UP_HEX : KR_DOWN_HEX}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              ) : (
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 11, fill: "var(--foreground)" }}
+                    tickLine={false}
+                    interval={chartData.length > 60 ? Math.floor(chartData.length / 8) : 0}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: "var(--foreground)" }}
+                    tickFormatter={(v) => `${v}%`}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip
+                    labelFormatter={(_, payload) => {
+                      const row = payload?.[0]?.payload as { fullDate?: string } | undefined;
+                      return row?.fullDate ?? "";
+                    }}
+                    formatter={(value, name) => {
+                      if (name === "수익률") return [`${Number(value).toFixed(2)}%`, "수익률"];
+                      if (name === "평가금액") return [`${Number(value).toLocaleString("ko-KR")}만원`, "평가금액"];
+                      return [value, name];
+                    }}
+                    contentStyle={{
+                      background: "var(--surface)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="수익률"
+                    stroke="#10b981"
+                    strokeWidth={2}
+                    dot={chartData.length <= 14}
+                    activeDot={{ r: 4 }}
+                  />
+                </LineChart>
+              )}
             </ResponsiveContainer>
             </ClientOnly>
           )}

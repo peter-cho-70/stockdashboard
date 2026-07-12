@@ -160,6 +160,29 @@ def read_asset_snapshots(days: int = 180, db: Session = Depends(get_db)):
     return {"items": list_asset_snapshots(db, days)}
 
 
+@finance_router.get("/broker-deposits")
+def read_broker_deposits():
+    """KIS + 키움 예수금 현재 잔액 조회 (DB 저장 없음)"""
+    from core.broker_deposit_sync import get_all_broker_deposits
+    try:
+        deposits = get_all_broker_deposits()
+        return {"deposits": deposits, "count": len(deposits)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"브로커 예수금 조회 실패: {e}") from e
+
+
+@finance_router.post("/sync-broker-deposits")
+def sync_broker_deposits(db: Session = Depends(get_db)):
+    """KIS + 키움 예수금을 조회해 cashAssets에 자동 반영"""
+    demo_write_blocked()
+    from core.broker_deposit_sync import sync_broker_deposits_to_finance
+    try:
+        result = sync_broker_deposits_to_finance(db)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"예수금 동기화 실패: {e}") from e
+
+
 @finance_router.get("/backup")
 def read_backup(db: Session = Depends(get_db)):
     """FinanceHub 호환 JSON 백업 다운로드"""

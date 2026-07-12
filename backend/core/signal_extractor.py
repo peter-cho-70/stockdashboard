@@ -84,6 +84,7 @@ def extract_signals(content: IntelContent, db: Session, portfolio_symbols: set[s
     counts = {"macro": 0, "sector": 0, "stock": 0}
 
     # ── Macro Signals ─────────────────────────────
+    new_macro_signals: list[MacroSignal] = []
     macro = _parse_json_field(content.macro_analysis)
     if isinstance(macro, dict):
         topics = macro.get("topics", [])
@@ -92,14 +93,16 @@ def extract_signals(content: IntelContent, db: Session, portfolio_symbols: set[s
                 if not isinstance(t, dict):
                     continue
                 raw_topic = t.get("topic", "기타")
-                db.add(MacroSignal(
+                new_sig = MacroSignal(
                     content_id=content.id,
                     topic=_normalize_topic(raw_topic),
                     summary=t.get("summary", ""),
                     sentiment=t.get("sentiment", "NEUTRAL"),
                     impact=t.get("impact", ""),
                     event_date=event_date,
-                ))
+                )
+                db.add(new_sig)
+                new_macro_signals.append(new_sig)
                 counts["macro"] += 1
 
     # ── Sector Signals ────────────────────────────
@@ -175,6 +178,17 @@ def extract_signals(content: IntelContent, db: Session, portfolio_symbols: set[s
         "✅ 신호 파생 완료 (content_id=%d) — 매크로 %d, 섹터 %d, 종목 %d",
         content.id, counts["macro"], counts["sector"], counts["stock"],
     )
+
+    if new_macro_signals:
+        try:
+            from core.pattern_library import check_pattern_alerts
+
+            pattern_alerts = check_pattern_alerts(db, new_macro_signals)
+            if pattern_alerts:
+                logger.info("📊 패턴 매칭 알림 %d건 생성", len(pattern_alerts))
+        except Exception as e:
+            logger.warning("⚠️ 패턴 매칭 알림 실패 (무시): %s", e)
+
     return counts
 
 
@@ -197,3 +211,71 @@ def backfill_all_signals(db: Session) -> dict:
     logger.info("🔄 백필 완료 — %d건 처리, 매크로 %d, 섹터 %d, 종목 %d",
                 total["contents"], total["macro"], total["sector"], total["stock"])
     return total
+
+
+# ─────────────────────────────────────────────
+# 감성 스키마 공백 탐지 (2026-06-02~ ai_analyzer.py 프롬프트 버그로
+# macro_analysis.topics/sector_analysis 항목에 sentiment 필드가 빠진 채 저장된 콘텐츠 탐지)
+# ─────────────────────────────────────────────
+def _macro_schema_broken(raw: Optional[str]) -> bool:
+    if not raw:
+        return False
+    data = _parse_json_field(raw)
+    topics = data.get("topics") if isinstance(data, dict) else None
+    if not topics:
+        return False
+    return not any(isinstance(t, dict) and "sentiment" in t for t in topics)
+
+
+def _sector_schema_broken(raw: Optional[str]) -> bool:
+    if not raw:
+        return False
+    data = _parse_json_field(raw)
+    if not isinstance(data, list) or not data:
+        return False
+    return not any(isinstance(s, dict) and "sentiment" in s for s in data)
+
+
+def is_broken_signal_schema(content: IntelContent) -> bool:
+    """이 콘텐츠의 저장된 macro_analysis/sector_analysis가 감성 필드 없이(버그로) 저장됐는지."""
+    return _macro_schema_broken(content.macro_analysis) or _sector_schema_broken(content.sector_analysis)
+
+
+def list_signal_gap_candidates(db: Session, *, limit: int = 10, offset: int = 0) -> dict:
+    """
+    프롬프트 버그로 감성 필드가 빠진 채 저장된 콘텐츠 목록(재분석 후보).
+    재분석(reanalyze_content)하면 새 프롬프트로 다시 분석되어 자연히 이 목록에서 빠진다 —
+    별도 상태 플래그 없이 저장된 JSON 내용 자체로 판별.
+    """
+    from core.content_scope import is_market_scope
+
+    rows = (
+        db.query(IntelContent)
+        .filter(IntelContent.analyzed_at >= "2026-06-02")
+        .order_by(IntelContent.analyzed_at.asc())
+        .all()
+    )
+    candidates = [
+        c for c in rows
+        if c.source_document
+        and is_market_scope(getattr(c, "content_scope", None))
+        and is_broken_signal_schema(c)
+    ]
+    total = len(candidates)
+    page = candidates[offset:offset + limit]
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "items": [
+            {
+                "id": c.id,
+                "source_type": c.source_type,
+                "source_title": c.source_title,
+                "channel_name": c.channel_name,
+                "published_at": c.published_at.strftime("%Y-%m-%d") if c.published_at else None,
+                "analyzed_at": c.analyzed_at.strftime("%Y-%m-%d") if c.analyzed_at else None,
+            }
+            for c in page
+        ],
+    }

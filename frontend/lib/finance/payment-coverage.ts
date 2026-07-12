@@ -1,4 +1,4 @@
-import type { CashAsset, FixedExpense } from "@/lib/finance/types";
+import type { CashAsset, FixedExpense, Income } from "@/lib/finance/types";
 
 export type PaymentCoverageStatus = "ok" | "tight" | "shortfall" | "unknown";
 
@@ -31,11 +31,29 @@ export interface PaymentCoverageResult {
   urgentShortfallCount: number;
 }
 
+interface CashFlowEvent {
+  date: string;
+  delta: number;
+  expenseId?: string;
+  sortKey: number;
+}
+
 function daysUntil(dateStr: string, today: Date): number {
   const due = new Date(`${dateStr}T00:00:00`);
   const base = new Date(today);
   base.setHours(0, 0, 0, 0);
   return Math.ceil((due.getTime() - base.getTime()) / 86400000);
+}
+
+function addDays(date: Date, days: number): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function formatDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 function accountLabel(asset: CashAsset): string {
@@ -46,6 +64,53 @@ function statusFromBalance(projected: number, paymentAmount: number): PaymentCov
   if (projected < 0) return "shortfall";
   if (projected < paymentAmount * 0.15) return "tight";
   return "ok";
+}
+
+function parsePayDay(income: Income, defaultDay = 25): number {
+  if (income.receivedDate) {
+    const day = parseInt(income.receivedDate.slice(8, 10), 10);
+    if (day >= 1 && day <= 28) return day;
+  }
+  return defaultDay;
+}
+
+function buildIncomeCredits(
+  incomes: Income[],
+  accountId: string,
+  today: Date,
+  windowEnd: Date
+): CashFlowEvent[] {
+  const events: CashFlowEvent[] = [];
+  const todayStr = formatDate(today);
+  const windowEndStr = formatDate(windowEnd);
+
+  for (const income of incomes) {
+    if (income.cycle !== "monthly") continue;
+    if (income.depositAccountId !== accountId) continue;
+
+    const payDay = parsePayDay(income);
+    const cursor = new Date(today);
+    cursor.setDate(1);
+
+    while (cursor <= windowEnd) {
+      const y = cursor.getFullYear();
+      const m = cursor.getMonth();
+      const lastDay = new Date(y, m + 1, 0).getDate();
+      const day = Math.min(payDay, lastDay);
+      const creditDate = `${y}-${String(m + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+      if (creditDate >= todayStr && creditDate <= windowEndStr) {
+        events.push({
+          date: creditDate,
+          delta: income.amount,
+          sortKey: 0,
+        });
+      }
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+
+  return events;
 }
 
 export function getUpcomingFixedExpenses(
@@ -68,11 +133,13 @@ export function computePaymentCoverage(
   expenses: FixedExpense[],
   cashAssets: CashAsset[],
   windowDays = 45,
-  today = new Date()
+  today = new Date(),
+  incomes: Income[] = []
 ): PaymentCoverageResult {
   const upcoming = getUpcomingFixedExpenses(expenses, windowDays, today);
   const bankAccounts = cashAssets.filter((a) => a.accountType !== "securities");
   const accountMap = new Map(bankAccounts.map((a) => [a.id, a]));
+  const windowEnd = addDays(today, windowDays);
 
   const byAccount = new Map<string, FixedExpense[]>();
   for (const expense of upcoming) {
@@ -98,20 +165,38 @@ export function computePaymentCoverage(
         new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()
     );
 
+    const events: CashFlowEvent[] = sorted.map((expense) => ({
+      date: expense.nextDueDate,
+      delta: -expense.amount,
+      expenseId: expense.id,
+      sortKey: 1,
+    }));
+
+    events.push(...buildIncomeCredits(incomes, accountId, today, windowEnd));
+
+    events.sort((a, b) => {
+      const byDate = a.date.localeCompare(b.date);
+      if (byDate !== 0) return byDate;
+      return a.sortKey - b.sortKey;
+    });
+
     let balance = account.amount;
     let minProjected = balance;
     let maxShortfall = 0;
 
-    for (const expense of sorted) {
-      balance -= expense.amount;
+    for (const event of events) {
+      balance += event.delta;
       minProjected = Math.min(minProjected, balance);
-      const shortfall = balance < 0 ? Math.abs(balance) : undefined;
-      if (shortfall) maxShortfall = Math.max(maxShortfall, shortfall);
-      projectedByExpenseId.set(expense.id, {
-        projectedBalance: balance,
-        shortfall,
-        status: statusFromBalance(balance, expense.amount),
-      });
+      if (event.expenseId) {
+        const expense = sorted.find((e) => e.id === event.expenseId)!;
+        const shortfall = balance < 0 ? Math.abs(balance) : undefined;
+        if (shortfall) maxShortfall = Math.max(maxShortfall, shortfall);
+        projectedByExpenseId.set(event.expenseId, {
+          projectedBalance: balance,
+          shortfall,
+          status: statusFromBalance(balance, expense.amount),
+        });
+      }
     }
 
     const upcomingTotal = sorted.reduce((s, e) => s + e.amount, 0);

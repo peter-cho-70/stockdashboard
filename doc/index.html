@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StockMind 문서 모음 — 통합 인덱스</title>
+<style>
+  :root{
+    --bg:#eef1ef; --bg-raised:#ffffff; --bg-sunk:#e4e8e5;
+    --ink:#15201d; --ink-dim:#56635f; --ink-faint:#8b968f;
+    --accent:#a06a12; --accent-ink:#5c3d0a;
+    --live:#c0322c; --live-bg:rgba(192,50,44,.10);
+    --ok:#1f9a56; --ok-bg:rgba(31,154,86,.10);
+    --plan:#a06a12; --plan-bg:rgba(160,106,18,.12);
+    --snap:#4a6fa5; --snap-bg:rgba(74,111,165,.12);
+    --line:rgba(21,32,29,.14); --line-strong:rgba(21,32,29,.28);
+    --shadow: 0 1px 2px rgba(21,32,29,.06), 0 8px 24px rgba(21,32,29,.05);
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0c1012; --bg-raised:#141b1e; --bg-sunk:#0a0e10;
+      --ink:#e8ece9; --ink-dim:#9aa6a2; --ink-faint:#5e6a66;
+      --accent:#e2a63d; --accent-ink:#f4c877;
+      --live:#e0453f; --live-bg:rgba(224,69,63,.14);
+      --ok:#3fcf7a; --ok-bg:rgba(63,207,122,.13);
+      --plan:#e2a63d; --plan-bg:rgba(226,166,61,.14);
+      --snap:#7da7dd; --snap-bg:rgba(125,167,221,.14);
+      --line:rgba(232,236,233,.12); --line-strong:rgba(232,236,233,.24);
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 28px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{ background:var(--bg); color:var(--ink); font-family:var(--sans); line-height:1.6; -webkit-font-smoothing:antialiased; }
+  ::selection{ background:var(--accent); color:var(--bg-sunk); }
+
+  .page{ max-width:920px; margin:0 auto; padding:48px 22px 100px; }
+
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--accent-ink); display:flex; align-items:center; gap:8px; margin:0 0 10px;
+  }
+  .eyebrow::before{ content:""; width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none; }
+
+  h1{ font-size:clamp(23px,3vw,30px); line-height:1.3; margin:0 0 8px; font-weight:800; letter-spacing:-.01em; }
+  .lede{ color:var(--ink-dim); font-size:14px; max-width:64ch; margin:0 0 6px; }
+  .back{ font-size:12.5px; color:var(--ink-faint); text-decoration:none; }
+  .back:hover{ color:var(--accent); }
+
+  /* filter */
+  .filter-wrap{ margin:26px 0 8px; position:sticky; top:0; padding:12px 0; background:var(--bg); z-index:5; }
+  #filter{
+    width:100%; padding:11px 16px; font-size:14px; font-family:var(--sans);
+    border:1px solid var(--line-strong); border-radius:8px; background:var(--bg-raised); color:var(--ink);
+    outline:none;
+  }
+  #filter:focus{ border-color:var(--accent); box-shadow:0 0 0 3px rgba(160,106,18,.15); }
+  .filter-hint{ font-size:11.5px; color:var(--ink-faint); margin-top:6px; font-family:var(--mono); }
+
+  section{ margin:36px 0; }
+  h2{ font-size:17px; margin:0 0 4px; font-weight:800; display:flex; align-items:baseline; gap:10px; }
+  h2 .folder{ font-family:var(--mono); font-size:12px; font-weight:400; color:var(--ink-faint); }
+  .section-desc{ color:var(--ink-dim); font-size:13px; margin:0 0 14px; }
+
+  .doc-list{ display:flex; flex-direction:column; gap:10px; }
+  a.doc{
+    display:grid; grid-template-columns:1fr auto; gap:4px 14px; align-items:start;
+    padding:14px 18px; border:1px solid var(--line); border-radius:9px;
+    background:var(--bg-raised); box-shadow:var(--shadow);
+    text-decoration:none; color:var(--ink); transition:border-color .12s;
+  }
+  a.doc:hover{ border-color:var(--accent); }
+  a.doc:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+  .doc-title{ font-size:14.5px; font-weight:700; }
+  .doc-title .ver{ font-family:var(--mono); font-size:11px; font-weight:400; color:var(--ink-faint); margin-left:6px; }
+  .doc-desc{ grid-column:1; font-size:13px; color:var(--ink-dim); }
+  .doc-path{ grid-column:1; font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); margin-top:2px; }
+  .chip{
+    grid-row:1; grid-column:2; font-family:var(--mono); font-size:10px; letter-spacing:.04em;
+    padding:3px 9px; border-radius:20px; white-space:nowrap; align-self:start; margin-top:2px;
+  }
+  .chip.live{ background:var(--ok-bg); color:var(--ok); }
+  .chip.progress{ background:var(--live-bg); color:var(--live); }
+  .chip.plan{ background:var(--plan-bg); color:var(--plan); }
+  .chip.snap{ background:var(--snap-bg); color:var(--snap); }
+  .chip.arch{ background:var(--bg-sunk); color:var(--ink-faint); }
+
+  .no-match{ display:none; text-align:center; color:var(--ink-faint); font-size:13.5px; padding:30px 0; }
+
+  footer{
+    margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
+    font-family:var(--mono); font-size:11px; color:var(--ink-faint);
+    display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;
+  }
+  @media (max-width:560px){
+    a.doc{ grid-template-columns:1fr; }
+    .chip{ grid-row:auto; grid-column:1; justify-self:start; margin-top:4px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">Documentation Hub <span id="pageUpdated"></span></div>
+  <h1>StockMind 문서 모음</h1>
+  <p class="lede">주식 대시보드(StockMind)의 기획서·가이드 통합 인덱스. 문서는 성격별로 <b>spec</b>(기획·설계) / <b>guide</b>(학습·분석 자료)로 나뉩니다.</p>
+  <a class="back" href="https://peter-cho-70.github.io/">← 문서 허브로 돌아가기</a>
+
+  <div class="filter-wrap">
+    <input id="filter" type="search" placeholder="문서 검색 — 제목·설명·키워드 입력 (예: 재무, 오픈뱅킹, 지식허브, 차트)" autocomplete="off">
+    <div class="filter-hint" id="count"></div>
+  </div>
+
+  <section data-sec>
+    <h2>🚀 시작하기 <span class="folder">루트</span></h2>
+    <p class="section-desc">프로젝트 개요와 현재 개발 상태.</p>
+    <div class="doc-list">
+      <a class="doc" href="viewer.html?file=../README.md" data-tags="readme 개요 소개 실행방법">
+        <span class="doc-title">README — 프로젝트 개요·실행 방법</span>
+        <span class="chip live">현행</span>
+        <span class="doc-desc">저장소 최상위 소개 문서. 시스템 구성과 실행 방법.</span>
+        <span class="doc-path">README.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=STATUS.md" data-tags="현황 진행 상태 완료 미착수 오픈뱅킹 status">
+        <span class="doc-title">개발 현황 (STATUS) <span class="ver">2026-07-12 기준</span></span>
+        <span class="chip live">현행</span>
+        <span class="doc-desc">완료 / 진행 중 / 알려진 이슈 구분 — 오픈뱅킹 연동, 레버리지 계산기, KIS 동기화 갭 등.</span>
+        <span class="doc-path">doc/STATUS.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=DEVLOG.md" data-tags="devlog 개발 변천사 히스토리 api 키 연동 타임라인">
+        <span class="doc-title">개발 기록 (DEVLOG) <span class="ver">갱신 2026-07-12</span></span>
+        <span class="chip live">현행</span>
+        <span class="doc-desc">Phase별 개발 변천사 + 외부 연동·API 키 현황(발급처·필수여부·도입시점, 값은 미포함).</span>
+        <span class="doc-path">doc/DEVLOG.md</span>
+      </a>
+      <a class="doc" href="vibecoding.html" data-tags="바이브코딩 vibe coding 허브 워크플로 체크리스트 규칙 교훈 최적화">
+        <span class="doc-title">바이브 코딩 허브 <span class="ver">2026-07-12</span></span>
+        <span class="chip live">현행</span>
+        <span class="doc-desc">개발 과정·규칙·교훈을 문서들에서 모아 한 화면으로 — 표준 워크플로 6단계, 기능 완료 체크리스트, 규칙 카드, 문서 맵, 사고에서 뽑은 원칙 10.</span>
+        <span class="doc-path">doc/vibecoding.html</span>
+      </a>
+      <a class="doc" href="viewer.html?file=IDEAS.md" data-tags="아이디어 백로그 ideas 대기열 착수 승격">
+        <span class="doc-title">아이디어 백로그 (IDEAS) <span class="ver">2026-07-11 신설</span></span>
+        <span class="chip plan">아이디어</span>
+        <span class="doc-desc">순간적으로 떠오른 기능 아이디어를 한 줄로 적어두는 대기열. 착수하면 STATUS.md "진행 중"으로 승격.</span>
+        <span class="doc-path">doc/IDEAS.md</span>
+      </a>
+    </div>
+  </section>
+
+  <section data-sec>
+    <h2>📐 기획 · 설계 <span class="folder">doc/spec/</span></h2>
+    <p class="section-desc">제품이 무엇이고 어디로 가는지를 정의하는 문서 — PRD, 요구사항.</p>
+    <div class="doc-list">
+      <a class="doc" href="viewer.html?file=spec/FinanceHub_PRD_v1.md" data-tags="finance hub 재무관리 자산 부채 현금흐름 장부 prd">
+        <span class="doc-title">FinanceHub PRD — 통합 재무관리 모듈 <span class="ver">v1.0 · 2026-06-17</span></span>
+        <span class="chip live">구현됨</span>
+        <span class="doc-desc">StockMind + AuctionFlow Pro 통합 플랫폼의 재무관리 모듈 — 자산/부채/현금흐름/장부 기능 요구사항.</span>
+        <span class="doc-path">doc/spec/FinanceHub_PRD_v1.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=spec/morning_PRD.md" data-tags="아침 루틴 브리핑 morning market snapshot prd">
+        <span class="doc-title">Morning Routine PRD <span class="ver">v1.0 · 2026-06-16</span></span>
+        <span class="chip live">구현됨</span>
+        <span class="doc-desc">주식 투자자 아침 루틴 앱 — 사용자 시나리오·화면별 상세 설계.</span>
+        <span class="doc-path">doc/spec/morning_PRD.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=spec/StockMind_지식허브_PRD_v1.md" data-tags="지식허브 knowledge hub prd 데이터모델">
+        <span class="doc-title">지식 허브 (Knowledge Hub) PRD <span class="ver">v1.0 · 2026-06-02</span></span>
+        <span class="chip live">구현됨</span>
+        <span class="doc-desc">제품 비전과 원칙, 현재 코드베이스 분석, 개념 모델·데이터 모델.</span>
+        <span class="doc-path">doc/spec/StockMind_지식허브_PRD_v1.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=spec/지식-허브-요구사항.md" data-tags="지식허브 요구사항 뉴스 수집 관심분야">
+        <span class="doc-title">지식 허브 요구사항 <span class="ver">2026-06-02</span></span>
+        <span class="chip snap">기원 문서</span>
+        <span class="doc-desc">주가 반영 인텔리전스와 분리된 「지식」 카테고리 설계 — 지식 허브 PRD의 베이스가 된 원본.</span>
+        <span class="doc-path">doc/spec/지식-허브-요구사항.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=spec/AI-인텔리전스-허브-전면개편안.md" data-tags="인텔리전스 허브 개편 캘린더 대시보드 전환">
+        <span class="doc-title">AI 인텔리전스 허브 전면 개편안 <span class="ver">2026-06-01</span></span>
+        <span class="chip live">구현됨</span>
+        <span class="doc-desc">분석 도구에서 캘린더·일일 정리·정량 대시보드 중심의 인텔리전스 허브로 전환하는 기획.</span>
+        <span class="doc-path">doc/spec/AI-인텔리전스-허브-전면개편안.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=spec/StockMind-예측시스템-아이디어.md" data-tags="예측 변동성 signal 시계열 학습 적중률 lead-lag 리스크레이더 패턴라이브러리 provider 스코어카드 투자가설 시나리오 섹터로테이션">
+        <span class="doc-title">StockMind 예측시스템 아이디어 <span class="ver">Phase 1~8 완료 · 2026-07-11</span></span>
+        <span class="chip done">구현됨</span>
+        <span class="doc-desc">Signal 적중률·Lead-Lag·변동성 스코어·패턴 라이브러리·AI Provider 스코어카드·섹터 로테이션 감지·시나리오 시뮬레이터·투자 가설 추적(Phase 1~8) 전체 완성.</span>
+        <span class="doc-path">doc/spec/StockMind-예측시스템-아이디어.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=retire_PRD.md" data-tags="노후 은퇴 연금 isa irp 리밸런싱 글라이드패스 배당 건보료 retire prd">
+        <span class="doc-title">노후설계(연금·ISA 생애주기 자산관리) PRD <span class="ver">2026-07-12</span></span>
+        <span class="chip plan">부분 구현</span>
+        <span class="doc-desc">퇴직연금·ISA 지식 베이스, 글라이드 패스, 리밸런싱·절세 인출, 배당·부동산 비교. 노후생활 탭(프로필·진단·AI 의견·주간 리뷰)으로 v1 구현됨.</span>
+        <span class="doc-path">doc/retire_PRD.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=sector.md" data-tags="섹터 테마 etf 유니버스 반도체 소부장 2차전지 지주사 sector">
+        <span class="doc-title">섹터·ETF 유니버스 정리 <span class="ver">2026-07-12</span></span>
+        <span class="chip live">구현됨</span>
+        <span class="doc-desc">코어/팩터/수급 테마 ETF와 반도체 소부장·자동차부품·지주사 NAV 등 테마 그룹 정리 — 종목 그룹 17개 자동 구성의 원본.</span>
+        <span class="doc-path">doc/sector.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=sellbuy.md" data-tags="매매기록 시황 상관관계 매크로 수급 로드맵 설계 sellbuy">
+        <span class="doc-title">매매 기록 · 시황 상관관계 분석 설계 <span class="ver">2026-07-11</span></span>
+        <span class="chip plan">부분 구현</span>
+        <span class="doc-desc">매매 판단·감정 기록을 매크로/시황 변수와 교차 분석하는 설계. 기록·판정 부분은 매매습관 기능으로 구현됨, 매크로 상관분석은 미구현 로드맵.</span>
+        <span class="doc-path">doc/sellbuy.md</span>
+      </a>
+    </div>
+  </section>
+
+  <section data-sec>
+    <h2>📖 학습 · 분석 가이드 <span class="folder">doc/guide/</span></h2>
+    <p class="section-desc">차트 분석과 AI 분석 파이프라인 관련 학습·참고 자료.</p>
+    <div class="doc-list">
+      <a class="doc" href="viewer.html?file=guide/AI-분석-저장-차트연동.md" data-tags="ai 분석 저장 차트 연동 아키텍처 gemini signal">
+        <span class="doc-title">AI 분석·저장·차트 연동 가이드 <span class="ver">2026-05-31</span></span>
+        <span class="chip live">현행</span>
+        <span class="doc-desc">유튜브/텍스트 AI 분석 → DB 저장 → Signal 파생 → 차트 급변 구간 연결까지 전체 아키텍처.</span>
+        <span class="doc-path">doc/guide/AI-분석-저장-차트연동.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=guide/한국주식_차트분석_실전가이드.md" data-tags="한국주식 차트분석 실전 가이드 중장기 투자 적중률 백테스트">
+        <span class="doc-title">한국주식 차트분석 실전가이드 <span class="ver">2026-05-30 · 적중률 검증 07-11</span></span>
+        <span class="chip live">구현됨</span>
+        <span class="doc-desc">중장기 개인 투자자 대상 — 한국 시장의 구조적 특성과 차트 분석 핵심 원칙. 체크리스트는 대부분 구현됨 + 기술적 패턴 적중률 백테스트 추가.</span>
+        <span class="doc-path">doc/guide/한국주식_차트분석_실전가이드.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=guide/차트패턴-보는법.md" data-tags="차트 패턴 캔들 기초 보는법">
+        <span class="doc-title">차트 패턴 보는 법 — 기본 정리 <span class="ver">2026-06-17</span></span>
+        <span class="chip snap">참고자료</span>
+        <span class="doc-desc">캔들차트 기초와 차트 패턴 명칭·일반적 해석 방향. 매매 판단 근거로 사용 금지 명시.</span>
+        <span class="doc-path">doc/guide/차트패턴-보는법.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=guide/바이브코딩-프로세스.md" data-tags="바이브코딩 vibe coding 개발과정 워크플로 효율 교훈 AI 협업 기록">
+        <span class="doc-title">바이브 코딩 개발 과정 기록 <span class="ver">2026-07-12</span></span>
+        <span class="chip live">현행</span>
+        <span class="doc-desc">StockMind가 만들어진 과정의 상세 기록 — 타임라인, 협업 구조, 효율을 만든 장치들, 세션 간 컨텍스트 복원법, 실제 사고에서 뽑은 교훈 10.</span>
+        <span class="doc-path">doc/guide/바이브코딩-프로세스.md</span>
+      </a>
+      <a class="doc" href="viewer.html?file=guide/매매기법-문헌조사.md" data-tags="매매기법 손절 익절 처분효과 포지션사이징 켈리 캔슬림 수급 거래량 와이코프">
+        <span class="doc-title">검증된 매매·자산관리 기법 — 문헌 조사 <span class="ver">2026-07-11</span></span>
+        <span class="chip live">현행</span>
+        <span class="doc-desc">처분효과·손절/익절 근거와 반증·포지션 사이징(2%룰/켈리)·CAN SLIM·리스크패리티, 수급·와이코프 거래량 분석. 매매습관 기능 설계의 배경 조사.</span>
+        <span class="doc-path">doc/guide/매매기법-문헌조사.md</span>
+      </a>
+    </div>
+  </section>
+
+  <section data-sec>
+    <h2>🧪 점검 리포트 <span class="folder">doc/report/</span></h2>
+    <p class="section-desc">코드 전반 점검·수정 이력 — 날짜별 리포트 (형식: <code>YYYY-MM-DD-주제.md</code>).</p>
+    <div class="doc-list">
+      <a class="doc" href="viewer.html?file=report/2026-07-12-전반점검.md" data-tags="점검 리포트 버그 수정 리뷰 오픈뱅킹 스냅샷 report">
+        <span class="doc-title">프로그램 전반 점검 리포트 <span class="ver">2026-07-12</span></span>
+        <span class="chip live">현행</span>
+        <span class="doc-desc">8개 관점 병렬 점검 — 정확성 버그 9건 수정(오픈뱅킹 토큰 유실, 공부하기 본문 공백, 고정지출 날짜 밀림, 휴장일 스냅샷 등) + 정리·효율 6건, 권고 7건.</span>
+        <span class="doc-path">doc/report/2026-07-12-전반점검.md</span>
+      </a>
+    </div>
+  </section>
+
+  <div class="no-match" id="no-match">검색 결과가 없습니다 — 다른 키워드로 시도해보세요.</div>
+
+  <footer>
+    <span>doc/ 통합 인덱스 · spec(기획) / guide(학습·분석)</span>
+  </footer>
+
+</div>
+<script>
+(function(){
+  var input = document.getElementById('filter');
+  var docs = Array.prototype.slice.call(document.querySelectorAll('a.doc'));
+  var secs = Array.prototype.slice.call(document.querySelectorAll('[data-sec]'));
+  var noMatch = document.getElementById('no-match');
+  var count = document.getElementById('count');
+  function apply(){
+    var q = input.value.trim().toLowerCase();
+    var shown = 0;
+    docs.forEach(function(d){
+      var text = (d.textContent + ' ' + (d.getAttribute('data-tags')||'')).toLowerCase();
+      var hit = !q || text.indexOf(q) !== -1;
+      d.style.display = hit ? '' : 'none';
+      if (hit) shown++;
+    });
+    secs.forEach(function(s){
+      var any = Array.prototype.some.call(s.querySelectorAll('a.doc'), function(d){ return d.style.display !== 'none'; });
+      s.style.display = any ? '' : 'none';
+    });
+    noMatch.style.display = shown ? 'none' : 'block';
+    count.textContent = q ? (shown + '개 문서 일치') : (docs.length + '개 문서');
+  }
+  input.addEventListener('input', apply);
+  apply();
+})();
+// 이 허브 페이지 자체의 최종 수정일 — 서버가 보내는 Last-Modified를 그대로 표시(하드코딩 방지).
+(function(){
+  var d = new Date(document.lastModified);
+  if (isNaN(d.getTime())) return;
+  var y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
+  document.getElementById('pageUpdated').textContent = '· 최종 갱신 ' + y + '-' + m + '-' + day;
+})();
+</script>
+</body>
+</html>

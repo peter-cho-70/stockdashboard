@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from config.database import Stock, StockGroup, StockGroupMember, get_db
+from core.etf_data import build_group_etf_panel
 from core.price_updater import fetch_krx_prices
 from core.stock_group_discovery import (
     discover_related_stocks,
@@ -111,6 +112,20 @@ def get_group(group_id: int, db: Session = Depends(get_db)):
     if not group:
         raise HTTPException(status_code=404, detail="그룹 없음")
     return _serialize_group(db, group)
+
+
+@groups_router.get("/stock-groups/{group_id}/etf-panel")
+def get_group_etf_panel(group_id: int, db: Session = Depends(get_db)):
+    """그룹 멤버들을 담고 있는 관련 ETF — 내가 보유 중인 것 / 최근 수익률 상위(핫한 것)로 정리."""
+    group = db.query(StockGroup).filter(StockGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="그룹 없음")
+    symbols = [m.symbol for m in group.members]
+    try:
+        panel = build_group_etf_panel(db, symbols)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"관련 ETF 조회 실패: {e}") from e
+    return {"group_id": group_id, **panel}
 
 
 @groups_router.get("/stock-groups/{group_id}/content")

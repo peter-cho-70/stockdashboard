@@ -1617,7 +1617,7 @@ function PortfolioContent() {
                   <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-[var(--border-subtle)] bg-[var(--background)] p-2">
                     {wifSellCandidates.length === 0 ? (
                       <p className="py-2 text-center text-xs text-neutral-400">
-                        선택 가능한 매도 내역이 없습니다. 체결내역 페이지에서 <strong>2년</strong> 또는 원하는 기간을 선택한 뒤 KIS 동기화를 실행하세요.
+                        선택 가능한 매도 내역이 없습니다. 체결내역 페이지에서 <strong>시작·종료일</strong>을 지정한 뒤 KIS 동기화를 실행하세요.
                       </p>
                     ) : (
                       wifSellCandidates.map((t) => (

@@ -10,6 +10,7 @@ const stockMenuGroups = [
       { href: "/", label: "대시보드" },
       { href: "/portfolio", label: "종목 현황" },
       { href: "/portfolio/trades", label: "체결내역" },
+      { href: "/portfolio/journal", label: "매매습관" },
       { href: "/chart", label: "차트 분석" },
       { href: "/groups", label: "종목 그룹" },
       { href: "/etf", label: "ETF" },
@@ -41,6 +42,7 @@ const stockMenuGroups = [
     links: [
       { href: "/settings", label: "설정" },
       { href: "/autotrade", label: "자동매매" },
+      { href: "/docs/index.html", label: "참고자료", external: true },
     ],
   },
 ];
@@ -61,7 +63,20 @@ export default function StockLayout({ children }: { children: React.ReactNode })
             <span className="px-1 text-[11px] font-medium text-neutral-400">
               {group.title}
             </span>
-            {group.links.map(({ href, label }) => {
+            {group.links.map(({ href, label, external }) => {
+              if (external) {
+                return (
+                  <a
+                    key={href}
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-md px-2.5 py-1.5 text-neutral-600 transition-colors hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+                  >
+                    {label}
+                  </a>
+                );
+              }
               const active = isActive(pathname, href);
               return (
                 <Link

@@ -120,3 +120,74 @@ def check_all_targets_for_stock(db: Session, stock: Stock) -> list[dict]:
     alerts = check_stock_targets(db, stock)
     alerts.extend(check_watchlist_targets_for_symbol(db, stock.symbol, stock.current_price))
     return alerts
+
+
+def format_price_alert_message(
+    *,
+    name: str,
+    symbol: str,
+    change_rate: float,
+    prev_close: float,
+    current_price: float,
+    currency: str,
+) -> str:
+    direction = "🚀 급등" if change_rate > 0 else "🔻 급락"
+    unit = "원" if currency == "KRW" else currency
+    if prev_close > 0:
+        change_amount = current_price - prev_close
+        price_part = (
+            f"{prev_close:,.0f} → {current_price:,.0f}{unit} "
+            f"({change_amount:+,.0f}{unit})"
+        )
+    else:
+        price_part = f"{current_price:,.0f}{unit}"
+    return (
+        f"{direction} [{name}({symbol})] "
+        f"전일 대비 {change_rate:+.2f}% ({price_part})"
+    )
+
+
+def check_price_move_alert(
+    db: Session,
+    stock: Stock,
+    *,
+    change_rate: float,
+    prev_close: float,
+    current_price: float,
+    threshold: float = 5.0,
+) -> list[dict]:
+    """급등락(±threshold%) 알림 — target_* 알림과 동일한 엣지 트리거 패턴.
+    임계값을 넘은 최초 1회만 알리고, 임계값 아래로 돌아오면 플래그를 풀어
+    다음 급등락 때 다시 알릴 수 있게 한다. 이게 없으면 시세가 갱신될 때마다
+    (스케줄러·수동 동기화·시작 시 캐치업 등) 같은 상황에 대해 알림이 계속 새로
+    쌓여서, 한번 읽음 처리해도 다음 갱신에서 또 안 읽음으로 나타나게 된다."""
+    alerts: list[dict] = []
+
+    is_surge = change_rate >= threshold
+    is_drop = change_rate <= -threshold
+
+    if is_surge and not stock.price_surge_alerted:
+        msg = format_price_alert_message(
+            name=stock.name, symbol=stock.symbol, change_rate=change_rate,
+            prev_close=prev_close, current_price=current_price, currency=stock.currency or "KRW",
+        )
+        db.add(AlertHistory(stock_symbol=stock.symbol, alert_type="PRICE_SURGE", message=msg, change_rate=change_rate))
+        alerts.append({"symbol": stock.symbol, "name": stock.name, "change_rate": change_rate, "message": msg, "type": "PRICE_SURGE"})
+        stock.price_surge_alerted = True
+        logger.warning("⚠️ %s", msg)
+    elif not is_surge and stock.price_surge_alerted:
+        stock.price_surge_alerted = False
+
+    if is_drop and not stock.price_drop_alerted:
+        msg = format_price_alert_message(
+            name=stock.name, symbol=stock.symbol, change_rate=change_rate,
+            prev_close=prev_close, current_price=current_price, currency=stock.currency or "KRW",
+        )
+        db.add(AlertHistory(stock_symbol=stock.symbol, alert_type="PRICE_DROP", message=msg, change_rate=change_rate))
+        alerts.append({"symbol": stock.symbol, "name": stock.name, "change_rate": change_rate, "message": msg, "type": "PRICE_DROP"})
+        stock.price_drop_alerted = True
+        logger.warning("⚠️ %s", msg)
+    elif not is_drop and stock.price_drop_alerted:
+        stock.price_drop_alerted = False
+
+    return alerts

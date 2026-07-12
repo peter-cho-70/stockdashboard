@@ -12,8 +12,19 @@ api/routes_signals.py
   POST /api/intel/signal-outcomes/evaluate           — 사후 검증 수동 실행
   GET  /api/intel/lead-lag                         — Lead-Lag 집계
   POST /api/intel/lead-lag/compute                   — Lead-Lag 배치 실행
+  GET  /api/intel/stocks/{symbol}/forecast           — 매수스코어 × 변동성 매트릭스
   GET  /api/intel/calendar                         — 캘린더 허브 (기간 메타)
   GET  /api/intel/calendar/day                     — 일 뷰 상세
+  GET  /api/intel/signals/gap-candidates             — 감성 스키마 버그 재분석 후보 목록
+  GET  /api/intel/patterns                         — 패턴 라이브러리 목록
+  POST /api/intel/patterns/extract                   — 패턴 라이브러리 추출 배치 실행
+  GET  /api/intel/providers/accuracy                 — AI Provider별 Signal 적중률 비교
+  GET  /api/intel/sector-rotation                     — 섹터 로테이션 감지
+  GET  /api/intel/portfolio/simulate                  — 포트폴리오 시나리오 시뮬레이터
+  POST /api/intel/theses                              — 투자 가설 생성
+  GET  /api/intel/theses                              — 투자 가설 목록
+  PATCH /api/intel/theses/{id}                        — 투자 가설 상태 변경
+  POST /api/intel/theses/validate                     — 투자 가설 검증 수동 실행
 """
 import json
 from collections import defaultdict
@@ -22,13 +33,14 @@ from types import SimpleNamespace
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from config.database import (
     get_db, Stock,
     IntelContent, MacroSignal, SectorSignal, StockSignal,
 )
-from core.signal_extractor import backfill_all_signals
+from core.signal_extractor import backfill_all_signals, list_signal_gap_candidates
 from core.signal_related import find_related_analysis, get_shared_signals_for_stock
 from core.recommendations import get_co_mentioned_stocks
 from core.demo_mode import is_demo_mode, build_demo_stocks
@@ -407,6 +419,57 @@ def compute_lead_lag_api(
     }
 
 
+@signals_router.get("/intel/providers/accuracy")
+def get_provider_accuracy_api(
+    days: int = Query(90, ge=7, le=365),
+    db: Session = Depends(get_db),
+):
+    """AI Provider(GPT/Claude/Gemini)별 Signal 적중률 비교 + 추천 provider."""
+    from core.provider_scorecard import get_provider_accuracy
+
+    return get_provider_accuracy(db, days=days)
+
+
+@signals_router.get("/intel/patterns")
+def get_patterns_api(db: Session = Depends(get_db)):
+    """매크로 이슈 → 섹터 반응 패턴 라이브러리 목록."""
+    from core.pattern_library import get_patterns
+
+    return {"patterns": get_patterns(db)}
+
+
+@signals_router.post("/intel/patterns/extract")
+def extract_patterns_api(db: Session = Depends(get_db)):
+    """패턴 라이브러리 추출 배치 실행 (스케줄러와 동일)."""
+    from core.pattern_library import extract_patterns, get_patterns
+
+    stats = extract_patterns(db)
+    return {"ok": True, "extraction": stats, "patterns": get_patterns(db)}
+
+
+@signals_router.get("/intel/sector-rotation")
+def get_sector_rotation_api(
+    window_days: int = Query(30, ge=7, le=180),
+    db: Session = Depends(get_db),
+):
+    """섹터 로테이션 감지 — 최근 window_days 전반기/후반기 감성 점수 변화."""
+    from core.sector_rotation import detect_sector_rotation
+
+    return detect_sector_rotation(db, window_days=window_days)
+
+
+@signals_router.get("/intel/portfolio/simulate")
+def simulate_scenario_api(
+    trigger_topic: str = Query(...),
+    trigger_sentiment: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """포트폴리오 시나리오 시뮬레이터 — 패턴 라이브러리 실측치를 보유 종목 비중으로 가중합산."""
+    from core.scenario_simulator import simulate_scenario
+
+    return simulate_scenario(db, trigger_topic, trigger_sentiment)
+
+
 def _parse_kinds_param(kinds: Optional[str]) -> Optional[set[str]]:
     if not kinds or not kinds.strip():
         return None
@@ -494,6 +557,67 @@ def get_buy_score(
     if not stock:
         raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
     return calculate_buy_score(db, stock, days=days)
+
+
+_MATRIX = {
+    ("A", "LOW"): ("적극진입", "매수 조건 양호 + 변동성 낮음 — 적극 진입 검토 가능"),
+    ("A", "MEDIUM"): ("분할매수", "매수 조건 양호하나 변동성 보통 — 분할 진입 권장"),
+    ("A", "HIGH"): ("소량선취", "매수 조건 양호하나 변동성 높음 — 소량 선취 후 관망"),
+    ("B", "LOW"): ("모니터링", "조건부 관심 + 변동성 낮음 — 관찰 지속"),
+    ("B", "MEDIUM"): ("모니터링", "조건부 관심 + 변동성 보통 — 관찰 지속"),
+    ("B", "HIGH"): ("관망", "조건부 관심이나 변동성 높음 — 관망 권장"),
+    ("C", "LOW"): ("관망", "관망 등급 — 변동성과 무관하게 진입 보류"),
+    ("C", "MEDIUM"): ("관망", "관망 등급 — 변동성과 무관하게 진입 보류"),
+    ("C", "HIGH"): ("관망", "관망 등급 + 변동성 높음 — 진입 보류"),
+    ("D", "LOW"): ("진입금지", "진입 보류 등급 — 변동성과 무관하게 진입 금지"),
+    ("D", "MEDIUM"): ("진입금지", "진입 보류 등급 — 변동성과 무관하게 진입 금지"),
+    ("D", "HIGH"): ("진입금지", "진입 보류 + 변동성 높음 — 진입 금지"),
+}
+
+
+@signals_router.get("/intel/signals/gap-candidates")
+def get_signal_gap_candidates(
+    limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """6/2~ 프롬프트 버그로 감성 필드 없이 저장된 콘텐츠 목록(재분석 후보). 재분석하면 자연히 빠짐."""
+    return list_signal_gap_candidates(db, limit=limit, offset=offset)
+
+
+@signals_router.get("/intel/stocks/{symbol}/forecast")
+def get_forecast(
+    symbol: str,
+    days: int = Query(30, ge=7, le=180),
+    db: Session = Depends(get_db),
+):
+    """매수 스코어 × 변동성 스코어 매트릭스 (국내 종목은 변동성까지, 해외 종목은 매수 스코어만)."""
+    from core.buy_score import calculate_buy_score
+    from core.volatility_forecast import calculate_volatility_score
+
+    stock = db.query(Stock).filter(Stock.symbol == symbol).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"종목 없음: {symbol}")
+
+    buy = calculate_buy_score(db, stock, days=days)
+    vol = calculate_volatility_score(db, stock, days=days)
+
+    grade = buy.get("grade")
+    level = vol.get("level")
+    if grade in ("A", "B", "C", "D") and level in ("LOW", "MEDIUM", "HIGH"):
+        matrix_signal, matrix_reason = _MATRIX[(grade, level)]
+    else:
+        matrix_signal, matrix_reason = None, "변동성 데이터 부족(해외 종목 등) — 매수 스코어만 참고"
+
+    return {
+        "symbol": stock.symbol,
+        "name": stock.name,
+        "buy_score": buy,
+        "volatility": vol,
+        "matrix_signal": matrix_signal,
+        "matrix_reason": matrix_reason,
+        "disclaimer": "본 시스템의 모든 분석은 투자 판단의 근거가 될 수 없으며, 참고용 정보 제공 목적입니다.",
+    }
 
 
 @signals_router.get("/intel/portfolio/risk-radar")
@@ -599,3 +723,68 @@ def get_portfolio_risk_radar(
         "sector_distribution": dict(sector_counts.most_common()),
         "calculated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
     }
+
+
+class ThesisCreateBody(BaseModel):
+    stock_id: int
+    title: str
+    body: Optional[str] = None
+    category: str            # macro | sector | product | earnings
+    time_horizon: str = "mid"  # short | mid | long
+
+
+class ThesisStatusBody(BaseModel):
+    status: str  # active | confirmed | invalidated | expired
+
+
+@signals_router.post("/intel/theses")
+def create_thesis_api(payload: ThesisCreateBody, db: Session = Depends(get_db)):
+    """투자 가설 생성."""
+    from core.thesis_tracker import create_thesis
+
+    stock = db.query(Stock).filter(Stock.id == payload.stock_id).first()
+    if stock is None:
+        raise HTTPException(404, "종목을 찾을 수 없습니다.")
+    try:
+        thesis = create_thesis(
+            db,
+            stock_id=payload.stock_id,
+            title=payload.title,
+            body=payload.body,
+            category=payload.category,
+            time_horizon=payload.time_horizon,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "id": thesis.id}
+
+
+@signals_router.get("/intel/theses")
+def list_theses_api(status: Optional[str] = Query(None), db: Session = Depends(get_db)):
+    """투자 가설 목록 (status 옵션: active/confirmed/invalidated/expired)."""
+    from core.thesis_tracker import list_theses
+
+    return {"theses": list_theses(db, status=status)}
+
+
+@signals_router.patch("/intel/theses/{thesis_id}")
+def update_thesis_status_api(thesis_id: int, payload: ThesisStatusBody, db: Session = Depends(get_db)):
+    """투자 가설 상태 수동 변경 (예: 만료 처리)."""
+    from core.thesis_tracker import update_thesis_status
+
+    try:
+        thesis = update_thesis_status(db, thesis_id, payload.status)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if thesis is None:
+        raise HTTPException(404, "가설을 찾을 수 없습니다.")
+    return {"ok": True, "id": thesis.id, "status": thesis.status}
+
+
+@signals_router.post("/intel/theses/validate")
+def validate_theses_api(db: Session = Depends(get_db)):
+    """활성 투자 가설을 최근 7일 Signal과 대조해 수동 재검증 (스케줄러와 동일 로직)."""
+    from core.thesis_tracker import list_theses, validate_theses
+
+    stats = validate_theses(db)
+    return {"ok": True, "validation": stats, "theses": list_theses(db)}

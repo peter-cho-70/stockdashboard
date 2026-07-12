@@ -1,9 +1,37 @@
 'use client';
 
 import { useFinanceStore } from '@/lib/finance/store/finance-store';
-import { Plus, Wallet, Briefcase, Building2, History, Trash2, Pencil, X } from 'lucide-react';
-import { useState } from 'react';
-import { CashAccountType, CashAsset, IlliquidAsset, RealEstateAsset, RealEstateType, RealEstateValuation } from '@/lib/finance/types';
+import {
+  Plus, Wallet, Briefcase, Building2, History, Trash2, Pencil, X,
+  RefreshCw, Landmark, Check, AlertCircle, Zap,
+} from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { CashAccountType, CashAsset, CashSyncSource, IlliquidAsset, RealEstateAsset, RealEstateType, RealEstateValuation } from '@/lib/finance/types';
+import { detectSecuritiesOverlap, securitiesOverlapMessage } from '@/lib/finance/asset-warnings';
+import { api } from '@/lib/api';
+
+type SyncStatus = 'idle' | 'loading' | 'done' | 'error';
+
+function SyncBadge({ source }: { source?: CashSyncSource }) {
+  if (!source || source === 'manual') return null;
+  const labels: Record<CashSyncSource, string> = {
+    manual: '',
+    openbanking: '오픈뱅킹',
+    kis_deposit: 'KIS',
+    kiwoom_deposit: '키움',
+  };
+  const colors: Record<CashSyncSource, string> = {
+    manual: '',
+    openbanking: 'text-blue-600 bg-blue-50 border-blue-200',
+    kis_deposit: 'text-indigo-600 bg-indigo-50 border-indigo-200',
+    kiwoom_deposit: 'text-purple-600 bg-purple-50 border-purple-200',
+  };
+  return (
+    <span className={`ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${colors[source]}`}>
+      {labels[source]}
+    </span>
+  );
+}
 
 export default function AssetsPage() {
   const store = useFinanceStore();
@@ -26,16 +54,67 @@ export default function AssetsPage() {
     valuationType: 'market' as RealEstateValuation,
   });
 
+  // 동기화 상태
+  const [brokerSyncStatus, setBrokerSyncStatus] = useState<SyncStatus>('idle');
+  const [brokerSyncMsg, setBrokerSyncMsg] = useState('');
+
+  // 페이지 진입 시 브로커 예수금 자동 동기화 (설정된 경우)
+  const syncBroker = useCallback(async (silent = false) => {
+    if (!silent) setBrokerSyncStatus('loading');
+    try {
+      const result = await api.syncBrokerDeposits();
+      if (result.updated > 0 || result.added > 0) {
+        await store.load();
+        if (!silent) {
+          setBrokerSyncStatus('done');
+          setBrokerSyncMsg(`예수금 동기화 완료 (업데이트 ${result.updated}건, 신규 ${result.added}건)`);
+        }
+      } else {
+        if (!silent) {
+          setBrokerSyncStatus('done');
+          setBrokerSyncMsg('변경사항 없음');
+        }
+      }
+    } catch {
+      if (!silent) {
+        setBrokerSyncStatus('error');
+        setBrokerSyncMsg('브로커 API 미설정 또는 연결 실패');
+      }
+    } finally {
+      if (!silent) setTimeout(() => setBrokerSyncStatus('idle'), 3000);
+    }
+  }, [store]);
+
+  // 페이지 진입 시 자동 실행 (silent)
+  useEffect(() => {
+    syncBroker(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name || !formData.amount) return;
+
+    const amount = Number(formData.amount);
+    if (formData.accountType === 'securities') {
+      const breakdown = store.getAssetBreakdown();
+      const projectedSecurities =
+        (editingId
+          ? store.cashAssets.filter((a) => a.id !== editingId && a.accountType === 'securities')
+          : store.cashAssets.filter((a) => a.accountType === 'securities')
+        ).reduce((s, a) => s + a.amount, 0) + amount;
+      const overlap = detectSecuritiesOverlap(projectedSecurities, breakdown.stockHoldings);
+      if (overlap && !confirm(`${securitiesOverlapMessage(overlap)}\n\n그래도 저장하시겠습니까?`)) {
+        return;
+      }
+    }
+
     if (editingId) {
       store.updateCashAsset(editingId, {
         name: formData.name,
         institution: formData.institution || '기타',
         accountType: formData.accountType,
-        amount: Number(formData.amount),
+        amount,
         updatedAt: new Date().toISOString(),
       });
     } else {
@@ -44,8 +123,9 @@ export default function AssetsPage() {
         name: formData.name,
         institution: formData.institution || '기타',
         accountType: formData.accountType,
-        amount: Number(formData.amount),
+        amount,
         updatedAt: new Date().toISOString(),
+        syncSource: 'manual',
       });
     }
     resetForm();
@@ -193,6 +273,19 @@ export default function AssetsPage() {
   const totalBank = bankAssets.reduce((s, a) => s + a.amount, 0);
   const totalIlliquid = store.illiquidAssets.reduce((s, a) => s + a.amount, 0);
   const totalRealEstate = store.realEstateAssets.reduce((s, a) => s + a.estimatedValue, 0);
+  const assetBreakdown = store.getAssetBreakdown();
+  const securitiesOverlap = detectSecuritiesOverlap(
+    assetBreakdown.securitiesCash,
+    assetBreakdown.stockHoldings
+  );
+
+  // 은행별 그룹핑
+  const bankGroups = bankAssets.reduce<Record<string, CashAsset[]>>((acc, a) => {
+    const key = a.institution || '기타';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(a);
+    return acc;
+  }, {});
 
   return (
     <div className="space-y-5 max-w-[1400px] mx-auto">
@@ -201,18 +294,54 @@ export default function AssetsPage() {
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">자산 관리</h1>
           <p className="text-gray-400 text-sm mt-0.5">유동 자산 및 비유동 투자 자산 현황</p>
         </div>
-        <button
-          onClick={() => (isFormOpen ? resetForm() : setIsFormOpen(true))}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all shadow-sm ${
-            isFormOpen
-              ? 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
-              : 'bg-emerald-600 text-white hover:bg-emerald-500'
-          }`}
-        >
-          {isFormOpen ? <X size={12} /> : <Plus size={12} />}
-          {isFormOpen ? '취소' : '자산 등록'}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* 동기화 버튼 */}
+          <button
+            onClick={() => syncBroker(false)}
+            disabled={brokerSyncStatus === 'loading'}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all border ${
+              brokerSyncStatus === 'done'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                : brokerSyncStatus === 'error'
+                ? 'bg-rose-50 border-rose-200 text-rose-600'
+                : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+            } disabled:opacity-60`}
+            title="KIS/키움/오픈뱅킹 잔액 동기화"
+          >
+            {brokerSyncStatus === 'loading' ? (
+              <RefreshCw size={12} className="animate-spin" />
+            ) : brokerSyncStatus === 'done' ? (
+              <Check size={12} />
+            ) : brokerSyncStatus === 'error' ? (
+              <AlertCircle size={12} />
+            ) : (
+              <Zap size={12} />
+            )}
+            {brokerSyncStatus === 'loading' ? '동기화 중…' : brokerSyncStatus === 'done' ? '완료' : brokerSyncStatus === 'error' ? '실패' : '자동 동기화'}
+          </button>
+          {brokerSyncMsg && brokerSyncStatus !== 'idle' && (
+            <span className="text-xs text-gray-400">{brokerSyncMsg}</span>
+          )}
+          <button
+            onClick={() => (isFormOpen ? resetForm() : setIsFormOpen(true))}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all shadow-sm ${
+              isFormOpen
+                ? 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+                : 'bg-emerald-600 text-white hover:bg-emerald-500'
+            }`}
+          >
+            {isFormOpen ? <X size={12} /> : <Plus size={12} />}
+            {isFormOpen ? '취소' : '자산 등록'}
+          </button>
+        </div>
       </div>
+
+      {securitiesOverlap && (
+        <div className="flex items-start gap-2 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+          <AlertCircle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-amber-800 text-xs">{securitiesOverlapMessage(securitiesOverlap)}</p>
+        </div>
+      )}
 
       {isFormOpen && (
         <div className="bg-white rounded-xl border border-emerald-200 p-5 shadow-sm">
@@ -290,53 +419,75 @@ export default function AssetsPage() {
             </div>
             <span className="text-emerald-600 font-semibold text-sm">{formatKRW(totalCash)}</span>
           </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-gray-500 text-xs font-medium border-b border-gray-100">
-                <th className="px-6 py-3 text-left">자산명</th>
-                <th className="px-6 py-3 text-left">금융기관</th>
-                <th className="px-6 py-3 text-right">금액</th>
-                <th className="px-6 py-3 text-right">최근 업데이트</th>
-                <th className="px-4 py-3 w-16"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {store.cashAssets.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center text-xs text-gray-400">
-                    등록된 자산이 없습니다. 위 버튼으로 추가하세요.
-                  </td>
-                </tr>
-              ) : (
-                <>
-                  {securitiesAssets.length > 0 && (
-                    <>
-                      <tr className="bg-blue-50/60">
-                        <td colSpan={5} className="px-6 py-1.5 text-[11px] font-semibold text-blue-600">
-                          증권사 계좌 · {formatKRW(totalSecurities)}
-                        </td>
-                      </tr>
-                      {securitiesAssets.map((asset) => (
-                        <CashAssetRow key={asset.id} asset={asset} formatKRW={formatKRW} onEdit={handleEdit} onDelete={handleDelete} />
-                      ))}
-                    </>
-                  )}
-                  {bankAssets.length > 0 && (
-                    <>
-                      <tr className="bg-emerald-50/60">
-                        <td colSpan={5} className="px-6 py-1.5 text-[11px] font-semibold text-emerald-600">
-                          은행 계좌 · {formatKRW(totalBank)}
-                        </td>
-                      </tr>
-                      {bankAssets.map((asset) => (
-                        <CashAssetRow key={asset.id} asset={asset} formatKRW={formatKRW} onEdit={handleEdit} onDelete={handleDelete} />
-                      ))}
-                    </>
-                  )}
-                </>
-              )}
-            </tbody>
-          </table>
+
+          {/* 증권사 계좌 */}
+          {securitiesAssets.length > 0 && (
+            <div>
+              <div className="px-6 py-2 bg-blue-50/60 border-b border-blue-100 flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-blue-700 flex items-center gap-1.5">
+                  <Wallet size={11} />
+                  증권사 계좌
+                </span>
+                <span className="text-[11px] font-semibold text-blue-700">{formatKRW(totalSecurities)}</span>
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-gray-500 text-xs font-medium border-b border-gray-100">
+                    <th className="px-6 py-2.5 text-left">자산명</th>
+                    <th className="px-6 py-2.5 text-left">금융기관</th>
+                    <th className="px-6 py-2.5 text-right">금액</th>
+                    <th className="px-6 py-2.5 text-right">최근 업데이트</th>
+                    <th className="px-4 py-2.5 w-16"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {securitiesAssets.map((asset) => (
+                    <CashAssetRow key={asset.id} asset={asset} formatKRW={formatKRW} onEdit={handleEdit} onDelete={handleDelete} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* 은행 계좌 — 기관별 그룹핑 */}
+          {bankAssets.length > 0 && (
+            <div>
+              <div className="px-6 py-2 bg-emerald-50/60 border-b border-emerald-100 flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1.5">
+                  <Landmark size={11} />
+                  은행 계좌
+                </span>
+                <span className="text-[11px] font-semibold text-emerald-700">{formatKRW(totalBank)}</span>
+              </div>
+              {Object.entries(bankGroups).map(([bankName, assets]) => {
+                const bankTotal = assets.reduce((s, a) => s + a.amount, 0);
+                return (
+                  <div key={bankName}>
+                    <div className="px-6 py-1.5 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-gray-600 flex items-center gap-1">
+                        <Building2 size={10} className="text-gray-400" />
+                        {bankName}
+                      </span>
+                      <span className="text-[11px] text-gray-500">{formatKRW(bankTotal)}</span>
+                    </div>
+                    <table className="w-full text-sm">
+                      <tbody className="divide-y divide-gray-100">
+                        {assets.map((asset) => (
+                          <CashAssetRow key={asset.id} asset={asset} formatKRW={formatKRW} onEdit={handleEdit} onDelete={handleDelete} />
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {store.cashAssets.length === 0 && (
+            <div className="px-6 py-8 text-center text-xs text-gray-400">
+              등록된 자산이 없습니다. 위 버튼으로 추가하거나 오픈뱅킹/브로커를 연동하세요.
+            </div>
+          )}
         </section>
 
         {/* Illiquid Assets */}
@@ -453,6 +604,7 @@ export default function AssetsPage() {
             </tbody>
           </table>
         </section>
+
         {/* Real Estate Assets */}
         <section className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
           <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -660,7 +812,10 @@ function CashAssetRow({ asset, formatKRW, onEdit, onDelete }: CashAssetRowProps)
   return (
     <tr className="group hover:bg-gray-50 transition-colors">
       <td className="px-6 py-3.5">
-        <span className="text-gray-800 font-medium">{asset.name}</span>
+        <div className="flex items-center">
+          <span className="text-gray-800 font-medium">{asset.name}</span>
+          <SyncBadge source={asset.syncSource} />
+        </div>
       </td>
       <td className="px-6 py-3.5">
         <span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-200">
@@ -678,9 +833,11 @@ function CashAssetRow({ asset, formatKRW, onEdit, onDelete }: CashAssetRowProps)
       </td>
       <td className="px-4 py-3.5">
         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button onClick={() => onEdit(asset)} className="p-1 text-gray-400 hover:text-blue-500 transition-colors">
-            <Pencil size={14} />
-          </button>
+          {(!asset.syncSource || asset.syncSource === 'manual') && (
+            <button onClick={() => onEdit(asset)} className="p-1 text-gray-400 hover:text-blue-500 transition-colors">
+              <Pencil size={14} />
+            </button>
+          )}
           <button onClick={() => onDelete(asset.id)} className="p-1 text-gray-400 hover:text-rose-500 transition-colors">
             <Trash2 size={14} />
           </button>

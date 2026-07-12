@@ -59,10 +59,12 @@ export default function SettingsPage() {
   const [newNameKr, setNewNameKr] = useState("");
   const [newSector, setNewSector] = useState("other");
   const [newKoreaRelated, setNewKoreaRelated] = useState("");
+  const [newCompareKrxSymbol, setNewCompareKrxSymbol] = useState("");
   const [editingTicker, setEditingTicker] = useState<string | null>(null);
   const [editNameKr, setEditNameKr] = useState("");
   const [editSector, setEditSector] = useState("other");
   const [editKoreaRelated, setEditKoreaRelated] = useState("");
+  const [editCompareKrxSymbol, setEditCompareKrxSymbol] = useState("");
 
   const [dbInfo, setDbInfo] = useState<DbInfo | null>(null);
   const [backups, setBackups] = useState<DbBackupItem[]>([]);
@@ -135,10 +137,12 @@ export default function SettingsPage() {
         name_kr: nameKr,
         sector: newSector,
         korea_related: newKoreaRelated.trim() || undefined,
+        compare_krx_symbol: newCompareKrxSymbol.trim() || undefined,
       });
       setNewTicker("");
       setNewNameKr("");
       setNewKoreaRelated("");
+      setNewCompareKrxSymbol("");
       await loadTrackedStocks();
     } catch (e) {
       setTrackedError(e instanceof Error ? e.message : "추가에 실패했습니다.");
@@ -167,6 +171,7 @@ export default function SettingsPage() {
     setEditNameKr(s.name_kr);
     setEditSector(s.sector);
     setEditKoreaRelated(s.korea_related ?? "");
+    setEditCompareKrxSymbol(s.compare_krx_symbol ?? "");
   }
 
   function cancelEditTracked() {
@@ -187,6 +192,7 @@ export default function SettingsPage() {
         name_kr: nameKr,
         sector: editSector,
         korea_related: editKoreaRelated.trim(),
+        compare_krx_symbol: editCompareKrxSymbol.trim(),
       });
       setEditingTicker(null);
       await loadTrackedStocks();
@@ -704,6 +710,12 @@ export default function SettingsPage() {
                             placeholder="영향받는 한국 종목 (선택)"
                             className="min-w-0 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-sm"
                           />
+                          <input
+                            value={editCompareKrxSymbol}
+                            onChange={(e) => setEditCompareKrxSymbol(e.target.value)}
+                            placeholder="비교할 국내 종목코드 (선택, 예: 000660)"
+                            className="min-w-0 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-sm"
+                          />
                           <button
                             type="button"
                             onClick={handleSaveEditTracked}
@@ -798,6 +810,12 @@ export default function SettingsPage() {
               onChange={(e) => setNewKoreaRelated(e.target.value)}
               placeholder="영향받는 한국 종목 (선택)"
               className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2.5 py-1.5 text-sm"
+            />
+            <input
+              value={newCompareKrxSymbol}
+              onChange={(e) => setNewCompareKrxSymbol(e.target.value)}
+              placeholder="비교할 국내 종목코드 (선택, 예: 000660)"
+              className="col-span-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-2.5 py-1.5 text-sm"
             />
           </div>
           <button

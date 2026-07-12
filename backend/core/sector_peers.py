@@ -77,6 +77,28 @@ def stock_name_in_mentioned(stock_name: str, mentioned: list | None) -> bool:
     return False
 
 
+def is_krx_stock(stock) -> bool:
+    """국내(KRX) 종목 판정 — volatility_forecast 등과 공유하는 단일 기준."""
+    m = (stock.market or "").upper()
+    return m in ("KRX", "KOSPI", "KOSDAQ", "") or (stock.currency or "KRW").upper() == "KRW"
+
+
+# 하위 호환 별칭 (기존 내부 사용처)
+_is_krx_stock = is_krx_stock
+
+
+def find_active_stocks_in_sector(db, sector: str) -> list:
+    """활성 KRX 종목 중 해당 섹터에 매칭되는 것들. 없으면 보유 종목 전체로 폴백.
+    core/signal_tracker.py의 섹터 Signal 사후검증, core/pattern_library.py의 패턴 추출이 공유해서 쓴다."""
+    from config.database import Stock
+
+    stocks = db.query(Stock).filter(Stock.is_active == True).all()
+    matched = [s for s in stocks if _is_krx_stock(s) and sectors_match(s.sector, sector, s.symbol)]
+    if matched:
+        return matched
+    return [s for s in stocks if _is_krx_stock(s) and (s.qty or 0) > 0]
+
+
 def find_sector_peers(db, stock, limit: int = 12) -> dict:
     """같은 섹터의 다른 보유·관심 종목 (관계 묶어보기 1단계: 섹터 기반 자동 매칭).
 

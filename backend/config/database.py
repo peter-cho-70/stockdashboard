@@ -4,7 +4,7 @@ SQLAlchemy 데이터베이스 모델 및 연결 관리
 """
 from datetime import datetime
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Float,
+    create_engine, event, Column, Integer, String, Float,
     DateTime, Boolean, Text, ForeignKey, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
@@ -13,8 +13,18 @@ from config.settings import get_settings
 settings = get_settings()
 engine = create_engine(
     f"sqlite:///{settings.db_path}",
-    connect_args={"check_same_thread": False}
+    connect_args={"check_same_thread": False, "timeout": 30},
 )
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_conn, _record):
+    # 시작 시 캐치업 스레드·스케줄러 잡·HTTP 요청이 한 SQLite 파일에 동시 기록하므로
+    # WAL(reader/writer 동시성) + busy_timeout으로 "database is locked"를 방지한다.
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.close()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -55,6 +65,11 @@ class Stock(Base):
     target_sell_price = Column(Float, nullable=True)   # 매도 희망가
     target_buy_alerted = Column(Boolean, default=False)   # 매수가 도달 알림 발송 여부 (재크로스 시 재알림)
     target_sell_alerted = Column(Boolean, default=False)  # 매도가 도달 알림 발송 여부
+
+    # 급등락(±threshold%) 알림 — 임계값을 넘은 동안은 재알림하지 않고,
+    # 임계값 아래로 돌아오면 플래그를 풀어 다음 급등락 때 다시 알림 (target_*_alerted와 동일 패턴)
+    price_surge_alerted = Column(Boolean, default=False)
+    price_drop_alerted = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_synced_at = Column(DateTime, nullable=True)  # KIS 마지막 동기화 시각
@@ -102,6 +117,32 @@ class PortfolioTrade(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     stock = relationship("Stock", back_populates="trades")
+
+
+# ─────────────────────────────────────────────
+# 매매습관 일지 — 체결 건별 매수 근거/확신도/감정/목표·손절가, 매도 사유·복기 메모
+# 매수 체결에는 buy_reason/conviction/entry_emotion/target_price/stop_price를,
+# 매도 체결에는 sell_reason/note를 기록한다 (trade_id 1:1).
+# ─────────────────────────────────────────────
+class TradeJournalEntry(Base):
+    __tablename__ = "trade_journal_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trade_id = Column(Integer, ForeignKey("portfolio_trades.id"), nullable=False, unique=True, index=True)
+
+    buy_reason = Column(String(20), nullable=True)
+    conviction = Column(Integer, nullable=True)  # 1~5
+    entry_emotion = Column(String(20), nullable=True)
+    target_price = Column(Float, nullable=True)
+    stop_price = Column(Float, nullable=True)
+
+    sell_reason = Column(String(20), nullable=True)
+    note = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    trade = relationship("PortfolioTrade", backref="journal_entry")
 
 
 # ─────────────────────────────────────────────
@@ -345,6 +386,7 @@ class IntelContent(Base):
     is_bookmarked = Column(Boolean, default=False)
     is_read = Column(Boolean, default=False)
     user_highlights = Column(Text, nullable=True)  # JSON: 핀·스니펫·사용자 포인트
+    analysis_provider = Column(String(20), nullable=True, index=True)  # claude|openai|gemini — 실제 사용된 provider
 
     analyzed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -646,6 +688,57 @@ class SignalLeadLag(Base):
 
 
 # ─────────────────────────────────────────────
+# 패턴 라이브러리 — 매크로 이슈 → 섹터 반응 패턴 (Phase 4)
+# ─────────────────────────────────────────────
+class PatternLibrary(Base):
+    __tablename__ = "pattern_library"
+    __table_args__ = (
+        UniqueConstraint(
+            "trigger_topic", "trigger_sentiment", "target_sector",
+            name="uq_pattern",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    pattern_name = Column(String(150), nullable=False)
+    trigger_topic = Column(String(50), nullable=False, index=True)      # MacroSignal.topic
+    trigger_sentiment = Column(String(20), nullable=False)              # POSITIVE | NEGATIVE
+    target_sector = Column(String(50), nullable=False, index=True)
+    check_days = Column(Integer, nullable=False, default=5)
+    avg_move_pct = Column(Float, nullable=True)
+    hit_count = Column(Integer, default=0)
+    total_count = Column(Integer, default=0)
+    hit_rate = Column(Float, nullable=True)                             # None = 표본 부족(데이터 부족 표시)
+    last_occurred = Column(String(10), nullable=True)
+    example_dates = Column(Text, nullable=True)                         # JSON 리스트(최근 발생일)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
+# 투자 가설 추적 (Phase 6 — "왜 이 종목을 매수했는가"를 실제 Signal로 검증)
+# ─────────────────────────────────────────────
+class InvestmentThesis(Base):
+    __tablename__ = "investment_theses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    body = Column(Text, nullable=True)
+    category = Column(String(20), nullable=False)   # macro | sector | product | earnings
+    time_horizon = Column(String(20), nullable=False, default="mid")  # short | mid | long
+    status = Column(String(20), default="active")   # active | confirmed | invalidated | expired
+    supporting_signals = Column(Text, nullable=True)     # JSON: [{type, id, event_date}]
+    contradicting_signals = Column(Text, nullable=True)
+    last_validated_at = Column(DateTime, nullable=True)
+    validation_score = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    stock = relationship("Stock")
+
+
+# ─────────────────────────────────────────────
 # 관심 종목 (지켜보기 — 모의투자 아님)
 # ─────────────────────────────────────────────
 # ─────────────────────────────────────────────
@@ -785,6 +878,7 @@ class TrackedUsStock(Base):
     name_kr = Column(String(100), nullable=False)
     sector = Column(String(30), default="other")  # semiconductor_ai | bigtech_cloud | ev_battery | defense_energy | other
     korea_related = Column(String(200), nullable=True)  # 영향받는 한국 종목 (예: "삼성전자, SK하이닉스")
+    compare_krx_symbol = Column(String(10), nullable=True)  # ADR 등 — 클릭 시 비교할 국내 종목코드 (예: "000660")
     sort_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -1162,6 +1256,22 @@ def _migrate_watchlist_columns():
             pass
 
 
+def _migrate_price_alert_columns():
+    """급등락(±threshold%) 알림 재발송 방지 플래그 추가 — target_*_alerted와 동일 패턴"""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        for ddl in (
+            "ALTER TABLE stocks ADD COLUMN price_surge_alerted BOOLEAN DEFAULT 0",
+            "ALTER TABLE stocks ADD COLUMN price_drop_alerted BOOLEAN DEFAULT 0",
+        ):
+            try:
+                conn.execute(text(ddl))
+                conn.commit()
+            except Exception:
+                pass
+
+
 def _migrate_target_price_columns():
     """매수/매도 희망가 알림 컬럼 추가 (stocks + watchlist)"""
     from sqlalchemy import text
@@ -1181,6 +1291,18 @@ def _migrate_target_price_columns():
                 conn.commit()
             except Exception:
                 pass
+
+
+def _migrate_tracked_us_stock_columns():
+    """ADR 등 클릭 시 비교할 국내 종목코드 컬럼 추가"""
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE tracked_us_stocks ADD COLUMN compare_krx_symbol VARCHAR(10)"))
+            conn.commit()
+        except Exception:
+            pass
 
 
 def _migrate_youtube_channel_columns():
@@ -1281,6 +1403,17 @@ def _migrate_user_highlights_column():
     with engine.connect() as conn:
         try:
             conn.execute(text("ALTER TABLE intel_contents ADD COLUMN user_highlights TEXT"))
+            conn.commit()
+        except Exception:
+            pass
+
+
+def _migrate_analysis_provider_column():
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE intel_contents ADD COLUMN analysis_provider VARCHAR(20)"))
             conn.commit()
         except Exception:
             pass
@@ -1419,10 +1552,13 @@ def init_db():
     _migrate_knowledge_hub()
     _migrate_price_target_columns()
     _migrate_user_highlights_column()
+    _migrate_analysis_provider_column()
     _migrate_study_library_columns()
     _migrate_target_price_columns()
+    _migrate_price_alert_columns()
     _migrate_portfolio_trade_columns()
     _migrate_autotrade_broker_column()
+    _migrate_tracked_us_stock_columns()
     from core.us_market_report import seed_default_tracked_us_stocks, migrate_add_spacex
     seed_default_tracked_us_stocks()
     migrate_add_spacex()

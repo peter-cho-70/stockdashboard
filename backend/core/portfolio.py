@@ -7,7 +7,7 @@ core/portfolio.py
 - 일별 스냅샷 저장
 """
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from sqlalchemy.orm import Session
 
 from config.database import Stock, PriceHistory, PortfolioSnapshot, AlertHistory, PortfolioTrade
@@ -17,7 +17,8 @@ from core.kis_client import (
     fetch_trade_history_from_settings,
 )
 from core.kiwoom_client import fetch_merged_kiwoom_balance_from_settings
-from core.target_alerts import check_all_targets_for_stock
+from core.market_calendar import get_latest_trading_date
+from core.target_alerts import check_all_targets_for_stock, check_price_move_alert
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,28 @@ def fetch_all_broker_balances() -> dict[str, tuple[BalanceItem, str]]:
                 result[item.symbol] = (item, "kiwoom")
 
     return result
+
+
+def compute_trade_sync_start(db: Session, default_days: int = 90) -> date:
+    """체결내역 캐치업 동기화 시작일 계산 — 계좌별 마지막 동기화 날짜 중
+    가장 뒤처진 계좌 기준으로 잡는다 (그래야 며칠 앱을 안 켜둬서 생긴 갭도
+    한 번에 따라잡는다). 아직 KIS 동기화 이력이 전혀 없으면 default_days 전부터."""
+    rows = (
+        db.query(PortfolioTrade.external_id, PortfolioTrade.traded_at)
+        .filter(PortfolioTrade.source == "kis", PortfolioTrade.external_id.isnot(None))
+        .all()
+    )
+    if not rows:
+        return date.today() - timedelta(days=default_days)
+
+    latest_by_account: dict[str, str] = {}
+    for external_id, traded_at in rows:
+        account = external_id.split(":", 1)[0]
+        if account not in latest_by_account or traded_at > latest_by_account[account]:
+            latest_by_account[account] = traded_at
+
+    oldest = min(latest_by_account.values())
+    return datetime.strptime(oldest, "%Y-%m-%d").date()
 
 
 def sync_trade_history(db: Session, start, end=None) -> dict:
@@ -130,6 +153,50 @@ def create_quote_client_from_settings():
     raise ValueError("KIS/키움 API가 모두 설정되지 않았습니다 (.env 확인)")
 
 
+def run_startup_catchup_sync() -> dict:
+    """앱 시작 시마다 무조건 실행 — 체결내역 캐치업 + 잔고·시세 동기화.
+    로컬에서 실행할 때만 켜지는 스케줄러(15:35 장마감 등)는 그 시각에 프로세스가
+    떠있어야만 도는데, 며칠 컴퓨터를 꺼두면 그 사이 체결내역·시세가 그대로 갭이 된다
+    (DEVLOG의 KIS 동기화 갭 참고) — 시작할 때마다 한 번 따라잡아서 이 문제를 줄인다."""
+    from config.database import SessionLocal
+    from config.settings import get_settings
+    from core.demo_mode import is_demo_mode
+
+    settings = get_settings()
+    if is_demo_mode():
+        logger.info("ℹ️ 데모 모드 — 시작 시 자동 동기화 생략")
+        return {"skipped": "demo_mode"}
+    if not (settings.kis_is_configured() or settings.kiwoom_is_configured()):
+        logger.info("ℹ️ KIS/키움 미설정 — 시작 시 자동 동기화 생략")
+        return {"skipped": "not_configured"}
+
+    db = SessionLocal()
+    try:
+        result: dict = {}
+        if settings.kis_is_configured():
+            try:
+                start = compute_trade_sync_start(db)
+                trade_result = sync_trade_history(db, start, date.today())
+                logger.info("✅ 시작 시 체결내역 캐치업(%s~오늘): %s", start, trade_result)
+                result["trades"] = trade_result
+            except Exception as e:
+                logger.warning("⚠️ 시작 시 체결내역 캐치업 실패: %s", e)
+                result["trades_error"] = str(e)
+
+        try:
+            manager = PortfolioManager(db, create_quote_client_from_settings())
+            sync_result = manager.sync_all(alert_threshold=settings.alert_threshold)
+            logger.info("✅ 시작 시 잔고·시세 동기화 완료")
+            result["sync"] = sync_result
+        except Exception as e:
+            logger.warning("⚠️ 시작 시 잔고·시세 동기화 실패: %s", e)
+            result["sync_error"] = str(e)
+
+        return result
+    finally:
+        db.close()
+
+
 def resolve_prev_close(
     *,
     prev_close: float,
@@ -145,31 +212,6 @@ def resolve_prev_close(
     if fallback_prev > 0:
         return fallback_prev
     return 0.0
-
-
-def format_price_alert_message(
-    *,
-    name: str,
-    symbol: str,
-    change_rate: float,
-    prev_close: float,
-    current_price: float,
-    currency: str,
-) -> str:
-    direction = "🚀 급등" if change_rate > 0 else "🔻 급락"
-    unit = "원" if currency == "KRW" else currency
-    if prev_close > 0:
-        change_amount = current_price - prev_close
-        price_part = (
-            f"{prev_close:,.0f} → {current_price:,.0f}{unit} "
-            f"({change_amount:+,.0f}{unit})"
-        )
-    else:
-        price_part = f"{current_price:,.0f}{unit}"
-    return (
-        f"{direction} [{name}({symbol})] "
-        f"전일 대비 {change_rate:+.2f}% ({price_part})"
-    )
 
 
 class PortfolioManager:
@@ -298,34 +340,14 @@ class PortfolioManager:
             stock.change_rate = change_rate
             stock.updated_at = datetime.utcnow()
 
-            # 5% 이상 변동 감지
-            if abs(change_rate) >= threshold:
-                alert_msg = format_price_alert_message(
-                    name=stock.name,
-                    symbol=stock.symbol,
-                    change_rate=change_rate,
-                    prev_close=prev_close,
-                    current_price=new_price,
-                    currency=stock.currency or "KRW",
+            # 급등락 감지 — 임계값을 넘은 최초 1회만 알림(재갱신마다 재알림 방지)
+            alerts.extend(
+                check_price_move_alert(
+                    self.db, stock,
+                    change_rate=change_rate, prev_close=prev_close, current_price=new_price,
+                    threshold=threshold,
                 )
-                alert_type = "PRICE_SURGE" if change_rate > 0 else "PRICE_DROP"
-
-                # 알림 이력 저장
-                alert = AlertHistory(
-                    stock_symbol=stock.symbol,
-                    alert_type=alert_type,
-                    message=alert_msg,
-                    change_rate=change_rate,
-                )
-                self.db.add(alert)
-                alerts.append({
-                    "symbol": stock.symbol,
-                    "name": stock.name,
-                    "change_rate": change_rate,
-                    "message": alert_msg,
-                    "type": alert_type,
-                })
-                logger.warning(f"⚠️ 알림: {alert_msg}")
+            )
 
             for hit in check_all_targets_for_stock(self.db, stock):
                 alerts.append({**hit, "change_rate": change_rate})
@@ -369,8 +391,9 @@ class PortfolioManager:
     # 포트폴리오 스냅샷
     # ─────────────────────────────────────────
     def save_portfolio_snapshot(self):
-        """일별 포트폴리오 스냅샷 저장"""
-        today = date.today().strftime("%Y-%m-%d")
+        """일별 포트폴리오 스냅샷 저장 — 호출 시점이 아니라 최근 거래일 기준으로 저장한다
+        (주말/자정 이후 재동기화가 엉뚱한 날짜에 찍히는 것 방지)."""
+        today = get_latest_trading_date().strftime("%Y-%m-%d")
         stocks = self.db.query(Stock).filter(Stock.is_active == True).all()
 
         total_value = sum(s.current_value for s in stocks)

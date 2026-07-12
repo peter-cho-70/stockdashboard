@@ -11,6 +11,8 @@ import {
   BarChart2,
   Calendar,
   Settings,
+  Calculator,
+  Sunset,
 } from "lucide-react";
 import { useFinanceReady } from "@/lib/finance/use-finance-ready";
 import { useFinanceStore } from "@/lib/finance/store/finance-store";
@@ -24,6 +26,8 @@ const tabs = [
   { href: "/finance/cashflow", label: "현금흐름", icon: TrendingUp },
   { href: "/finance/charts", label: "차트", icon: BarChart2 },
   { href: "/finance/funding", label: "자금 계획", icon: Calendar },
+  { href: "/finance/leverage-calc", label: "레버리지 계산기", icon: Calculator },
+  { href: "/finance/retirement", label: "노후생활", icon: Sunset },
   { href: "/finance/settings", label: "설정", icon: Settings },
 ];
 

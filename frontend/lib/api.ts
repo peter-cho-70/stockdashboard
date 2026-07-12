@@ -254,6 +254,76 @@ export interface AllTradeItem {
   realized_avg_price: number | null;
 }
 
+export interface JournalTradeItem {
+  id: number;
+  symbol: string;
+  name: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  price: number;
+  amount: number;
+  traded_at: string;
+  source: string;
+  buy_reason: string | null;
+  conviction: number | null;
+  entry_emotion: string | null;
+  target_price: number | null;
+  stop_price: number | null;
+  sell_reason: string | null;
+  note: string | null;
+  realized_pnl: number | null;
+  realized_pnl_estimated: boolean;
+  return_pct: number | null;
+  plan_target_price: number | null;
+  plan_stop_price: number | null;
+  matched_buy_trade_id: number | null;
+  matched_buy_date: string | null;
+  holding_days: number | null;
+  win_loss: "승" | "패" | null;
+  stop_discipline: "손절지연" | "손절이행" | "해당없음" | "미설정" | null;
+  exit_timing: "목표달성" | "조기익절" | "해당없음" | "미설정" | null;
+}
+
+export interface JournalOptions {
+  buy_reasons: string[];
+  entry_emotions: string[];
+  sell_reasons: string[];
+}
+
+export interface JournalGroupStat {
+  key: string | number | null;
+  count: number;
+  win_rate: number | null;
+  avg_return: number | null;
+}
+
+export interface JournalAnalysis {
+  total_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate: number | null;
+  avg_return_all: number | null;
+  avg_return_win: number | null;
+  avg_return_loss: number | null;
+  profit_loss_ratio: number | null;
+  stop: { set_count: number; delayed_count: number; delayed_rate: number | null };
+  holding: { avg_days_win: number | null; avg_days_loss: number | null };
+  exit: { target_hit_count: number; early_exit_count: number; early_exit_rate: number | null };
+  by_emotion: JournalGroupStat[];
+  by_buy_reason: JournalGroupStat[];
+  by_conviction: JournalGroupStat[];
+}
+
+export interface JournalEntryUpdate {
+  buy_reason?: string | null;
+  conviction?: number | null;
+  entry_emotion?: string | null;
+  target_price?: number | null;
+  stop_price?: number | null;
+  sell_reason?: string | null;
+  note?: string | null;
+}
+
 export interface RecentTradeForWhatIf {
   trade_id: number;
   symbol: string;
@@ -287,6 +357,7 @@ export interface PortfolioSnapshot {
   date: string;
   total_profit_rate: number;
   total_value: number;
+  total_profit: number;
 }
 
 export interface ChartDateMemoItem {
@@ -296,6 +367,15 @@ export interface ChartDateMemoItem {
   body: string;
   created_at: string | null;
   updated_at: string | null;
+}
+
+export interface OpenbankingAccount {
+  fintech_use_num: string;
+  bank_code_std: string;
+  bank_name: string;
+  account_num_masked: string;
+  account_holder_name: string;
+  inquiry_agree_yn: string;
 }
 
 export interface FinanceHubState {
@@ -363,12 +443,86 @@ export interface FinanceStockSnapshot {
   updated_at: string;
 }
 
+export interface RetireProfile {
+  birth_year: number | null;
+  target_retire_age: number;
+  target_monthly_expense: number;
+  risk_tolerance: "conservative" | "balanced" | "aggressive";
+  notes: string;
+}
+
+export interface RetirementSnapshot {
+  as_of: string;
+  profile: RetireProfile;
+  age: number | null;
+  years_to_retire: number | null;
+  glide_path: { equity_min: number; equity_max: number; mid: number; focus: string } | null;
+  assets: {
+    total_assets: number;
+    total_liabilities: number;
+    net_worth: number;
+    liquid_assets: number;
+    real_estate_assets: number;
+    snapshot_date: string | null;
+    net_worth_delta_7d: number | null;
+    net_worth_delta_90d: number | null;
+  };
+  portfolio: {
+    stock_value: number;
+    stock_profit_rate: number;
+    stock_count: number;
+    equity_pct_of_assets: number | null;
+    equity_drift_vs_target: number | null;
+  };
+  retirement_goal: {
+    target_monthly_expense: number;
+    required_capital: number | null;
+    progress_pct: number | null;
+  };
+  monthly_balance: {
+    income: number;
+    expense: number;
+    savings_capacity: number;
+    registered_income: number;
+    registered_expense: number;
+    measured: {
+      months_counted: number;
+      avg_income: number | null;
+      avg_expense: number | null;
+      avg_net: number | null;
+    };
+  };
+}
+
+export interface RetirementOpinion {
+  adequacy_score: number | null;
+  adequacy: string;
+  trend?: string;
+  actions: string[];
+  finance_balance?: string;
+  risk_warnings: string[];
+  snapshot?: RetirementSnapshot;
+  generated_at?: string;
+}
+
+export interface RetirementReview {
+  week_of: string;
+  summary: string;
+  direction?: string;
+  actions: string[];
+  progress_pct?: number | null;
+  net_worth?: number | null;
+  savings_capacity?: number | null;
+  created_at?: string;
+}
+
 export interface LeverageAnalysisItem {
   symbol: string;
   name: string;
   post_loan_buy_qty: number;
   post_loan_avg_price: number;
   post_loan_cost: number;
+  post_loan_remaining_qty: number;
   overall_avg_price: number;
   held_qty: number;
   current_price: number;
@@ -538,6 +692,37 @@ export const api = {
       `/portfolio/trades${qs.toString() ? `?${qs.toString()}` : ""}`,
     );
   },
+  getTradeJournal: (params: {
+    side?: "BUY" | "SELL";
+    symbol?: string;
+    start?: string;
+    end?: string;
+    only_annotated?: boolean;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+    return fetchApi<{ trades: JournalTradeItem[]; total: number; options: JournalOptions }>(
+      `/portfolio/journal${qs.toString() ? `?${qs.toString()}` : ""}`,
+    );
+  },
+  getTradeJournalAnalysis: (params: { start?: string; end?: string } = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+    return fetchApi<JournalAnalysis>(
+      `/portfolio/journal/analysis${qs.toString() ? `?${qs.toString()}` : ""}`,
+    );
+  },
+  updateTradeJournalEntry: (tradeId: number, body: JournalEntryUpdate) =>
+    fetchApi<{ trade_id: number } & JournalEntryUpdate>(`/portfolio/journal/trades/${tradeId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   getPriceOnDate: (symbol: string, date?: string) =>
     fetchApi<{ symbol: string; date: string | null; price: number }>(
       `/portfolio/stocks/${symbol}/price-on-date${date ? `?date=${date}` : ""}`,
@@ -615,8 +800,10 @@ export const api = {
     );
   },
 
-  getStockChart: (symbol: string, period: string) =>
-    fetchApi<StockChartResponse>(`/portfolio/stocks/${symbol}/chart?period=${period}`),
+  getStockChart: (symbol: string, period: string, endDate?: string) =>
+    fetchApi<StockChartResponse>(
+      `/portfolio/stocks/${symbol}/chart?period=${period}${endDate ? `&end_date=${endDate}` : ""}`,
+    ),
 
   // ── 재정허브 ──────────────────────────────────
   getFinanceState: () => fetchApi<FinanceHubState>("/finance/state"),
@@ -656,6 +843,47 @@ export const api = {
       body: JSON.stringify({ year, month, analysis_provider: analysisProvider }),
       signal: AbortSignal.timeout(REPORT_GENERATE_TIMEOUT_MS),
     }),
+  // ── 노후생활 (은퇴 설계) ──────────────────────
+  getRetireProfile: () => fetchApi<RetireProfile>("/finance/retirement/profile"),
+  saveRetireProfile: (body: Partial<RetireProfile>) =>
+    fetchApi<RetireProfile>("/finance/retirement/profile", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  getRetirementSnapshot: () => fetchApi<RetirementSnapshot>("/finance/retirement/snapshot"),
+  getRetirementOpinion: () => fetchApi<RetirementOpinion | null>("/finance/retirement/opinion"),
+  generateRetirementOpinion: (analysisProvider?: AnalysisProvider) =>
+    fetchApi<RetirementOpinion>("/finance/retirement/opinion", {
+      method: "POST",
+      body: JSON.stringify({ analysis_provider: analysisProvider }),
+      signal: AbortSignal.timeout(REPORT_GENERATE_TIMEOUT_MS),
+    }),
+  getRetirementReviews: () => fetchApi<RetirementReview[]>("/finance/retirement/reviews"),
+  runRetirementReview: (analysisProvider?: AnalysisProvider) =>
+    fetchApi<RetirementReview>("/finance/retirement/reviews/run", {
+      method: "POST",
+      body: JSON.stringify({ analysis_provider: analysisProvider }),
+      signal: AbortSignal.timeout(REPORT_GENERATE_TIMEOUT_MS),
+    }),
+
+  // ── 브로커 예수금 동기화 ──────────────────────
+  getBrokerDeposits: () =>
+    fetchApi<{ deposits: { account_no: string; broker: string; name: string; institution: string; amount: number }[]; count: number }>("/finance/broker-deposits"),
+  syncBrokerDeposits: () =>
+    fetchApi<{ updated: number; added: number; deposits: unknown[] }>("/finance/sync-broker-deposits", { method: "POST" }),
+
+  // ── 오픈뱅킹 ──────────────────────────────────
+  getOpenbankingStatus: () =>
+    fetchApi<{ configured: boolean; connected: boolean; user_seq_no?: string; token_expires_at?: string; accounts: OpenbankingAccount[]; account_count: number }>("/finance/openbanking/status"),
+  getOpenbankingAuthUrl: () =>
+    fetchApi<{ url: string; redirect_uri: string }>("/finance/openbanking/auth"),
+  getOpenbankingAccounts: () =>
+    fetchApi<{ accounts: OpenbankingAccount[]; count: number }>("/finance/openbanking/accounts"),
+  syncOpenbanking: () =>
+    fetchApi<{ updated: number; added: number; errors: { bank: string; error: string }[] }>("/finance/openbanking/sync", { method: "POST" }),
+  disconnectOpenbanking: () =>
+    fetchApi<{ ok: boolean; message: string }>("/finance/openbanking", { method: "DELETE" }),
+
   exportFinanceBackup: () => fetchApi<FinanceHubBackup>("/finance/backup"),
   restoreFinanceBackup: (body: FinanceHubBackup | Record<string, unknown>) =>
     fetchApi<FinanceBackupRestoreResult>("/finance/backup/restore", {
@@ -756,6 +984,7 @@ export interface StockChartBar {
   low: number;
   close: number;
   volume: number;
+  change_rate: number;
   ma5: number;
   ma20: number;
   ma60: number;
@@ -1114,6 +1343,22 @@ export interface LeadLagSummary {
   disclaimer: string;
 }
 
+export interface SignalGapCandidate {
+  id: number;
+  source_type: string;
+  source_title: string | null;
+  channel_name: string | null;
+  published_at: string | null;
+  analyzed_at: string | null;
+}
+
+export interface SignalGapCandidatesResponse {
+  total: number;
+  offset: number;
+  limit: number;
+  items: SignalGapCandidate[];
+}
+
 export interface SignalAccuracyResponse {
   sector: SignalAccuracyBlock;
   macro: SignalAccuracyBlock;
@@ -1122,6 +1367,116 @@ export interface SignalAccuracyResponse {
   total_outcomes: number;
   disclaimer: string;
   min_sample_for_rate: number;
+}
+
+export interface PatternLibraryItem {
+  id: number;
+  pattern_name: string;
+  trigger_topic: string;
+  trigger_sentiment: string;
+  target_sector: string;
+  check_days: number;
+  avg_move_pct: number | null;
+  hit_count: number;
+  total_count: number;
+  hit_rate: number | null;
+  insufficient_data: boolean;
+  last_occurred: string | null;
+  example_dates: string[];
+}
+
+export interface ProviderAccuracyBucket {
+  hit_rate: number | null;
+  sample_count: number;
+  avg_magnitude: number | null;
+  insufficient_data: boolean;
+}
+
+export interface ProviderAccuracyResponse {
+  providers: Record<string, ProviderAccuracyBucket>;
+  recommended_provider: string | null;
+  min_sample_for_recommend: number;
+  days: number;
+  disclaimer: string;
+}
+
+export interface SectorRotationBucket {
+  early_score: number;
+  late_score: number;
+  delta: number;
+  trend: "상승" | "하락" | "유지";
+  signal_count: number;
+  insufficient_data: boolean;
+}
+
+export interface SectorRotationEntry extends SectorRotationBucket {
+  sector: string;
+}
+
+export interface SectorRotationResponse {
+  window_days: number;
+  rising_sectors: SectorRotationEntry[];
+  falling_sectors: SectorRotationEntry[];
+  all_sectors: Record<string, SectorRotationBucket>;
+  warnings: string[];
+  disclaimer: string;
+}
+
+export interface ScenarioMatchedPattern {
+  pattern_name: string;
+  target_sector: string;
+  avg_move_pct: number | null;
+  hit_rate: number | null;
+  total_count: number;
+  insufficient_data: boolean;
+}
+
+export interface ScenarioContribution {
+  symbol: string;
+  name: string;
+  sector: string | null;
+  matched_pattern: string | null;
+  avg_move_pct: number | null;
+  weight_pct: number;
+  contribution_pct: number;
+}
+
+export interface ScenarioSimulationResult {
+  trigger_topic: string;
+  trigger_sentiment: string;
+  no_pattern_found: boolean;
+  matched_patterns: ScenarioMatchedPattern[];
+  estimated_total_change_pct: number;
+  estimated_pnl: number;
+  total_portfolio_value: number;
+  contributions: ScenarioContribution[];
+  disclaimer: string;
+}
+
+export interface ThesisSignalRef {
+  id: number;
+  event_date: string | null;
+  sentiment: string | null;
+}
+
+export interface InvestmentThesisItem {
+  id: number;
+  stock_id: number;
+  symbol: string | null;
+  stock_name: string | null;
+  title: string;
+  body: string | null;
+  category: "macro" | "sector" | "product" | "earnings";
+  time_horizon: "short" | "mid" | "long";
+  status: "active" | "confirmed" | "invalidated" | "expired";
+  supporting_signals: ThesisSignalRef[];
+  contradicting_signals: ThesisSignalRef[];
+  support_count: number;
+  contradict_count: number;
+  validation_score: number | null;
+  last_validated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export const signalApi = {
@@ -1167,6 +1522,36 @@ export const signalApi = {
   getRecommendations: (days = 30, sector?: string) =>
     fetchApi<{ days: number; sector: string | null; total: number; recommendations: StockRecommendation[] }>(
       `/intel/recommendations?days=${days}${sector ? `&sector=${encodeURIComponent(sector)}` : ""}`,
+    ),
+  getGapCandidates: (limit = 10, offset = 0) =>
+    fetchApi<SignalGapCandidatesResponse>(`/intel/signals/gap-candidates?limit=${limit}&offset=${offset}`),
+  getPatterns: () => fetchApi<{ patterns: PatternLibraryItem[] }>("/intel/patterns"),
+  extractPatterns: () =>
+    fetchApi<{ ok: boolean; extraction: Record<string, number>; patterns: PatternLibraryItem[] }>(
+      "/intel/patterns/extract",
+      { method: "POST" },
+    ),
+  getProviderAccuracy: (days = 90) =>
+    fetchApi<ProviderAccuracyResponse>(`/intel/providers/accuracy?days=${days}`),
+  getSectorRotation: (windowDays = 30) =>
+    fetchApi<SectorRotationResponse>(`/intel/sector-rotation?window_days=${windowDays}`),
+  simulateScenario: (triggerTopic: string, triggerSentiment: string) =>
+    fetchApi<ScenarioSimulationResult>(
+      `/intel/portfolio/simulate?trigger_topic=${encodeURIComponent(triggerTopic)}&trigger_sentiment=${encodeURIComponent(triggerSentiment)}`,
+    ),
+  getTheses: (status?: string) =>
+    fetchApi<{ theses: InvestmentThesisItem[] }>(`/intel/theses${status ? `?status=${status}` : ""}`),
+  createThesis: (payload: { stock_id: number; title: string; body?: string; category: string; time_horizon?: string }) =>
+    fetchApi<{ ok: boolean; id: number }>("/intel/theses", { method: "POST", body: JSON.stringify(payload) }),
+  updateThesisStatus: (id: number, status: string) =>
+    fetchApi<{ ok: boolean; id: number; status: string }>(`/intel/theses/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
+  validateTheses: () =>
+    fetchApi<{ ok: boolean; validation: Record<string, number>; theses: InvestmentThesisItem[] }>(
+      "/intel/theses/validate",
+      { method: "POST" },
     ),
 };
 
@@ -1457,6 +1842,20 @@ export interface UsMarketQuote {
   korea_related?: string;
   /** 섹터 (설정 화면 추적 종목 카테고리) */
   sector?: string;
+  /** ADR 등 — 클릭 시 비교할 국내 종목코드 (설정 화면에서 등록) */
+  compare_krx_symbol?: string;
+}
+
+export interface UsTickerHistoryPoint {
+  date: string;
+  close: number;
+}
+
+export interface UsTickerHistory {
+  ticker: string;
+  period?: string;
+  points: UsTickerHistoryPoint[];
+  error?: string;
 }
 
 export interface TrackedUsStock {
@@ -1465,6 +1864,7 @@ export interface TrackedUsStock {
   sector: string;
   sector_label?: string;
   korea_related?: string | null;
+  compare_krx_symbol?: string | null;
 }
 
 export type UsMarketInterpretationTopic =
@@ -1794,6 +2194,11 @@ export const marketApi = {
       `/reports/us/daily/live-snapshot?mode=${mode}`,
     ),
 
+  getUsTickerHistory: (ticker: string, period: "1mo" | "3mo" | "6mo" | "1y" = "3mo") =>
+    fetchApi<UsTickerHistory>(
+      `/reports/us/daily/history?ticker=${encodeURIComponent(ticker)}&period=${period}`,
+    ),
+
   refreshUsReportNews: (opts?: { date?: string; refreshQuotes?: boolean }) => {
     const q = new URLSearchParams();
     if (opts?.date) q.set("date", opts.date);
@@ -1815,6 +2220,7 @@ export const marketApi = {
     name_kr: string;
     sector?: string;
     korea_related?: string;
+    compare_krx_symbol?: string;
   }) =>
     fetchApi<{ stock: TrackedUsStock }>("/reports/us/tracked-stocks", {
       method: "POST",
@@ -1823,7 +2229,7 @@ export const marketApi = {
 
   updateTrackedUsStock: (
     ticker: string,
-    body: { name_kr?: string; sector?: string; korea_related?: string },
+    body: { name_kr?: string; sector?: string; korea_related?: string; compare_krx_symbol?: string },
   ) =>
     fetchApi<{ stock: TrackedUsStock }>(
       `/reports/us/tracked-stocks/${encodeURIComponent(ticker)}`,
@@ -2103,11 +2509,41 @@ export interface RiskRadarResult {
   calculated_at: string;
 }
 
+export interface VolatilityFactor {
+  factor: string;
+  score: number;
+  desc: string;
+}
+
+export interface VolatilityResult {
+  symbol: string;
+  name: string;
+  score: number;
+  level: "LOW" | "MEDIUM" | "HIGH" | "UNKNOWN";
+  factors: VolatilityFactor[];
+  interpretation: string;
+  disclaimer: string;
+  calculated_at: string;
+  days_window?: number;
+}
+
+export interface ForecastResult {
+  symbol: string;
+  name: string;
+  buy_score: BuyScoreResult;
+  volatility: VolatilityResult;
+  matrix_signal: string | null;
+  matrix_reason: string;
+  disclaimer: string;
+}
+
 export const scoreApi = {
   getBuyScore: (symbol: string, days = 30) =>
     fetchApi<BuyScoreResult>(`/intel/stocks/${symbol}/buy-score?days=${days}`),
   getRiskRadar: (days = 30) =>
     fetchApi<RiskRadarResult>(`/intel/portfolio/risk-radar?days=${days}`),
+  getForecast: (symbol: string, days = 30) =>
+    fetchApi<ForecastResult>(`/intel/stocks/${symbol}/forecast?days=${days}`),
 };
 
 export const watchlistApi = {
@@ -2190,7 +2626,33 @@ export const groupsApi = {
       "/stock-groups/sync-prices",
       { method: "POST" },
     ),
+  getEtfPanel: (id: number) => fetchApi<GroupEtfPanelResponse>(`/stock-groups/${id}/etf-panel`),
 };
+
+export interface GroupRelatedEtf {
+  code: string;
+  name: string;
+  category: number;
+  category_label: string;
+  match_count: number;
+  matched_symbols: string[];
+  weight_sum: number;
+  current_price: number | null;
+  change_rate: number | null;
+  return_3m: number | null;
+  trading_value: number | null;
+  held: boolean;
+  qty: number | null;
+  avg_price: number | null;
+  profit_rate: number | null;
+}
+
+export interface GroupEtfPanelResponse {
+  group_id: number;
+  related: GroupRelatedEtf[];
+  held: GroupRelatedEtf[];
+  hot: GroupRelatedEtf[];
+}
 
 // ── ETF ──────────────────────────────────
 export interface EtfCategoriesResponse {

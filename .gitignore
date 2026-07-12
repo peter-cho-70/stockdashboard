@@ -12,7 +12,10 @@ env/
 # Backend secrets & local data
 backend/.env
 backend/*.db
+backend/*.db-shm
+backend/*.db-wal
 backend/*.db.bak-*
+frontend/*.db
 backend/data/backups/
 backend/data/study_images/
 backend/data/kis_invest_cache/
@@ -36,3 +39,5 @@ frontend/*.tsbuildinfo
 *.log
 /tmp/
 .vercel
+.docs-site/
+.playwright-mcp

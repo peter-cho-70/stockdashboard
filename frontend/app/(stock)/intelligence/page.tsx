@@ -10,7 +10,7 @@ import {
   Tv, ExternalLink, AlertCircle,
   Globe, BarChart2, Bell, CalendarDays, Star,
 } from "lucide-react";
-import { api, signalApi, type AnalysisResult, type IntelContent, type StockIssueItem, type AnalysisLog, type MacroAnalysis, type SectorAnalysisItem, type AnalysisProvider, type DailyBriefing, type MacroHub, type SectorHub, type PortfolioReminder, type StockRecommendation } from "@/lib/api";
+import { api, signalApi, scoreApi, type AnalysisResult, type IntelContent, type StockIssueItem, type AnalysisLog, type MacroAnalysis, type SectorAnalysisItem, type AnalysisProvider, type DailyBriefing, type MacroHub, type SectorHub, type PortfolioReminder, type StockRecommendation, type SignalAccuracyResponse, type LeadLagSummary, type RiskRadarResult, type SignalGapCandidatesResponse, type SignalGapCandidate, type PatternLibraryItem, type ProviderAccuracyResponse, type SectorRotationResponse, type ScenarioSimulationResult, type InvestmentThesisItem, type StockItem } from "@/lib/api";
 import {
   WatchlistRegisterModal,
   type WatchlistRegisterDraft,
@@ -38,6 +38,8 @@ const PAGE_TABS = [
   { id: "macro",    label: "매크로" },
   { id: "sectors",  label: "섹터" },
   { id: "remind",   label: "리마인드" },
+  { id: "forecast", label: "예측·리스크" },
+  { id: "thesis",   label: "투자 가설" },
 ] as const;
 
 // ─── 타입 ────────────────────────────────────────
@@ -60,6 +62,8 @@ const ANALYSIS_PROVIDER_OPTIONS: { id: AnalysisProvider; label: string; hint: st
   { id: "openai", label: "GPT", hint: "gpt-4o-mini · 텍스트 분석" },
   { id: "claude", label: "Claude", hint: "Anthropic API 크레dit 필요" },
 ];
+
+const PROVIDER_LABEL: Record<string, string> = { gemini: "Gemini", openai: "GPT", claude: "Claude" };
 
 function parseApiError(e: unknown): { message: string; logs: AnalysisLog[] } {
   if (e instanceof AnalyzeStreamError) {
@@ -1525,6 +1529,860 @@ function SectorHubPanel() {
   );
 }
 
+// ─── 예측·리스크 패널 (Signal 적중률 · Lead-Lag · 리스크 레이더) ──
+// 세 API 모두 이미 백엔드에 있었지만(core/signal_tracker.py, core/lead_lag.py, buy_score.py의
+// risk-radar) 프론트에서 아무도 호출하지 않아 계산만 되고 안 보이던 것을 여기서 처음 노출한다.
+function HitRateRow({ label, block }: { label: string; block: SignalAccuracyResponse["sector"] | undefined }) {
+  if (!block) return null;
+  const rate = block.overall_hit_rate;
+  const insufficient = block.insufficient_data || block.sample_count === 0;
+  return (
+    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">{label}</span>
+        <span className="text-xs text-neutral-400">{block.sample_count}건</span>
+      </div>
+      {insufficient || rate == null ? (
+        <p className="mt-1 text-xs text-neutral-400">데이터 부족</p>
+      ) : (
+        <div className="mt-1 flex items-baseline gap-2">
+          <span
+            className={`text-xl font-bold ${
+              rate >= 0.55
+                ? "text-emerald-600 dark:text-emerald-400"
+                : rate >= 0.4
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-red-600 dark:text-red-400"
+            }`}
+          >
+            {(rate * 100).toFixed(0)}%
+          </span>
+          {block.best_check_days != null && (
+            <span className="text-[10px] text-neutral-400">최적 {block.best_check_days}일 창</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 재분석 실패 시 서버가 { detail: { message, logs: [...] } } 형태로 응답하므로
+// 화면엔 마지막 error 로그(진짜 원인, 예: "Claude 크레딧 부족")를 뽑아서 보여준다.
+function extractReanalyzeError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  try {
+    const parsed = JSON.parse(raw) as { detail?: { message?: string; logs?: { level: string; msg: string }[] } };
+    const logs = parsed.detail?.logs;
+    if (logs?.length) {
+      // 맨 처음 error 로그가 근본 원인(예: "Claude 실패: 크레딧 부족")이고,
+      // 그 뒤는 보통 "분석 AI 실패" 같은 일반화된 래핑 메시지라 첫 번째를 우선한다.
+      const firstError = logs.find((l) => l.level === "error");
+      if (firstError?.msg) return firstError.msg;
+    }
+    if (parsed.detail?.message) return parsed.detail.message;
+  } catch {
+    /* JSON이 아니면 원문 그대로 사용 */
+  }
+  return raw;
+}
+
+// 6/2~ 프롬프트 버그(감성 필드 누락)로 저장된 콘텐츠를 하나씩 재분석하는 패널.
+// 저장된 source_document를 재사용하므로 YouTube 재추출은 없고, 구조화 분석 AI만 다시 호출한다.
+// 재분석하면 자연히 후보 목록에서 빠지므로 별도 진행상태 저장 없이 그때그때 다시 불러오면 된다.
+function GapFillPanel() {
+  const [data, setData] = useState<SignalGapCandidatesResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [reanalyzingId, setReanalyzingId] = useState<number | null>(null);
+  const [initialTotal, setInitialTotal] = useState<number | null>(null);
+  const [completed, setCompleted] = useState<SignalGapCandidate[]>([]);
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [errors, setErrors] = useState<Record<number, string>>({});
+
+  const load = useCallback(() => {
+    setLoading(true);
+    signalApi
+      .getGapCandidates(10, 0)
+      .then((res) => {
+        setData(res);
+        setInitialTotal((prev) => (prev == null ? res.total : Math.max(prev, res.total)));
+      })
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const [batchTarget, setBatchTarget] = useState<{ done: number; total: number } | null>(null);
+
+  async function handleReanalyze(c: SignalGapCandidate) {
+    setReanalyzingId(c.id);
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next[c.id];
+      return next;
+    });
+    try {
+      await api.reanalyzeContent(c.id, "gemini");
+      setCompleted((prev) => [c, ...prev]);
+      load();
+    } catch (e) {
+      setErrors((prev) => ({ ...prev, [c.id]: extractReanalyzeError(e) }));
+    } finally {
+      setReanalyzingId(null);
+    }
+  }
+
+  // 지금 화면에 보이는 후보 중 앞에서부터 N개를 순서대로(동시 호출 없이) 처리.
+  // 목록 스냅샷을 미리 떠서 진행 중 재정렬/새로고침에 영향받지 않게 한다.
+  async function handleBatch(count: number) {
+    if (!data) return;
+    const batch = data.items.slice(0, count);
+    if (batch.length === 0) return;
+    setBatchTarget({ done: 0, total: batch.length });
+    for (let i = 0; i < batch.length; i++) {
+      await handleReanalyze(batch[i]);
+      setBatchTarget({ done: i + 1, total: batch.length });
+    }
+    setBatchTarget(null);
+  }
+
+  if (loading && !data) {
+    return (
+      <div className="flex items-center gap-2 py-3 text-xs text-neutral-400">
+        <Loader2 size={12} className="animate-spin" /> 재분석 후보 확인 중...
+      </div>
+    );
+  }
+
+  if (!data || (data.total === 0 && completed.length === 0)) return null;
+
+  const doneCount = completed.length;
+  const progressTotal = initialTotal ?? data.total + doneCount;
+  const progressPct = progressTotal > 0 ? Math.min(100, Math.round((doneCount / progressTotal) * 100)) : 0;
+
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-900/40 dark:bg-amber-900/10">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold text-amber-900 dark:text-amber-300">매크로/섹터 감성 공백 메우기</span>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => handleBatch(7)}
+            disabled={reanalyzingId != null || data.items.length === 0}
+            className="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+          >
+            {batchTarget ? `일괄 처리 중 (${batchTarget.done}/${batchTarget.total})` : "7개씩 일괄 처리"}
+          </button>
+          <button type="button" onClick={load} disabled={reanalyzingId != null} className="text-[11px] text-amber-700 hover:underline disabled:opacity-50 dark:text-amber-400">
+            새로고침
+          </button>
+        </div>
+      </div>
+      <p className="mb-1.5 text-[11px] text-amber-700 dark:text-amber-400">
+        이번 세션 {doneCount}건 완료 · {data.total}건 남음 — Gemini로 재분석하면(저장된 원문 재사용, YouTube 재추출 없음)
+        매크로/섹터 Signal이 채워집니다. 한 건씩 또는 7개씩 일괄로 처리할 수 있습니다.
+      </p>
+      {doneCount > 0 && (
+        <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-amber-200/60 dark:bg-amber-900/40">
+          <div
+            className="h-full rounded-full bg-amber-500 transition-all dark:bg-amber-400"
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+      )}
+      <div className="space-y-1.5">
+        {data.items.map((c) => {
+          const isActive = reanalyzingId === c.id;
+          const errMsg = errors[c.id];
+          return (
+            <div key={c.id} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2">
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs text-neutral-700 dark:text-neutral-300">{c.source_title || "(제목 없음)"}</p>
+                  <p className="text-[10px] text-neutral-400">{c.channel_name} · {c.published_at || c.analyzed_at}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleReanalyze(c)}
+                  disabled={reanalyzingId != null}
+                  className="flex shrink-0 items-center gap-1 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                >
+                  {isActive ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                  {isActive ? "재분석 중..." : "재분석"}
+                </button>
+              </div>
+              {errMsg && (
+                <p className="mt-1.5 text-[10px] text-red-600 dark:text-red-400">{errMsg}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {doneCount > 0 && (
+        <div className="mt-3 border-t border-amber-200/60 pt-2 dark:border-amber-900/40">
+          <button
+            type="button"
+            onClick={() => setShowCompleted((v) => !v)}
+            className="flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+          >
+            {showCompleted ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            ✅ 완료됨 ({doneCount}건)
+          </button>
+          {showCompleted && (
+            <div className="mt-1.5 space-y-1">
+              {completed.map((c) => (
+                <div key={c.id} className="flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-1.5 dark:bg-emerald-900/10">
+                  <span className="text-emerald-600 dark:text-emerald-400">✓</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs text-neutral-600 dark:text-neutral-400">{c.source_title || "(제목 없음)"}</p>
+                    <p className="text-[10px] text-neutral-400">{c.channel_name} · {c.published_at || c.analyzed_at}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ForecastHubPanel() {
+  const [accuracy, setAccuracy] = useState<SignalAccuracyResponse | null>(null);
+  const [leadLag, setLeadLag]   = useState<LeadLagSummary | null>(null);
+  const [riskRadar, setRiskRadar] = useState<RiskRadarResult | null>(null);
+  const [patterns, setPatterns] = useState<PatternLibraryItem[] | null>(null);
+  const [providerAcc, setProviderAcc] = useState<ProviderAccuracyResponse | null>(null);
+  const [rotation, setRotation] = useState<SectorRotationResponse | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [scenarioKey, setScenarioKey] = useState<string>("");
+  const [scenarioResult, setScenarioResult] = useState<ScenarioSimulationResult | null>(null);
+  const [scenarioLoading, setScenarioLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.allSettled([
+      signalApi.getSignalAccuracy(),
+      signalApi.getLeadLag(),
+      scoreApi.getRiskRadar(),
+      signalApi.getPatterns(),
+      signalApi.getProviderAccuracy(),
+      signalApi.getSectorRotation(),
+    ]).then(([a, l, r, p, pa, sr]) => {
+      setAccuracy(a.status === "fulfilled" ? a.value : null);
+      setLeadLag(l.status === "fulfilled" ? l.value : null);
+      setRiskRadar(r.status === "fulfilled" ? r.value : null);
+      setPatterns(p.status === "fulfilled" ? p.value.patterns : null);
+      setProviderAcc(pa.status === "fulfilled" ? pa.value : null);
+      setRotation(sr.status === "fulfilled" ? sr.value : null);
+      setLoading(false);
+    });
+  }, []);
+
+  const scenarioOptions = (() => {
+    const seen = new Map<string, { key: string; topic: string; sentiment: string; label: string }>();
+    (patterns ?? []).forEach((p) => {
+      const key = `${p.trigger_topic}|${p.trigger_sentiment}`;
+      if (!seen.has(key)) {
+        seen.set(key, {
+          key,
+          topic: p.trigger_topic,
+          sentiment: p.trigger_sentiment,
+          label: `${p.trigger_topic} ${p.trigger_sentiment === "POSITIVE" ? "긍정" : "부정"}`,
+        });
+      }
+    });
+    return Array.from(seen.values());
+  })();
+
+  const runSimulation = useCallback((key: string) => {
+    setScenarioKey(key);
+    const opt = scenarioOptions.find((o) => o.key === key);
+    if (!opt) { setScenarioResult(null); return; }
+    setScenarioLoading(true);
+    signalApi.simulateScenario(opt.topic, opt.sentiment)
+      .then((r) => setScenarioResult(r))
+      .catch(() => setScenarioResult(null))
+      .finally(() => setScenarioLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patterns]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-10 text-sm text-neutral-400">
+        <Loader2 size={14} className="animate-spin" /> 불러오는 중...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <GapFillPanel />
+
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <BarChart2 size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Signal 적중률</span>
+        </div>
+        {accuracy ? (
+          <div className="grid gap-2 sm:grid-cols-3">
+            <HitRateRow label="섹터" block={accuracy.sector} />
+            <HitRateRow label="매크로" block={accuracy.macro} />
+            <HitRateRow label="종목 언급" block={accuracy.stock} />
+          </div>
+        ) : (
+          <p className="text-xs text-neutral-400">데이터를 불러올 수 없습니다.</p>
+        )}
+        {accuracy?.disclaimer && (
+          <p className="mt-2 text-[10px] text-neutral-400">{accuracy.disclaimer}</p>
+        )}
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <TrendingUp size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Lead-Lag (선행·후행)</span>
+          {leadLag && <span className="text-xs text-neutral-400">({leadLag.total_pairs}쌍)</span>}
+        </div>
+        {leadLag && leadLag.insights.length > 0 ? (
+          <ul className="space-y-1">
+            {leadLag.insights.map((line, i) => (
+              <li key={i} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2 text-xs text-neutral-700 dark:text-neutral-300">
+                {line}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-neutral-400">유의미한 선행/후행 패턴을 찾을 만큼 데이터가 쌓이지 않았습니다.</p>
+        )}
+        {leadLag && (
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            {(["macro", "sector", "stock"] as const).map((st) => {
+              const b = leadLag.by_type[st];
+              if (!b || b.sample_count === 0) return null;
+              const label = st === "macro" ? "매크로" : st === "sector" ? "섹터" : "종목 언급";
+              return (
+                <div key={st} className="rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-xs">
+                  <div className="flex justify-between text-neutral-500">
+                    <span>{label}</span>
+                    <span className="text-neutral-400">{b.sample_count}건</span>
+                  </div>
+                  {b.avg_lead_days != null && (
+                    <p className="mt-1 text-neutral-700 dark:text-neutral-300">
+                      평균 {b.avg_lead_days > 0 ? `${b.avg_lead_days.toFixed(1)}일 선행` : `${Math.abs(b.avg_lead_days).toFixed(1)}일 후행`}
+                      {b.pct_signal_leads != null && ` · 선행 비율 ${(b.pct_signal_leads * 100).toFixed(0)}%`}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {leadLag?.disclaimer && (
+          <p className="mt-2 text-[10px] text-neutral-400">{leadLag.disclaimer}</p>
+        )}
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <BarChart2 size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">패턴 라이브러리</span>
+          {patterns && <span className="text-xs text-neutral-400">({patterns.length}개)</span>}
+        </div>
+        {patterns && patterns.length > 0 ? (
+          <div className="space-y-1.5">
+            {patterns.map((p) => (
+              <div key={p.id} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">{p.pattern_name}</span>
+                  {p.insufficient_data ? (
+                    <span className="text-[10px] font-medium text-neutral-400">데이터 부족 ({p.total_count}건)</span>
+                  ) : (
+                    <span
+                      className={`text-xs font-bold ${
+                        (p.hit_rate ?? 0) >= 0.6
+                          ? "text-red-600 dark:text-red-400"
+                          : (p.hit_rate ?? 0) >= 0.4
+                            ? "text-amber-600 dark:text-amber-400"
+                            : "text-blue-600 dark:text-blue-400"
+                      }`}
+                    >
+                      {p.hit_count}/{p.total_count} ({((p.hit_rate ?? 0) * 100).toFixed(0)}%)
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-[11px] text-neutral-500">
+                  {p.trigger_topic} {p.trigger_sentiment === "POSITIVE" ? "긍정" : "부정"} Signal → {p.target_sector}
+                  {p.avg_move_pct != null && ` · 평균 ${p.avg_move_pct >= 0 ? "+" : ""}${p.avg_move_pct.toFixed(1)}%`}
+                  {" "}({p.check_days}일 후) · 최근 발생 {p.last_occurred ?? "-"}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-neutral-400">아직 추출된 패턴이 없습니다.</p>
+        )}
+        <p className="mt-2 text-[10px] text-neutral-400">
+          과거 매크로 Signal 발생 후 5거래일 뒤 해당 섹터 실제 평균 변동률 기준 — 표본 3건 미만은 신뢰도를 매기지 않습니다.
+        </p>
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <BarChart2 size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">시나리오 시뮬레이터</span>
+        </div>
+        {scenarioOptions.length > 0 ? (
+          <>
+            <select
+              value={scenarioKey}
+              onChange={(e) => runSimulation(e.target.value)}
+              className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2 text-xs text-neutral-700 dark:text-neutral-300"
+            >
+              <option value="">트리거 선택...</option>
+              {scenarioOptions.map((o) => (
+                <option key={o.key} value={o.key}>{o.label}</option>
+              ))}
+            </select>
+            {scenarioLoading && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-neutral-400">
+                <Loader2 size={12} className="animate-spin" /> 시뮬레이션 중...
+              </div>
+            )}
+            {!scenarioLoading && scenarioResult && (
+              <div className="mt-2 space-y-2">
+                <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-[11px] text-neutral-500">추정 포트폴리오 등락률</p>
+                    <p className={`text-lg font-bold ${
+                      scenarioResult.estimated_total_change_pct > 0
+                        ? "text-red-600 dark:text-red-400"
+                        : scenarioResult.estimated_total_change_pct < 0
+                          ? "text-blue-600 dark:text-blue-400"
+                          : "text-neutral-500"
+                    }`}>
+                      {scenarioResult.estimated_total_change_pct >= 0 ? "+" : ""}{scenarioResult.estimated_total_change_pct.toFixed(2)}%
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[11px] text-neutral-500">추정 손익</p>
+                    <p className={`text-sm font-semibold ${
+                      scenarioResult.estimated_pnl > 0
+                        ? "text-red-600 dark:text-red-400"
+                        : scenarioResult.estimated_pnl < 0
+                          ? "text-blue-600 dark:text-blue-400"
+                          : "text-neutral-500"
+                    }`}>
+                      {scenarioResult.estimated_pnl >= 0 ? "+" : ""}{Math.round(scenarioResult.estimated_pnl).toLocaleString()}원
+                    </p>
+                  </div>
+                </div>
+                {scenarioResult.no_pattern_found ? (
+                  <p className="text-xs text-neutral-400">이 트리거와 일치하는 패턴이 없습니다.</p>
+                ) : (
+                  <>
+                    <div className="space-y-1">
+                      {scenarioResult.matched_patterns.map((mp) => (
+                        <p key={mp.pattern_name} className="text-[11px] text-neutral-500">
+                          {mp.pattern_name} · 평균 {mp.avg_move_pct != null ? `${mp.avg_move_pct >= 0 ? "+" : ""}${mp.avg_move_pct.toFixed(1)}%` : "-"}
+                          {mp.insufficient_data ? " (데이터 부족)" : ` · 적중률 ${((mp.hit_rate ?? 0) * 100).toFixed(0)}% (${mp.total_count}건)`}
+                        </p>
+                      ))}
+                    </div>
+                    <div className="space-y-1">
+                      {scenarioResult.contributions.filter((c) => c.contribution_pct !== 0).slice(0, 8).map((c) => (
+                        <div key={c.symbol} className="flex items-center justify-between rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs">
+                          <span className="text-neutral-700 dark:text-neutral-300">{c.name}</span>
+                          <span className="text-neutral-400">비중 {c.weight_pct.toFixed(1)}%</span>
+                          <span className={c.contribution_pct >= 0 ? "text-red-600 dark:text-red-400" : "text-blue-600 dark:text-blue-400"}>
+                            {c.contribution_pct >= 0 ? "+" : ""}{c.contribution_pct.toFixed(2)}%p
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-xs text-neutral-400">아직 시뮬레이션 가능한 패턴이 없습니다.</p>
+        )}
+        <p className="mt-2 text-[10px] text-neutral-400">{scenarioResult?.disclaimer}</p>
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <BarChart2 size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">AI 분석 정확도</span>
+          {providerAcc?.recommended_provider && (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+              추천: {PROVIDER_LABEL[providerAcc.recommended_provider] ?? providerAcc.recommended_provider}
+            </span>
+          )}
+        </div>
+        {providerAcc ? (
+          <div className="grid gap-2 sm:grid-cols-3">
+            {(["claude", "openai", "gemini"] as const).map((p) => {
+              const bucket = providerAcc.providers[p];
+              if (!bucket) return null;
+              return (
+                <div key={p} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">{PROVIDER_LABEL[p]}</span>
+                    <span className="text-xs text-neutral-400">{bucket.sample_count}건</span>
+                  </div>
+                  {bucket.insufficient_data || bucket.hit_rate == null ? (
+                    <p className="mt-1 text-xs text-neutral-400">데이터 부족</p>
+                  ) : (
+                    <span
+                      className={`text-xl font-bold ${
+                        bucket.hit_rate >= 0.55
+                          ? "text-red-600 dark:text-red-400"
+                          : bucket.hit_rate >= 0.4
+                            ? "text-amber-600 dark:text-amber-400"
+                            : "text-blue-600 dark:text-blue-400"
+                      }`}
+                    >
+                      {(bucket.hit_rate * 100).toFixed(0)}%
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-neutral-400">데이터를 불러올 수 없습니다.</p>
+        )}
+        <p className="mt-2 text-[10px] text-neutral-400">
+          {providerAcc?.disclaimer ?? "과거 Signal 적중률 기준 참고 지표이며, 미래 분석 품질을 보장하지 않습니다."}
+          {" "}표본 {providerAcc?.min_sample_for_recommend ?? 10}건 미만은 추천 후보에서 제외됩니다.
+        </p>
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <BarChart2 size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">섹터 로테이션</span>
+          {rotation && <span className="text-xs text-neutral-400">(최근 {rotation.window_days}일)</span>}
+        </div>
+        {rotation ? (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-red-600 dark:text-red-400">
+                  <TrendingUp size={12} /> 상승 섹터
+                </p>
+                {rotation.rising_sectors.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {rotation.rising_sectors.map((s) => (
+                      <div key={s.sector} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">{s.sector}</span>
+                          <span className="text-xs font-bold text-red-600 dark:text-red-400">
+                            {s.delta >= 0 ? "+" : ""}{s.delta.toFixed(2)}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-[10px] text-neutral-400">
+                          {s.early_score.toFixed(2)} → {s.late_score.toFixed(2)} · {s.signal_count}건
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-neutral-400">뚜렷한 상승 섹터 없음</p>
+                )}
+              </div>
+              <div>
+                <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+                  <TrendingDown size={12} /> 하락 섹터
+                </p>
+                {rotation.falling_sectors.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {rotation.falling_sectors.map((s) => (
+                      <div key={s.sector} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">{s.sector}</span>
+                          <span className="text-xs font-bold text-blue-600 dark:text-blue-400">
+                            {s.delta.toFixed(2)}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-[10px] text-neutral-400">
+                          {s.early_score.toFixed(2)} → {s.late_score.toFixed(2)} · {s.signal_count}건
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-neutral-400">뚜렷한 하락 섹터 없음</p>
+                )}
+              </div>
+            </div>
+            {rotation.warnings.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {rotation.warnings.map((w, i) => (
+                  <div key={i} className="flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">
+                    <AlertCircle size={12} className="mt-0.5 shrink-0" /> {w}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-xs text-neutral-400">데이터를 불러올 수 없습니다.</p>
+        )}
+        <p className="mt-2 text-[10px] text-neutral-400">{rotation?.disclaimer}</p>
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <AlertCircle size={14} className="text-neutral-400" />
+          <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">포트폴리오 리스크 레이더</span>
+          {riskRadar && <span className="text-xs text-neutral-400">({riskRadar.stock_count}종목)</span>}
+        </div>
+        {riskRadar && riskRadar.axes.length > 0 ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {riskRadar.axes.map((ax) => (
+              <div key={ax.axis} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">{ax.axis}</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      ax.risk_level === "높음"
+                        ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                        : ax.risk_level === "보통"
+                          ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                    }`}
+                  >
+                    {ax.risk_level}
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] text-neutral-500">{ax.description}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-neutral-400">보유 종목이 없거나 데이터가 부족합니다.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── 투자 가설 추적 패널 ─────────────────────
+const THESIS_CATEGORY_LABEL: Record<string, string> = {
+  macro: "매크로", sector: "섹터", product: "상품/이슈", earnings: "실적",
+};
+const THESIS_HORIZON_LABEL: Record<string, string> = { short: "단기", mid: "중기", long: "장기" };
+const THESIS_STATUS_LABEL: Record<string, string> = {
+  active: "진행중", confirmed: "확인됨", invalidated: "반박됨", expired: "만료",
+};
+const THESIS_STATUS_CLASS: Record<string, string> = {
+  active: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  confirmed: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  invalidated: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  expired: "bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400",
+};
+
+function ThesisPanel() {
+  const [theses, setTheses] = useState<InvestmentThesisItem[]>([]);
+  const [stocks, setStocks] = useState<StockItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [validating, setValidating] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [stockId, setStockId] = useState<number | "">("");
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [category, setCategory] = useState<string>("sector");
+  const [timeHorizon, setTimeHorizon] = useState<string>("mid");
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    Promise.allSettled([signalApi.getTheses(), api.getStocks()]).then(([t, s]) => {
+      setTheses(t.status === "fulfilled" ? t.value.theses : []);
+      setStocks(s.status === "fulfilled" ? s.value : []);
+      setLoading(false);
+    });
+  }, []);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const stocksForPicker = [...stocks].sort((a, b) => a.name.localeCompare(b.name, "ko"));
+
+  const counts = theses.reduce(
+    (acc, t) => { acc[t.status] = (acc[t.status] ?? 0) + 1; return acc; },
+    {} as Record<string, number>,
+  );
+
+  const handleValidate = () => {
+    setValidating(true);
+    signalApi.validateTheses()
+      .then((r) => setTheses(r.theses))
+      .finally(() => setValidating(false));
+  };
+
+  const handleExpire = (id: number) => {
+    signalApi.updateThesisStatus(id, "expired").then(() => reload());
+  };
+
+  const handleSubmit = () => {
+    setFormError(null);
+    if (!stockId || !title.trim()) {
+      setFormError("종목과 제목은 필수입니다.");
+      return;
+    }
+    setSubmitting(true);
+    signalApi.createThesis({
+      stock_id: stockId as number,
+      title: title.trim(),
+      body: body.trim() || undefined,
+      category,
+      time_horizon: timeHorizon,
+    })
+      .then(() => {
+        setShowForm(false);
+        setStockId(""); setTitle(""); setBody(""); setCategory("sector"); setTimeHorizon("mid");
+        reload();
+      })
+      .catch((e) => setFormError(e instanceof Error ? e.message : "생성 실패"))
+      .finally(() => setSubmitting(false));
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-10 text-sm text-neutral-400">
+        <Loader2 size={14} className="animate-spin" /> 불러오는 중...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {(["active", "confirmed", "invalidated", "expired"] as const).map((s) => (
+            <span key={s} className={`rounded-full px-2.5 py-1 text-xs font-medium ${THESIS_STATUS_CLASS[s]}`}>
+              {THESIS_STATUS_LABEL[s]} {counts[s] ?? 0}
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleValidate}
+            disabled={validating}
+            className="flex items-center gap-1 rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50 disabled:opacity-50 dark:text-neutral-300 dark:hover:bg-neutral-800"
+          >
+            {validating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} 지금 검증
+          </button>
+          <button
+            onClick={() => setShowForm((v) => !v)}
+            className="flex items-center gap-1 rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900"
+          >
+            <Plus size={12} /> 새 가설
+          </button>
+        </div>
+      </div>
+
+      {showForm && (
+        <div className="space-y-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <select
+              value={stockId}
+              onChange={(e) => setStockId(e.target.value ? Number(e.target.value) : "")}
+              className="rounded-md border border-[var(--border-subtle)] bg-transparent px-2 py-1.5 text-xs"
+            >
+              <option value="">종목 선택...</option>
+              {stocksForPicker.map((s) => (
+                <option key={s.id} value={s.id}>{s.name} ({s.symbol})</option>
+              ))}
+            </select>
+            <div className="flex gap-2">
+              <select value={category} onChange={(e) => setCategory(e.target.value)} className="flex-1 rounded-md border border-[var(--border-subtle)] bg-transparent px-2 py-1.5 text-xs">
+                {Object.entries(THESIS_CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+              <select value={timeHorizon} onChange={(e) => setTimeHorizon(e.target.value)} className="flex-1 rounded-md border border-[var(--border-subtle)] bg-transparent px-2 py-1.5 text-xs">
+                {Object.entries(THESIS_HORIZON_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </div>
+          </div>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="가설 제목 (예: HBM 수요 확대로 실적 턴어라운드)"
+            className="w-full rounded-md border border-[var(--border-subtle)] bg-transparent px-2 py-1.5 text-xs"
+          />
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder="근거 (선택)"
+            rows={2}
+            className="w-full rounded-md border border-[var(--border-subtle)] bg-transparent px-2 py-1.5 text-xs"
+          />
+          {formError && <p className="text-xs text-red-500">{formError}</p>}
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setShowForm(false)} className="rounded-md px-3 py-1.5 text-xs text-neutral-500">취소</button>
+            <button
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+            >
+              {submitting ? "생성 중..." : "생성"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {theses.length > 0 ? (
+        <div className="space-y-2">
+          {theses.map((t) => (
+            <div key={t.id} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-200">{t.stock_name}</span>
+                    <span className="text-[10px] text-neutral-400">{t.symbol}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${THESIS_STATUS_CLASS[t.status]}`}>
+                      {THESIS_STATUS_LABEL[t.status]}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-neutral-700 dark:text-neutral-300">{t.title}</p>
+                  {t.body && <p className="mt-0.5 text-[11px] text-neutral-500">{t.body}</p>}
+                </div>
+                {t.status !== "expired" && (
+                  <button
+                    onClick={() => handleExpire(t.id)}
+                    className="shrink-0 rounded-md border border-[var(--border-subtle)] px-2 py-1 text-[10px] text-neutral-500 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                  >
+                    만료 처리
+                  </button>
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-neutral-400">
+                <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5">{THESIS_CATEGORY_LABEL[t.category]}</span>
+                <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5">{THESIS_HORIZON_LABEL[t.time_horizon]}</span>
+                {t.validation_score != null ? (
+                  <span>검증 점수 {(t.validation_score * 100).toFixed(0)}% (지지 {t.support_count} · 반박 {t.contradict_count})</span>
+                ) : (
+                  <span>검증 데이터 없음</span>
+                )}
+                {t.last_validated_at && <span>최근 검증 {t.last_validated_at.slice(0, 16).replace("T", " ")}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-neutral-400">등록된 투자 가설이 없습니다. &quot;새 가설&quot;로 첫 가설을 만들어 보세요.</p>
+      )}
+      <p className="text-[10px] text-neutral-400">
+        최근 7일 Signal과 대조해 자동 검증됩니다(매일 16:00) — 표본 3건 이상에서 지지 비율 80% 이상이면 확인됨, 20% 이하면 반박됨으로 전환됩니다.
+      </p>
+    </div>
+  );
+}
+
 // ─── 포트폴리오 리마인드 패널 ─────────────────────
 function RemindPanel() {
   const [reminders, setReminders] = useState<PortfolioReminder[]>([]);
@@ -1605,7 +2463,7 @@ function RemindPanel() {
 
 // ─── 메인 페이지 ──────────────────────────────────
 export default function IntelligencePage() {
-  const [pageTab,        setPageTab]      = useState<"calendar" | "analyze" | "channels" | "history" | "briefing" | "macro" | "sectors" | "remind">("calendar");
+  const [pageTab,        setPageTab]      = useState<"calendar" | "analyze" | "channels" | "history" | "briefing" | "macro" | "sectors" | "remind" | "forecast" | "thesis">("calendar");
   const [contents,       setContents]     = useState<IntelContent[]>([]);
   const [sourceFilter,   setSourceFilter] = useState<"ALL" | "YOUTUBE" | "NEWS" | "TEXT">("ALL");
   const [loading,        setLoading]      = useState(true);
@@ -1690,6 +2548,8 @@ export default function IntelligencePage() {
       {pageTab === "macro"    && <MacroHubPanel />}
       {pageTab === "sectors"  && <SectorHubPanel />}
       {pageTab === "remind"   && <RemindPanel />}
+      {pageTab === "forecast" && <ForecastHubPanel />}
+      {pageTab === "thesis"   && <ThesisPanel />}
 
       {pageTab === "history" && (
         <div>

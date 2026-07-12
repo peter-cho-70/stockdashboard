@@ -531,13 +531,15 @@ def get_related_sector_stocks(symbol: str, limit: int = 12, db: Session = Depend
 def get_stock_chart(
     symbol: str,
     period: str = "3M",   # 1M / 3M / 6M / 1Y
+    end_date: Optional[str] = None,  # YYYY-MM-DD — 과거 특정 시점 기준 조회 (예: 매매일 전후 흐름)
     db: Session = Depends(get_db)
 ):
     """
     종목 OHLCV 차트 데이터 (pykrx)
     period: 1M=1개월, 3M=3개월, 6M=6개월, 1Y=1년
+    end_date: 지정하면 오늘이 아니라 그 날짜를 기준으로 과거 period만큼 조회 (매매습관의 "그날 흐름" 용)
     """
-    from datetime import date, timedelta
+    from datetime import date, timedelta, datetime as _datetime
     from pykrx import stock as krx
     import time as _time
 
@@ -549,13 +551,20 @@ def get_stock_chart(
             raise HTTPException(status_code=404, detail=str(e)) from e
 
     period_days = {"1M": 30, "3M": 90, "6M": 180, "1Y": 365}.get(period, 90)
-    end_date = date.today()
-    start_date = end_date - timedelta(days=period_days)
+    if end_date:
+        try:
+            end = _datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="end_date는 YYYY-MM-DD 형식이어야 합니다")
+        end = min(end, date.today())
+    else:
+        end = date.today()
+    start_date = end - timedelta(days=period_days)
 
     try:
         df = krx.get_market_ohlcv_by_date(
             start_date.strftime("%Y%m%d"),
-            end_date.strftime("%Y%m%d"),
+            end.strftime("%Y%m%d"),
             symbol
         )
         if df.empty:
@@ -593,12 +602,16 @@ def get_stock_chart(
             ma20 = sum(closes_list[max(0,i-19):i+1]) / min(i+1, 20)
             ma60 = sum(closes_list[max(0,i-59):i+1]) / min(i+1, 60)
 
+            prev_close = closes_list[i - 1] if i > 0 else None
+            change_rate = ((close_price - prev_close) / prev_close * 100) if prev_close else 0.0
+
             records.append({
                 "date":   date_str,
                 "open":   gcol(["시가", "open"]),
                 "high":   gcol(["고가", "high"]),
                 "low":    gcol(["저가", "low"]),
                 "close":  close_price,
+                "change_rate": round(change_rate, 2),
                 "volume": gcol(["거래량", "volume"]),
                 "ma5":    round(ma5,  0),
                 "ma20":   round(ma20, 0),

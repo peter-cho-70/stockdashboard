@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>문서 보기</title>
+<script>
+  // 테마 선택을 body가 그려지기 전에 적용 — <style> 뒤에 두면 시스템 다크모드 사용자가
+  // 저장된 "밝게" 선택값을 잠깐(로딩 순간) 못 보고 어두운 화면이 번쩍했다가 바뀌는 게 보인다.
+  (function(){
+    try {
+      const saved = localStorage.getItem('docViewerTheme');
+      if (saved === 'dark' || saved === 'light') document.documentElement.dataset.theme = saved;
+    } catch(e) {}
+  })();
+</script>
+<style>
+  :root{
+    --bg:#eef1ef; --bg-raised:#ffffff; --bg-sunk:#e4e8e5;
+    --ink:#15201d; --ink-dim:#56635f; --ink-faint:#8b968f;
+    --accent:#a06a12; --accent-ink:#5c3d0a;
+    --green:#1f9a56; --green-bg:rgba(31,154,86,.09);
+    --line:rgba(21,32,29,.14); --line-strong:rgba(21,32,29,.28);
+    --shadow: 0 1px 2px rgba(21,32,29,.06), 0 8px 24px rgba(21,32,29,.05);
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0c1012; --bg-raised:#141b1e; --bg-sunk:#0a0e10;
+      --ink:#e8ece9; --ink-dim:#9aa6a2; --ink-faint:#5e6a66;
+      --accent:#e2a63d; --accent-ink:#f4c877;
+      --green:#3fcf7a; --green-bg:rgba(63,207,122,.11);
+      --line:rgba(232,236,233,.12); --line-strong:rgba(232,236,233,.24);
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 28px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0c1012; --bg-raised:#141b1e; --bg-sunk:#0a0e10;
+    --ink:#e8ece9; --ink-dim:#9aa6a2; --ink-faint:#5e6a66;
+    --accent:#e2a63d; --accent-ink:#f4c877;
+    --green:#3fcf7a; --green-bg:rgba(63,207,122,.11);
+    --line:rgba(232,236,233,.12); --line-strong:rgba(232,236,233,.24);
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 28px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"]{
+    --bg:#eef1ef; --bg-raised:#ffffff; --bg-sunk:#e4e8e5;
+    --ink:#15201d; --ink-dim:#56635f; --ink-faint:#8b968f;
+    --accent:#a06a12; --accent-ink:#5c3d0a;
+    --green:#1f9a56; --green-bg:rgba(31,154,86,.09);
+    --line:rgba(21,32,29,.14); --line-strong:rgba(21,32,29,.28);
+    --shadow: 0 1px 2px rgba(21,32,29,.06), 0 8px 24px rgba(21,32,29,.05);
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.72;-webkit-font-smoothing:antialiased;}
+  ::selection{background:var(--accent);color:var(--bg-sunk);}
+
+  /* ── top bar ── */
+  .topbar{
+    position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:14px;padding:12px 22px;backdrop-filter:blur(6px);
+  }
+  .topbar a.back{font-family:var(--mono);font-size:12.5px;color:var(--ink-dim);text-decoration:none;white-space:nowrap;}
+  .topbar a.back:hover{color:var(--accent);}
+  .topbar .sep{color:var(--line-strong);}
+  .topbar .path{font-family:var(--mono);font-size:12px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
+  .topbar .updated{
+    font-family:var(--mono);font-size:11px;color:var(--accent-ink);white-space:nowrap;flex:none;
+    background:var(--green-bg);padding:3px 9px;border-radius:20px;
+  }
+  .topbar .raw{
+    font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);text-decoration:none;
+    border:1px solid var(--line-strong);border-radius:6px;padding:5px 10px;white-space:nowrap;flex:none;
+  }
+  .topbar .raw:hover{border-color:var(--accent);color:var(--accent);}
+  .theme-toggle{
+    display:flex;align-items:center;gap:2px;flex:none;border:1px solid var(--line-strong);
+    border-radius:7px;padding:2px;background:var(--bg-sunk);
+  }
+  .theme-toggle button{
+    font-family:var(--mono);font-size:13px;line-height:1;padding:5px 9px;border:none;border-radius:5px;
+    background:transparent;color:var(--ink-faint);cursor:pointer;
+  }
+  .theme-toggle button.active{background:var(--bg-raised);color:var(--ink);box-shadow:var(--shadow);}
+  .theme-toggle button:hover:not(.active){color:var(--ink-dim);}
+  .theme-toggle button:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+
+  .wrap{max-width:840px;margin:0 auto;padding:44px 24px 120px;}
+  #doc{display:none;}
+  #doc.ready{display:block;}
+
+  .state{max-width:520px;margin:80px auto;text-align:center;color:var(--ink-dim);font-size:14px;}
+  .state .big{font-size:28px;margin-bottom:10px;}
+  .state code{font-family:var(--mono);background:var(--bg-sunk);padding:1px 6px;border-radius:4px;}
+
+  /* ── rendered markdown typography ── */
+  #doc h1{font-size:clamp(24px,3.4vw,32px);line-height:1.28;margin:0 0 22px;font-weight:800;letter-spacing:-.01em;text-wrap:balance;border-bottom:2px solid var(--line-strong);padding-bottom:16px;}
+  #doc h2{font-size:21px;margin:44px 0 14px;font-weight:800;letter-spacing:-.008em;text-wrap:balance;scroll-margin-top:70px;}
+  #doc h3{font-size:16.5px;margin:30px 0 10px;font-weight:700;scroll-margin-top:70px;}
+  #doc h4{font-size:14px;margin:22px 0 8px;font-weight:700;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.03em;}
+  #doc p{margin:13px 0;max-width:74ch;}
+  #doc strong{font-weight:700;color:var(--ink);}
+  #doc em{font-style:italic;}
+  #doc a{color:var(--accent-ink);text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:2px;}
+  #doc a:hover{text-decoration-color:var(--accent);}
+  #doc code{font-family:var(--mono);font-size:.87em;background:var(--bg-sunk);padding:1px 6px;border-radius:4px;}
+  #doc pre{background:var(--bg-sunk);border:1px solid var(--line);border-radius:8px;padding:16px 18px;overflow-x:auto;margin:16px 0;}
+  #doc pre code{background:none;padding:0;font-size:12.8px;line-height:1.65;}
+  #doc blockquote{margin:16px 0;padding:2px 18px;border-left:3px solid var(--accent);color:var(--ink-dim);background:var(--bg-sunk);border-radius:0 6px 6px 0;}
+  #doc blockquote p{margin:10px 0;}
+  #doc hr{border:none;border-top:1px solid var(--line-strong);margin:36px 0;}
+  #doc ul,#doc ol{padding-left:26px;margin:12px 0;max-width:72ch;}
+  #doc li{margin:5px 0;}
+  #doc li.task{list-style:none;margin-left:-22px;padding-left:26px;position:relative;}
+  #doc li.task::before{content:"";position:absolute;left:0;top:5px;width:14px;height:14px;border:2px solid var(--line-strong);border-radius:4px;}
+  #doc li.task.done::before{background:var(--green);border-color:var(--green);}
+  #doc li.task.done::after{content:"✓";position:absolute;left:2px;top:1px;font-size:11px;color:var(--bg-raised);font-weight:700;}
+
+  .table-scroll{overflow-x:auto;margin:16px 0;border:1px solid var(--line);border-radius:8px;}
+  #doc table{border-collapse:collapse;width:100%;font-size:13.5px;}
+  #doc th,#doc td{border-bottom:1px solid var(--line);padding:9px 14px;text-align:left;vertical-align:top;}
+  #doc th{background:var(--bg-sunk);font-weight:700;font-size:12.5px;white-space:nowrap;}
+  #doc tr:last-child td{border-bottom:none;}
+  #doc td code, #doc th code{white-space:nowrap;}
+
+  /* ── auto TOC ── */
+  .toc{border:1px solid var(--line);border-radius:10px;background:var(--bg-raised);box-shadow:var(--shadow);padding:18px 22px;margin:0 0 40px;}
+  .toc-title{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:10px;}
+  .toc ol{margin:0;padding-left:20px;font-size:13.5px;columns:1;}
+  .toc li{margin:4px 0;}
+  .toc a{color:var(--ink);text-decoration:none;border-bottom:1px dotted var(--line-strong);}
+  .toc a:hover{color:var(--accent);}
+  .toc .lvl2{padding-left:16px;font-size:13px;color:var(--ink-dim);}
+
+  footer{max-width:840px;margin:60px auto 0;padding:20px 24px 0;border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--ink-faint);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="back" href="index.html">← 문서 모음</a>
+  <span class="sep">/</span>
+  <span class="path" id="pathLabel">불러오는 중…</span>
+  <span class="updated" id="updatedBadge" style="display:none;"></span>
+  <div class="theme-toggle" role="group" aria-label="화면 밝기 선택">
+    <button type="button" id="themeLightBtn" onclick="setTheme('light')" title="밝은 화면" aria-label="밝은 화면">☀️</button>
+    <button type="button" id="themeDarkBtn" onclick="setTheme('dark')" title="어두운 화면" aria-label="어두운 화면">🌙</button>
+  </div>
+  <a class="raw" id="rawLink" href="#" target="_blank" rel="noopener">원본(.md) 보기</a>
+</div>
+
+<div class="wrap">
+  <div id="state" class="state">
+    <div class="big">📄</div>
+    <div>문서를 불러오는 중입니다…</div>
+  </div>
+  <nav class="toc" id="toc" style="display:none;">
+    <div class="toc-title">이 문서의 목차</div>
+    <ol id="tocList"></ol>
+  </nav>
+  <article id="doc"></article>
+</div>
+
+<footer id="pageFooter" style="display:none;">
+  <span id="footMeta"></span>
+  <span>doc/viewer.html — 원본 마크다운을 그대로 읽기 좋게 표시</span>
+</footer>
+
+<script>
+// ══════════════════════════════════════════════════════════
+//  아주 작은 자체 마크다운 렌더러 — 이 저장소의 문서들(제목/표/코드블록/
+//  체크박스/목록/굵게/링크)만 지원하면 충분해서, 외부 라이브러리 없이
+//  직접 짰다(CDN 불가 + LAN 오프라인 환경 전제, 이 프로젝트 전체 관행과 동일).
+//  완전한 CommonMark 스펙 대응이 목적이 아니라, doc/ 안의 실제 문서에서
+//  쓰는 문법만 정확히 처리하는 것이 목표.
+// ══════════════════════════════════════════════════════════
+function escapeHtml(s){
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// 굵게/기울임/인라인코드/링크 — 블록 파서가 만든 한 줄(텍스트) 안에서만 적용
+function inline(text){
+  text = escapeHtml(text);
+  // 인라인 코드 먼저(그 안의 문자는 이후 치환 대상에서 제외되도록 플레이스홀더로 보호)
+  const codes = [];
+  text = text.replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return `\0${codes.length-1}\0`; });
+  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
+    const external = /^https?:\/\//.test(url);
+    return `<a href="${escapeHtml(url)}"${external ? ' target="_blank" rel="noopener"' : ''}>${label}</a>`;
+  });
+  text = text.replace(/\0(\d+)\0/g, (_, i) => `<code>${codes[+i]}</code>`);
+  return text;
+}
+
+function parseTable(lines, startIdx){
+  // lines[startIdx] = 헤더 행, lines[startIdx+1] = 구분선(---|---), 이후 데이터 행
+  const headerCells = lines[startIdx].trim().replace(/^\||\|$/g,'').split('|').map(s=>s.trim());
+  let i = startIdx + 2;
+  const rows = [];
+  while (i < lines.length && /^\s*\|/.test(lines[i])) {
+    rows.push(lines[i].trim().replace(/^\||\|$/g,'').split('|').map(s=>s.trim()));
+    i++;
+  }
+  let html = '<div class="table-scroll"><table><thead><tr>';
+  headerCells.forEach(c => html += `<th>${inline(c)}</th>`);
+  html += '</tr></thead><tbody>';
+  rows.forEach(r => {
+    html += '<tr>';
+    r.forEach(c => html += `<td>${inline(c)}</td>`);
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  return {html, next: i};
+}
+
+function slugify(text, used){
+  let slug = text.toLowerCase().trim()
+    .replace(/[`*_~]/g,'')
+    .replace(/[^\w\s가-힣-]/g,'')
+    .replace(/\s+/g,'-');
+  if (!slug) slug = 'section';
+  let s = slug, n = 2;
+  while (used.has(s)) { s = slug + '-' + (n++); }
+  used.add(s);
+  return s;
+}
+
+function parseMarkdown(src){
+  const lines = src.replace(/\r\n/g,'\n').split('\n');
+  const used = new Set();
+  const toc = [];
+  let html = '';
+  let i = 0;
+  let inList = null; // 'ul' | 'ol'
+
+  function closeList(){ if (inList) { html += `</${inList}>`; inList = null; } }
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // 코드 블록
+    if (/^```/.test(line)) {
+      closeList();
+      const lang = line.trim().slice(3).trim();
+      const body = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) { body.push(lines[i]); i++; }
+      i++; // 닫는 ```
+      html += `<pre><code${lang?` data-lang="${escapeHtml(lang)}"`:''}>${escapeHtml(body.join('\n'))}</code></pre>`;
+      continue;
+    }
+
+    // 표
+    if (/^\s*\|.*\|\s*$/.test(line) && lines[i+1] && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i+1])) {
+      closeList();
+      const {html: tbl, next} = parseTable(lines, i);
+      html += tbl;
+      i = next;
+      continue;
+    }
+
+    // 헤딩
+    let m = line.match(/^(#{1,4})\s+(.*)$/);
+    if (m) {
+      closeList();
+      const level = m[1].length;
+      const text = m[2].trim();
+      const slug = slugify(text.replace(/[📖🚨🎓📐🔧🗄✅⬜🔶📅💡📎🧭🚀]/g,'').trim() || text, used);
+      html += `<h${level} id="${slug}">${inline(text)}</h${level}>`;
+      if (level <= 2) toc.push({level, text, slug});
+      i++;
+      continue;
+    }
+
+    // 구분선
+    if (/^\s*---+\s*$/.test(line) || /^\s*\*\*\*+\s*$/.test(line)) {
+      closeList();
+      html += '<hr>';
+      i++;
+      continue;
+    }
+
+    // 인용
+    if (/^>\s?/.test(line)) {
+      closeList();
+      const body = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) { body.push(lines[i].replace(/^>\s?/, '')); i++; }
+      html += `<blockquote><p>${body.map(inline).join('<br>')}</p></blockquote>`;
+      continue;
+    }
+
+    // 체크박스 목록
+    m = line.match(/^\s*[-*]\s+\[( |x|X)\]\s+(.*)$/);
+    if (m) {
+      if (inList !== 'ul') { closeList(); html += '<ul>'; inList = 'ul'; }
+      const done = m[1].toLowerCase() === 'x';
+      html += `<li class="task${done?' done':''}">${inline(m[2])}</li>`;
+      i++;
+      continue;
+    }
+
+    // 순서 없는 목록
+    m = line.match(/^\s*[-*]\s+(.*)$/);
+    if (m) {
+      if (inList !== 'ul') { closeList(); html += '<ul>'; inList = 'ul'; }
+      html += `<li>${inline(m[1])}</li>`;
+      i++;
+      continue;
+    }
+
+    // 순서 있는 목록
+    m = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (m) {
+      if (inList !== 'ol') { closeList(); html += '<ol>'; inList = 'ol'; }
+      html += `<li>${inline(m[1])}</li>`;
+      i++;
+      continue;
+    }
+
+    // 빈 줄
+    if (/^\s*$/.test(line)) { closeList(); i++; continue; }
+
+    // 일반 문단(다음 빈 줄/블록 시작 전까지 이어붙임)
+    closeList();
+    const para = [line];
+    i++;
+    while (i < lines.length && lines[i].trim() !== '' &&
+           !/^(#{1,4})\s/.test(lines[i]) && !/^```/.test(lines[i]) &&
+           !/^\s*[-*]\s/.test(lines[i]) && !/^\s*\d+\.\s/.test(lines[i]) &&
+           !/^\s*\|/.test(lines[i]) && !/^\s*---+\s*$/.test(lines[i]) && !/^>\s?/.test(lines[i])) {
+      para.push(lines[i]); i++;
+    }
+    html += `<p>${para.map(inline).join('<br>')}</p>`;
+  }
+  closeList();
+  return {html, toc};
+}
+
+// ── 밝기 테마 선택 ──
+// data-theme가 없으면(=한 번도 직접 고른 적 없으면) prefers-color-scheme을 그대로 따른다 —
+// <style>의 :root[data-theme="dark"/"light"]가 media query보다 항상 우선하도록 CSS 쪽에서
+// 이미 순서를 잡아뒀으니, 여기서는 속성만 붙였다 뗐다 하면 된다.
+function setTheme(mode){
+  document.documentElement.dataset.theme = mode;
+  try { localStorage.setItem('docViewerTheme', mode); } catch(e) {}
+  syncThemeButtons();
+}
+function syncThemeButtons(){
+  const current = document.documentElement.dataset.theme ||
+    (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  document.getElementById('themeLightBtn').classList.toggle('active', current === 'light');
+  document.getElementById('themeDarkBtn').classList.toggle('active', current === 'dark');
+}
+syncThemeButtons();
+
+// ── 로드 ──
+const params = new URLSearchParams(location.search);
+const file = params.get('file');
+const stateEl = document.getElementById('state');
+const docEl = document.getElementById('doc');
+const pathLabel = document.getElementById('pathLabel');
+const rawLink = document.getElementById('rawLink');
+const tocNav = document.getElementById('toc');
+const tocList = document.getElementById('tocList');
+const pageFooter = document.getElementById('pageFooter');
+const footMeta = document.getElementById('footMeta');
+const updatedBadge = document.getElementById('updatedBadge');
+
+// Last-Modified 응답 헤더로 "최종 수정일"을 항상 상단(topbar)에 표시 — 문서 하단까지
+// 스크롤해야 갱신 시점을 알 수 있으면 안 되고, 문서를 열자마자 바로 보여야 한다.
+// 파일에 날짜를 직접 적어두면 고치는 걸 잊기 쉬우니, 서버가 보내는 실제 수정 시각을 그대로 쓴다.
+function showUpdatedDate(headerValue){
+  if (!headerValue) return;
+  const d = new Date(headerValue);
+  if (isNaN(d.getTime())) return;
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
+  updatedBadge.textContent = `🗓 최종 수정 ${y}-${m}-${day}`;
+  updatedBadge.style.display = '';
+}
+
+if (!file) {
+  stateEl.innerHTML = `<div class="big">📄</div><div>보여줄 문서가 지정되지 않았습니다.<br>예: <code>viewer.html?file=spec/login.md</code></div>`;
+} else {
+  pathLabel.textContent = file;
+  rawLink.href = file;
+  fetch(file)
+    .then(r => { if (!r.ok) throw new Error(r.status); showUpdatedDate(r.headers.get('last-modified')); return r.text(); })
+    .then(text => {
+      const {html, toc} = parseMarkdown(text);
+      docEl.innerHTML = html;
+      docEl.classList.add('ready');
+      stateEl.style.display = 'none';
+      if (toc.length > 2) {
+        tocNav.style.display = 'block';
+        tocList.innerHTML = toc.map(t => `<li${t.level===2?' class="lvl2"':''}><a href="#${t.slug}">${t.text}</a></li>`).join('');
+      }
+      pageFooter.style.display = 'flex';
+      const words = text.length;
+      footMeta.textContent = `${file} · 약 ${Math.round(words/500)}분 분량`;
+      document.title = (toc[0]?.text || file) + ' — 문서 보기';
+    })
+    .catch(err => {
+      // file:// 로 이 HTML을 직접 열면(더블클릭, 드래그) 브라우저가 로컬 파일 간 fetch()를
+      // CORS로 차단해서 "Failed to fetch"만 뜬다 — 원인이 서버 미실행이라는 걸 알려줘야
+      // 사용자가 무엇을 고쳐야 하는지 알 수 있다(그냥 "문서를 못 불러왔다"만으로는 재현·해결 불가).
+      if (location.protocol === 'file:') {
+        stateEl.innerHTML = `
+          <div class="big">🔌</div>
+          <div style="font-size:15px;font-weight:700;margin-bottom:8px;">서버 없이 파일을 직접 열어서 발생한 오류입니다</div>
+          <div style="text-align:left;max-width:440px;margin:0 auto;">
+            이 뷰어는 브라우저가 로컬 파일을 직접 읽지 못하게 막는 보안 정책(CORS) 때문에,
+            <code>file://</code>로 열면 문서를 불러올 수 없습니다.<br><br>
+            <b>해결 방법</b> — 터미널에서 저장소 폴더로 이동해 간단한 로컬 서버를 켜세요:<br>
+            <code style="display:block;margin:8px 0;padding:8px 10px;">cd doc &amp;&amp; python3 -m http.server 8080</code>
+            그 다음 이 주소로 다시 접속하세요:<br>
+            <code>http://localhost:8080/index.html</code>
+          </div>`;
+      } else {
+        stateEl.innerHTML = `<div class="big">⚠️</div><div>문서를 불러오지 못했습니다 (<code>${escapeHtml(String(err.message))}</code>).<br>경로를 확인해주세요: <code>${escapeHtml(file)}</code></div>`;
+      }
+    });
+}
+</script>
+</body>
+</html>

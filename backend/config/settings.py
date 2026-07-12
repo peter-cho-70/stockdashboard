@@ -205,6 +205,7 @@ class Settings(BaseSettings):
         "enable_bulk_youtube_analyze",
         "gemini_prompt_cache",
         "demo_mode",
+        "openbanking_is_test",
         mode="before",
     )
     @classmethod
@@ -246,6 +247,25 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return v.strip().strip('"').strip("'")
         return v
+
+    # ── 금융결제원 오픈뱅킹 ────────────────────────
+    openbanking_client_id: str = Field("", env="OPENBANKING_CLIENT_ID")
+    openbanking_client_secret: str = Field("", env="OPENBANKING_CLIENT_SECRET")
+    # 포털에 등록한 Redirect URI와 정확히 일치해야 함
+    # 로컬: http://localhost:8000/api/finance/openbanking/callback
+    openbanking_redirect_uri: str = Field("", env="OPENBANKING_REDIRECT_URI")
+    # 테스트(개발) 환경 여부 — testapi.openbanking.or.kr 사용
+    openbanking_is_test: bool = Field(False, env="OPENBANKING_IS_TEST")
+
+    def openbanking_is_configured(self) -> bool:
+        return bool(self.openbanking_client_id and self.openbanking_client_secret)
+
+    def get_openbanking_redirect_uri(self) -> str:
+        """명시 설정 우선, 없으면 로컬 기본값 반환"""
+        if self.openbanking_redirect_uri:
+            return self.openbanking_redirect_uri
+        port = self.app_port or 8000
+        return f"http://localhost:{port}/api/finance/openbanking/callback"
 
     # ── AI API ────────────────────────────────────
     gemini_api_key: str = Field("", env="GEMINI_API_KEY")       # AIzaSy... 또는 AQ.... (신규)

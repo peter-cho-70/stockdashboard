@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>바이브 코딩 허브 — StockMind 개발 과정 최적화</title>
+<style>
+  :root{
+    --bg:#eef1ef; --bg-raised:#ffffff; --bg-sunk:#e4e8e5;
+    --ink:#15201d; --ink-dim:#56635f; --ink-faint:#8b968f;
+    --accent:#a06a12; --accent-ink:#5c3d0a;
+    --live:#c0322c; --live-bg:rgba(192,50,44,.10);
+    --ok:#1f9a56; --ok-bg:rgba(31,154,86,.10);
+    --plan:#a06a12; --plan-bg:rgba(160,106,18,.12);
+    --snap:#4a6fa5; --snap-bg:rgba(74,111,165,.12);
+    --line:rgba(21,32,29,.14); --line-strong:rgba(21,32,29,.28);
+    --shadow: 0 1px 2px rgba(21,32,29,.06), 0 8px 24px rgba(21,32,29,.05);
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0c1012; --bg-raised:#141b1e; --bg-sunk:#0a0e10;
+      --ink:#e8ece9; --ink-dim:#9aa6a2; --ink-faint:#5e6a66;
+      --accent:#e2a63d; --accent-ink:#f4c877;
+      --live:#e0453f; --live-bg:rgba(224,69,63,.14);
+      --ok:#3fcf7a; --ok-bg:rgba(63,207,122,.13);
+      --plan:#e2a63d; --plan-bg:rgba(226,166,61,.14);
+      --snap:#7da7dd; --snap-bg:rgba(125,167,221,.14);
+      --line:rgba(232,236,233,.12); --line-strong:rgba(232,236,233,.24);
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 28px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{ background:var(--bg); color:var(--ink); font-family:var(--sans); line-height:1.65; -webkit-font-smoothing:antialiased; }
+  ::selection{ background:var(--accent); color:var(--bg-sunk); }
+  .page{ max-width:960px; margin:0 auto; padding:48px 22px 100px; }
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--accent-ink); display:flex; align-items:center; gap:8px; margin:0 0 10px;
+  }
+  .eyebrow::before{ content:""; width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none; }
+  h1{ font-size:clamp(23px,3vw,30px); line-height:1.3; margin:0 0 8px; font-weight:800; letter-spacing:-.01em; }
+  .lede{ color:var(--ink-dim); font-size:14px; max-width:70ch; margin:0 0 6px; }
+  .back{ font-size:12.5px; color:var(--ink-faint); text-decoration:none; margin-right:14px; }
+  .back:hover{ color:var(--accent); }
+  section{ margin:40px 0; }
+  h2{ font-size:17px; margin:0 0 4px; font-weight:800; }
+  .section-desc{ color:var(--ink-dim); font-size:13px; margin:0 0 14px; }
+  a{ color:var(--accent-ink); }
+  @media (prefers-color-scheme: dark){ a{ color:var(--accent-ink); } }
+
+  /* workflow steps */
+  .steps{ counter-reset:step; display:flex; flex-direction:column; gap:8px; }
+  .step{
+    counter-increment:step; display:grid; grid-template-columns:34px 1fr; gap:12px; align-items:start;
+    background:var(--bg-raised); border:1px solid var(--line); border-radius:9px; padding:12px 16px; box-shadow:var(--shadow);
+  }
+  .step::before{
+    content:counter(step); font-family:var(--mono); font-weight:700; font-size:13px;
+    width:26px; height:26px; border-radius:50%; background:var(--plan-bg); color:var(--plan);
+    display:flex; align-items:center; justify-content:center; margin-top:2px;
+  }
+  .step b{ font-size:13.5px; }
+  .step p{ margin:2px 0 0; font-size:12.5px; color:var(--ink-dim); }
+
+  /* checklist */
+  .check{ background:var(--bg-raised); border:1px solid var(--line); border-radius:9px; padding:14px 18px; box-shadow:var(--shadow); }
+  .check ul{ margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; }
+  .check li{ font-size:13px; padding-left:24px; position:relative; }
+  .check li::before{ content:"☐"; position:absolute; left:2px; color:var(--ok); font-size:14px; }
+  .check code{ font-family:var(--mono); font-size:11.5px; background:var(--bg-sunk); padding:1px 5px; border-radius:4px; }
+
+  /* rule cards */
+  .cards{ display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:10px; }
+  .card{
+    background:var(--bg-raised); border:1px solid var(--line); border-radius:9px; padding:13px 16px;
+    box-shadow:var(--shadow); font-size:12.5px;
+  }
+  .card b{ display:block; font-size:13.5px; margin-bottom:3px; }
+  .card .src{ display:block; margin-top:7px; font-family:var(--mono); font-size:10.5px; }
+  .card .src a{ color:var(--ink-faint); text-decoration:none; }
+  .card .src a:hover{ color:var(--accent); }
+  .card p{ margin:0; color:var(--ink-dim); }
+
+  /* doc map table */
+  table{ width:100%; border-collapse:collapse; background:var(--bg-raised); border:1px solid var(--line); border-radius:9px; overflow:hidden; box-shadow:var(--shadow); font-size:12.5px; }
+  th,td{ text-align:left; padding:9px 13px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th{ font-size:11px; font-family:var(--mono); letter-spacing:.06em; text-transform:uppercase; color:var(--ink-faint); background:var(--bg-sunk); }
+  tr:last-child td{ border-bottom:none; }
+  td a{ text-decoration:none; font-weight:600; }
+  td a:hover{ text-decoration:underline; }
+  .table-wrap{ overflow-x:auto; }
+  .chip{ font-family:var(--mono); font-size:10px; padding:2px 8px; border-radius:20px; white-space:nowrap; }
+  .chip.live{ background:var(--ok-bg); color:var(--ok); }
+  .chip.plan{ background:var(--plan-bg); color:var(--plan); }
+  .chip.snap{ background:var(--snap-bg); color:var(--snap); }
+
+  /* lessons */
+  .lessons{ display:flex; flex-direction:column; gap:8px; }
+  .lesson{
+    background:var(--bg-raised); border:1px solid var(--line); border-left:3px solid var(--live);
+    border-radius:9px; padding:11px 16px; box-shadow:var(--shadow); font-size:12.5px;
+  }
+  .lesson b{ font-size:13px; }
+  .lesson span{ color:var(--ink-dim); }
+
+  footer{
+    margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
+    font-family:var(--mono); font-size:11px; color:var(--ink-faint);
+    display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">Vibe Coding Hub <span id="pageUpdated"></span></div>
+  <h1>바이브 코딩 허브</h1>
+  <p class="lede">StockMind를 만들며 정착된 <b>개발 과정·규칙·교훈</b>을 문서들에서 모아 한 화면으로 공유합니다.
+  새 기능을 시작하기 전, 그리고 끝내기 전에 이 페이지를 확인하면 관리·개발 과정이 어긋나지 않습니다.
+  전체 서사와 배경은 <a href="viewer.html?file=guide/바이브코딩-프로세스.md">바이브 코딩 개발 과정 기록</a>에 있습니다.</p>
+  <p><a class="back" href="index.html">← 문서 모음으로</a><a class="back" href="https://peter-cho-70.github.io/">← 문서 허브로</a></p>
+
+  <section>
+    <h2>⚙️ 표준 워크플로 — 기능 하나가 지나는 6단계</h2>
+    <p class="section-desc">2026-05-31 ~ 07-12 사이 모든 기능이 이 경로를 따랐습니다. 단계를 건너뛴 곳에서 사고가 났습니다.</p>
+    <div class="steps">
+      <div class="step"><div><b>탐색 — 기존 패턴부터 찾는다</b><p>새 코드를 쓰기 전에 같은 일을 하는 기존 인프라(JSON 저장소, AI 호출 래퍼, 카드 컴포넌트, api.ts 패턴)를 먼저 찾아 재사용. 예: 노후생활 기능은 새 테이블 0개.</p></div></div>
+      <div class="step"><div><b>계획 — 여러 층을 건드리면 구현 전에 합의</b><p>백엔드+스케줄러+프론트+문서를 함께 바꾸는 규모면 계획을 세우고 확인받는다. 소규모 수정은 바로 구현.</p></div></div>
+      <div class="step"><div><b>구현 — 백엔드 → API → 프론트 순서</b><p>파일별 컨벤션(라우터 등록, 프리픽스, 스타일)을 그대로 따른다. 도메인 판단·비용이 걸린 결정은 사용자에게.</p></div></div>
+      <div class="step"><div><b>검증 — 실데이터로, 끝까지</b><p>tsc 타입체크 → 백엔드 모듈 임포트 → API 실호출 → 브라우저 렌더링 확인. 외부 데이터(종목코드 등)는 등록 전 사전 검증(pykrx 조회로 문서의 코드 오류를 실제로 잡았음).</p></div></div>
+      <div class="step"><div><b>기록 — 아래 체크리스트대로</b><p>버전 뱃지·변경로그·DEVLOG·STATUS·문서 인덱스. 기록 규칙이 세션 간 컨텍스트 복원의 재료가 된다.</p></div></div>
+      <div class="step"><div><b>발행 — 원커맨드</b><p><code>./publish-docs.sh</code> 한 번으로 GitHub Pages + 앱 내 참고자료 동기화 + 사설 IP 검사까지.</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>✅ 기능 완료 체크리스트</h2>
+    <p class="section-desc">"끝났다"고 말하기 전에 전부 체크. 하나라도 빠지면 다음 세션의 복원력이 깎입니다.</p>
+    <div class="check">
+      <ul>
+        <li>실데이터 검증 통과 — API 실호출 + 브라우저 확인 + <code>tsc --noEmit</code></li>
+        <li><code>frontend/lib/version.ts</code>의 <code>APP_VERSION</code>을 날짜+시간으로 갱신</li>
+        <li><code>frontend/lib/changelog.ts</code> 맨 앞에 사용자 언어로 항목 추가</li>
+        <li><code>doc/DEVLOG.md</code>에 이력 append (과거 항목 수정 금지 · API 키 값 기록 금지)</li>
+        <li><code>doc/STATUS.md</code> 갱신 — 완료 행 추가/진행 중 행 이동, 기준일 갱신</li>
+        <li>새 문서가 생겼으면 <code>doc/index.html</code> + <code>doc/README.md</code>에 날짜와 함께 등록</li>
+        <li><code>./publish-docs.sh</code> 실행 (문서가 바뀐 경우)</li>
+        <li>새 규칙·주의사항이 생겼으면 AI 메모리에 저장 (다음 세션 대비)</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>📏 규칙 카드 — 흩어진 문서 속 규칙을 한 곳에</h2>
+    <p class="section-desc">각 카드의 출처 문서가 원본입니다. 규칙이 바뀌면 원본을 고치고 이 페이지를 갱신하세요.</p>
+    <div class="cards">
+      <div class="card"><b>버전 뱃지 · 변경로그</b><p>눈에 띄는 기능이 추가될 때마다 APP_VERSION(날짜+시간) 갱신 + 변경로그 항목 추가. 헤더 뱃지 클릭으로 사용자가 직접 확인.</p><span class="src"><a href="viewer.html?file=guide/바이브코딩-프로세스.md">바이브코딩-프로세스 §4</a></span></div>
+      <div class="card"><b>DEVLOG는 append-only</b><p>큰 기능·연동마다 항목 추가, 오래된 항목은 고치지 않음(시점 기록물). API 키는 이름·용도·발급처만 — 값은 절대 기록 금지.</p><span class="src"><a href="viewer.html?file=DEVLOG.md">DEVLOG 머리말·갱신 규칙</a></span></div>
+      <div class="card"><b>STATUS는 현재 스냅샷만</b><p>완료/진행 중/알려진 이슈 3분류 유지. 세부 이력은 git과 DEVLOG가 담당. 큰 기능 완료·착수 시 행을 옮기고 기준일 갱신.</p><span class="src"><a href="viewer.html?file=STATUS.md">STATUS 갱신 규칙</a></span></div>
+      <div class="card"><b>IDEAS → STATUS 승격</b><p>떠오른 아이디어는 한 줄로 IDEAS에 적어 두고, 착수하면 STATUS "진행 중"으로 승격. 대화 중 아이디어 유실 방지.</p><span class="src"><a href="viewer.html?file=IDEAS.md">IDEAS 머리말</a></span></div>
+      <div class="card"><b>문서 형식 — 날짜 필수</b><p>모든 문서 첫머리와 인덱스 항목에 작성일/기준일 표기. 점검·조사 리포트는 <code>doc/report/YYYY-MM-DD-주제.md</code>.</p><span class="src"><a href="viewer.html?file=README.md">doc/README 문서 형식 규칙</a></span></div>
+      <div class="card"><b>실사용 DB 보호</b><p>사용자가 대화 도중에도 앱에 실데이터를 입력한다. 테이블 통삭제 금지, 테스트 스크립트는 core 함수의 내부 commit 여부부터 확인.</p><span class="src">AI 메모리 (세션 간 상시 규칙)</span></div>
+      <div class="card"><b>비용이 걸린 작업은 사용자 결정</b><p>AI 재분석·백필·유료 모델 전환처럼 비용이 발생하는 작업은 AI가 임의로 실행하지 않고 반드시 사용자에게 묻는다.</p><span class="src"><a href="viewer.html?file=guide/바이브코딩-프로세스.md">바이브코딩-프로세스 §6-10</a></span></div>
+      <div class="card"><b>전반 점검 리포트</b><p>다관점 병렬 점검 → 건별 검증 → 수정 → 날짜 리포트 발행. 보류 항목은 리포트에 권고로 남겨 다음 착수 후보로.</p><span class="src"><a href="viewer.html?file=report/2026-07-12-전반점검.md">2026-07-12 전반점검</a></span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>🗺️ 문서 맵 — 어떤 문서가 어떤 역할인가</h2>
+    <p class="section-desc">문서들 사이의 역할 분담과 수명 주기. 새 문서를 만들 때 어디에 둘지 이 표로 판단합니다.</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>문서</th><th>성격</th><th>역할 / 수명 주기</th></tr>
+      <tr><td><a href="viewer.html?file=STATUS.md">STATUS</a></td><td><span class="chip snap">스냅샷</span></td><td>"지금 어디까지 왔나". 항상 최신 하나만 유지 — 새 세션의 AI가 가장 먼저 읽는 문서</td></tr>
+      <tr><td><a href="viewer.html?file=DEVLOG.md">DEVLOG</a></td><td><span class="chip live">누적</span></td><td>"언제 왜 그렇게 했나". append-only 시점 기록 + 외부 연동·API 키 현황표</td></tr>
+      <tr><td><a href="viewer.html?file=IDEAS.md">IDEAS</a></td><td><span class="chip plan">대기열</span></td><td>한 줄 아이디어 백로그 → 착수 시 STATUS로 승격되며 삭제</td></tr>
+      <tr><td>doc/spec/*</td><td><span class="chip plan">기획</span></td><td>PRD·요구사항. <b>사용자가 쓴 문서가 곧 스펙</b> — sector.md는 종목그룹 17개로, retire_PRD.md는 노후생활 탭으로 구현됨</td></tr>
+      <tr><td>doc/guide/*</td><td><span class="chip snap">지식</span></td><td>도메인 지식·분석법. 일부는 코드로 이식됨(차트분석 가이드 → 패턴 백테스트, 이 페이지의 원본인 바이브코딩-프로세스 포함)</td></tr>
+      <tr><td>doc/report/*</td><td><span class="chip live">점검</span></td><td>날짜별 점검·조사 리포트. 수정 내역과 보류 권고(다음 착수 후보)를 담는다</td></tr>
+      <tr><td><a href="viewer.html?file=guide/바이브코딩-프로세스.md">바이브코딩-프로세스</a></td><td><span class="chip live">메타</span></td><td>개발 과정 자체의 기록. 새 Phase·새 교훈마다 append — 이 허브 페이지의 원본</td></tr>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>🧨 교훈 — 실제 사고에서 뽑은 원칙 10</h2>
+    <p class="section-desc">전부 이 저장소에서 실제로 발생하고 수정된 사례입니다. 상세 경위는 <a href="viewer.html?file=guide/바이브코딩-프로세스.md">과정 기록 §6</a>과 <a href="viewer.html?file=report/2026-07-12-전반점검.md">점검 리포트</a>에.</p>
+    <div class="lessons">
+      <div class="lesson"><b>조용한 폴백 금지</b> — <span>스냅샷이 몰래 전일 데이터로 대체돼 이중 저장 사고. 없으면 없다고 남기고 스킵.</span></div>
+      <div class="lesson"><b>외부 API 기본값 불신</b> — <span>파라미터 하나 안 보내서 넥스트레이드 체결 344건 조용히 누락. 신설 파라미터가 생기면 기존 연동 재점검.</span></div>
+      <div class="lesson"><b>프롬프트 JSON 예시는 전체 스키마로</b> — <span>생략 표기 하나로 5주간 매크로 Signal 0건.</span></div>
+      <div class="lesson"><b>falsy-zero 구분</b> — <span>"값이 0"과 "값이 없음"을 truthy로 가르면 실측 0원이 등록값으로 둔갑.</span></div>
+      <div class="lesson"><b>날짜는 로컬(KST)로 조립</b> — <span>toISOString()은 UTC라 결제일이 하루씩 밀렸다.</span></div>
+      <div class="lesson"><b>파일 이동 = 하드코딩 경로 전수 검색</b> — <span>문서 하나 옮기자 학습 레슨 본문 전체 공백 + lru_cache가 빈 결과를 고정.</span></div>
+      <div class="lesson"><b>알림은 엣지 트리거로</b> — <span>임계값 유지 중 매 갱신마다 알림 누적(하루 8건). "처음 넘을 때 1회" 플래그 패턴.</span></div>
+      <div class="lesson"><b>실사용 DB 위임을 잊지 말 것</b> — <span>대화 도중에도 실데이터가 들어온다. 파괴적 조작 금지.</span></div>
+      <div class="lesson"><b>라이브러리 한계는 앱에서 관대하게 패치</b> — <span>업스트림 수정(python-kis v3)을 기다리지 않고 미지 코드를 KRX로 우회 처리.</span></div>
+      <div class="lesson"><b>표본 부족 데이터로 추정하지 않기</b> — <span>1건짜리 패턴의 +45%가 포트폴리오 예상 손익을 좌우할 뻔. 최소 표본 필터.</span></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>vibecoding.html · 원본: doc/guide/바이브코딩-프로세스.md · 작성 2026-07-12</span>
+    <span><a href="index.html" style="color:inherit;">문서 모음</a></span>
+  </footer>
+
+</div>
+<script>
+(function(){
+  var d = new Date(document.lastModified);
+  if (isNaN(d.getTime())) return;
+  var y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
+  document.getElementById('pageUpdated').textContent = '· 최종 갱신 ' + y + '-' + m + '-' + day;
+})();
+</script>
+</body>
+</html>

@@ -3,8 +3,9 @@
 import { useFinanceStore } from '@/lib/finance/store/finance-store';
 import { useLedgerStore } from '@/lib/finance/store/ledger-store';
 import { coverageStatusLabel } from '@/lib/finance/payment-coverage';
+import { requiresPaymentAccount } from '@/lib/finance/fixed-expense-utils';
 import { useState } from 'react';
-import { Plus, TrendingUp, TrendingDown, User, CreditCard, Zap, Trash2, Calendar, Pencil, X, Wallet, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Plus, TrendingUp, TrendingDown, User, CreditCard, Zap, Trash2, Calendar, Pencil, X, Wallet, AlertTriangle, CheckCircle2, CircleCheck } from 'lucide-react';
 import { IncomeType, ExpenseCategory, Income, FixedExpense } from '@/lib/finance/types';
 
 export default function CashflowPage() {
@@ -15,7 +16,8 @@ export default function CashflowPage() {
 
   const [isIncomeFormOpen, setIsIncomeFormOpen] = useState(false);
   const [editingIncomeId, setEditingIncomeId] = useState<string | null>(null);
-  const [incomeForm, setIncomeForm] = useState({ name: '', earnerName: '', amount: '', incomeType: 'salary' as IncomeType });
+  const [incomeForm, setIncomeForm] = useState({ name: '', earnerName: '', amount: '', incomeType: 'salary' as IncomeType, depositAccountId: '' });
+  const [expenseFormError, setExpenseFormError] = useState('');
 
   const [isExpenseFormOpen, setIsExpenseFormOpen] = useState(false);
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
@@ -32,10 +34,17 @@ export default function CashflowPage() {
   const handleIncomeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!incomeForm.name || !incomeForm.amount) return;
+    const payload = {
+      name: incomeForm.name,
+      earnerName: incomeForm.earnerName,
+      amount: Number(incomeForm.amount),
+      incomeType: incomeForm.incomeType,
+      depositAccountId: incomeForm.depositAccountId || undefined,
+    };
     if (editingIncomeId) {
-      store.updateIncome(editingIncomeId, { name: incomeForm.name, earnerName: incomeForm.earnerName, amount: Number(incomeForm.amount), incomeType: incomeForm.incomeType });
+      store.updateIncome(editingIncomeId, payload);
     } else {
-      store.addIncome({ id: crypto.randomUUID(), name: incomeForm.name, earnerName: incomeForm.earnerName, amount: Number(incomeForm.amount), incomeType: incomeForm.incomeType, cycle: 'monthly', source: 'manual' });
+      store.addIncome({ id: crypto.randomUUID(), ...payload, cycle: 'monthly', source: 'manual' });
     }
     resetIncomeForm();
   };
@@ -43,6 +52,11 @@ export default function CashflowPage() {
   const handleExpenseSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!expenseForm.name || !expenseForm.amount) return;
+    if (requiresPaymentAccount(expenseForm.category) && !expenseForm.paymentAccountId) {
+      setExpenseFormError('결제 계좌를 지정해야 잔액 확인이 가능합니다.');
+      return;
+    }
+    setExpenseFormError('');
     const payload = {
       name: expenseForm.name,
       category: expenseForm.category,
@@ -64,7 +78,13 @@ export default function CashflowPage() {
   };
 
   const handleEditIncome = (income: Income) => {
-    setIncomeForm({ name: income.name, earnerName: income.earnerName || '', amount: income.amount.toString(), incomeType: income.incomeType });
+    setIncomeForm({
+      name: income.name,
+      earnerName: income.earnerName || '',
+      amount: income.amount.toString(),
+      incomeType: income.incomeType,
+      depositAccountId: income.depositAccountId || '',
+    });
     setEditingIncomeId(income.id);
     setIsIncomeFormOpen(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -84,14 +104,25 @@ export default function CashflowPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const resetIncomeForm = () => { setIncomeForm({ name: '', earnerName: '', amount: '', incomeType: 'salary' }); setEditingIncomeId(null); setIsIncomeFormOpen(false); };
+  const resetIncomeForm = () => {
+    setIncomeForm({ name: '', earnerName: '', amount: '', incomeType: 'salary', depositAccountId: '' });
+    setEditingIncomeId(null);
+    setIsIncomeFormOpen(false);
+  };
   const resetExpenseForm = () => {
     setExpenseForm({ name: '', category: 'card_payment', cardIssuer: '', amount: '', nextDueDate: '', paymentAccountId: '' });
+    setExpenseFormError('');
     setEditingExpenseId(null);
     setIsExpenseFormOpen(false);
   };
 
   const paymentCheckById = new Map(paymentCoverage.payments.map((p) => [p.expense.id, p]));
+
+  const handleMarkPaid = (expense: FixedExpense) => {
+    const nextLabel = expense.cycle === 'monthly' ? '다음 달' : expense.cycle === 'quarterly' ? '3개월 후' : '다음 회차';
+    if (!confirm(`"${expense.name}" 결제를 완료 처리하고 ${nextLabel} 일정으로 넘길까요?`)) return;
+    store.markFixedExpensePaid(expense.id);
+  };
 
   const accountName = (id?: string) => {
     if (!id) return null;
@@ -178,6 +209,21 @@ export default function CashflowPage() {
               <input type="number" required className="w-full bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg text-sm text-gray-900 outline-none focus:border-emerald-400 focus:bg-white transition-colors" placeholder="0" value={incomeForm.amount} onChange={e => setIncomeForm({ ...incomeForm, amount: e.target.value })} />
             </div>
             <div className="space-y-1.5">
+              <label className="text-xs font-medium text-gray-600">입금 계좌</label>
+              <select
+                className="w-full bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg text-sm text-gray-900 outline-none"
+                value={incomeForm.depositAccountId}
+                onChange={e => setIncomeForm({ ...incomeForm, depositAccountId: e.target.value })}
+              >
+                <option value="">계좌 선택 (잔액 시뮬레이션용)…</option>
+                {bankAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} · {a.institution}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
               <label className="text-xs font-medium text-gray-600">수입 유형</label>
               <div className="flex gap-2">
                 <select className="flex-1 bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg text-sm text-gray-900 outline-none" value={incomeForm.incomeType} onChange={e => setIncomeForm({ ...incomeForm, incomeType: e.target.value as IncomeType })}>
@@ -205,6 +251,12 @@ export default function CashflowPage() {
             <button onClick={resetExpenseForm} className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
           </div>
           <form onSubmit={handleExpenseSubmit} className="space-y-3">
+            {expenseFormError && (
+              <p className="text-xs text-rose-600 flex items-center gap-1">
+                <AlertTriangle size={12} />
+                {expenseFormError}
+              </p>
+            )}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div className="space-y-1.5 md:col-span-2">
                 <label className="text-xs font-medium text-gray-600">항목명</label>
@@ -233,9 +285,16 @@ export default function CashflowPage() {
                 <input type="date" required className="w-full bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg text-sm text-gray-900 outline-none" value={expenseForm.nextDueDate} onChange={e => setExpenseForm({ ...expenseForm, nextDueDate: e.target.value })} />
               </div>
               <div className="space-y-1.5 md:col-span-2">
-                <label className="text-xs font-medium text-gray-600">결제 계좌 (출금 은행)</label>
+                <label className="text-xs font-medium text-gray-600">
+                  결제 계좌 (출금 은행)
+                  {requiresPaymentAccount(expenseForm.category) && <span className="text-rose-500 ml-0.5">*</span>}
+                </label>
                 <select
-                  className="w-full bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg text-sm text-gray-900 outline-none"
+                  className={`w-full bg-gray-50 border px-3 py-2 rounded-lg text-sm text-gray-900 outline-none ${
+                    requiresPaymentAccount(expenseForm.category) && !expenseForm.paymentAccountId
+                      ? 'border-amber-300 focus:border-amber-400'
+                      : 'border-gray-200'
+                  }`}
                   value={expenseForm.paymentAccountId}
                   onChange={e => setExpenseForm({ ...expenseForm, paymentAccountId: e.target.value })}
                 >
@@ -306,7 +365,7 @@ export default function CashflowPage() {
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                     <div>
                       <p className="text-sm text-gray-800 font-medium">{income.name}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">{income.earnerName && `${income.earnerName} · `}{incomeTypeLabel(income.incomeType)}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{income.earnerName && `${income.earnerName} · `}{incomeTypeLabel(income.incomeType)}{income.depositAccountId && accountName(income.depositAccountId) ? ` · ${accountName(income.depositAccountId)}` : ''}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
@@ -406,6 +465,14 @@ export default function CashflowPage() {
                       </span>
                     )}
                     <span className="text-sm font-semibold text-gray-800 tabular-nums">{formatKRW(expense.amount)}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleMarkPaid(expense)}
+                      title="결제 완료"
+                      className="p-1 text-gray-400 hover:text-emerald-600 transition-colors"
+                    >
+                      <CircleCheck size={14} />
+                    </button>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button onClick={() => handleEditExpense(expense)} className="p-1 text-gray-400 hover:text-blue-500 transition-colors"><Pencil size={12} /></button>
                       <button onClick={() => { if (confirm('삭제하시겠습니까?')) { store.deleteFixedExpense(expense.id); if (editingExpenseId === expense.id) resetExpenseForm(); } }} className="p-1 text-gray-400 hover:text-rose-500 transition-colors"><Trash2 size={12} /></button>

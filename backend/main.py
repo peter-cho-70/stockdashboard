@@ -26,11 +26,14 @@ from api.routes_morning import morning_router
 from api.routes_system import system_router
 from api.routes_study import study_router
 from api.routes_finance import finance_router
+from api.routes_retirement import retirement_router
+from api.routes_openbanking import openbanking_router
 from api.routes_auction import auction_router
 from api.routes_cron import cron_router
 from api.routes_autotrade import autotrade_router
 from api.routes_etf import etf_router
 from api.routes_portfolio import portfolio_router
+from api.routes_trade_journal import trade_journal_router
 from scheduler.jobs import create_scheduler
 
 # 로깅 설정
@@ -72,6 +75,14 @@ async def lifespan(app: FastAPI):
         scheduler = create_scheduler()
         scheduler.start()
         logger.info("✅ 스케줄러 시작됨")
+
+        # 로컬 스케줄러는 정확히 그 시각에 프로세스가 떠있어야만 도는데, 며칠 컴퓨터를
+        # 꺼두면 그 사이 체결내역·시세 갱신이 통째로 빠진다 — 매번 시작할 때 한 번
+        # 캐치업해서 이 갭을 줄인다. 서버 기동을 막지 않도록 백그라운드로 실행.
+        from core.portfolio import run_startup_catchup_sync
+
+        asyncio.create_task(asyncio.to_thread(run_startup_catchup_sync))
+        logger.info("🔄 시작 시 체결내역·시세 캐치업 동기화 시작 (백그라운드)")
     else:
         logger.info("ℹ️ Serverless 모드 — 스케줄러 비활성")
 
@@ -125,11 +136,14 @@ app.include_router(morning_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(study_router, prefix="/api")
 app.include_router(finance_router, prefix="/api")
+app.include_router(retirement_router, prefix="/api")
+app.include_router(openbanking_router, prefix="/api")
 app.include_router(auction_router, prefix="/api")
 app.include_router(cron_router, prefix="/api")
 app.include_router(autotrade_router, prefix="/api")
 app.include_router(etf_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
+app.include_router(trade_journal_router, prefix="/api")
 
 
 @app.get("/")

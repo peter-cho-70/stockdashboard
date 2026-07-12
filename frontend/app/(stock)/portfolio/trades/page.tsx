@@ -13,27 +13,19 @@ import { LeverageAnalysisPanel } from "@/components/finance/leverage-analysis-pa
 
 type SideFilter = "ALL" | "BUY" | "SELL";
 type SourceFilter = "ALL" | "manual" | "kis";
-type TradePeriod = "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "2Y" | "ALL" | "CUSTOM";
-type DisplayTradeItem = AllTradeItem & { trade_count: number };
+type TradePeriod = "1D" | "1W" | "1M" | "3M" | "YTD" | "CUSTOM";
 
 const TRADE_PERIODS: { id: Exclude<TradePeriod, "CUSTOM">; label: string }[] = [
   { id: "1D", label: "오늘" },
   { id: "1W", label: "1주일" },
   { id: "1M", label: "1개월" },
   { id: "3M", label: "3개월" },
-  { id: "6M", label: "6개월" },
-  { id: "1Y", label: "1년" },
-  { id: "2Y", label: "2년" },
-  { id: "ALL", label: "전체" },
+  { id: "YTD", label: "올해" },
 ];
 
 const TRADE_PERIOD_STORAGE = "stockmind-trades-period";
-
-function syncRangeWhenAll(): { start: string; end: string } {
-  const end = new Date();
-  const start = new Date(end.getFullYear() - 2, 0, 1);
-  return { start: formatYmd(start), end: formatYmd(end) };
-}
+const TRADE_DATE_RANGE_STORAGE = "stockmind-trades-date-range";
+const REMOVED_PERIODS = new Set(["6M", "1Y", "2Y", "ALL"]);
 
 function formatYmd(d: Date): string {
   const y = d.getFullYear();
@@ -42,7 +34,7 @@ function formatYmd(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function rangeForPeriod(period: Exclude<TradePeriod, "CUSTOM" | "ALL">): { start: string; end: string } {
+function rangeForPeriod(period: Exclude<TradePeriod, "CUSTOM">): { start: string; end: string } {
   const end = new Date();
   const start = new Date(end);
   if (period === "1D") {
@@ -52,7 +44,11 @@ function rangeForPeriod(period: Exclude<TradePeriod, "CUSTOM" | "ALL">): { start
     start.setDate(start.getDate() - 7);
     return { start: formatYmd(start), end: formatYmd(end) };
   }
-  const months = { "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "2Y": 24 }[period];
+  if (period === "YTD") {
+    const jan1 = new Date(end.getFullYear(), 0, 1);
+    return { start: formatYmd(jan1), end: formatYmd(end) };
+  }
+  const months = { "1M": 1, "3M": 3 }[period];
   start.setMonth(start.getMonth() - months);
   return { start: formatYmd(start), end: formatYmd(end) };
 }
@@ -61,6 +57,30 @@ function periodLabel(id: TradePeriod): string {
   if (id === "CUSTOM") return "사용자 지정";
   return TRADE_PERIODS.find((p) => p.id === id)?.label ?? id;
 }
+
+function readSavedDateRange(): { start: string; end: string } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(TRADE_DATE_RANGE_STORAGE);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { start?: string; end?: string };
+    if (parsed.start && parsed.end) return { start: parsed.start, end: parsed.end };
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function saveDateRange(start: string, end: string) {
+  if (!start || !end) return;
+  try {
+    localStorage.setItem(TRADE_DATE_RANGE_STORAGE, JSON.stringify({ start, end }));
+  } catch {
+    /* ignore */
+  }
+}
+
+type DisplayTradeItem = AllTradeItem & { trade_count: number };
 
 function fmt(n: number) {
   return Math.round(n).toLocaleString("ko-KR");
@@ -115,6 +135,89 @@ function groupSameDayTrades(items: AllTradeItem[]): DisplayTradeItem[] {
       memo: row.trade_count > 1 && !row.memo ? `${row.trade_count}건 합산` : row.memo,
     }))
     .sort((a, b) => b.traded_at.localeCompare(a.traded_at) || b.id - a.id);
+}
+
+interface LeverageLink {
+  liabilityId: string;
+  liabilityName: string;
+  startDate: string;
+  amount: number;
+}
+
+interface SymbolBuyAgg {
+  symbol: string;
+  name: string;
+  buyCount: number;
+  buyQty: number;
+  avgPrice: number;
+  kisCost: number;
+  buyAmount: number;
+  leverageLinks: LeverageLink[];
+  leverageAmount: number;
+}
+
+function buildSymbolBuyAgg(
+  buyTrades: AllTradeItem[],
+  liabilities: Liability[],
+): SymbolBuyAgg[] {
+  const investmentLoans = liabilities.filter(
+    (l) => l.lenderType !== "auction_settlement_loan" && l.startDate,
+  );
+  const map = new Map<
+    string,
+    SymbolBuyAgg & { leverageByLoan: Map<string, LeverageLink> }
+  >();
+
+  for (const t of buyTrades) {
+    if (!map.has(t.symbol)) {
+      map.set(t.symbol, {
+        symbol: t.symbol,
+        name: t.name,
+        buyCount: 0,
+        buyQty: 0,
+        avgPrice: 0,
+        kisCost: 0,
+        buyAmount: 0,
+        leverageLinks: [],
+        leverageAmount: 0,
+        leverageByLoan: new Map(),
+      });
+    }
+    const row = map.get(t.symbol)!;
+    row.buyCount += 1;
+    row.buyQty += t.qty;
+    row.buyAmount += t.amount;
+    if (t.source === "kis") row.kisCost += t.qty * t.price;
+
+    let matchedLoan = false;
+    for (const loan of investmentLoans) {
+      if (t.traded_at >= loan.startDate!) {
+        const existing = row.leverageByLoan.get(loan.id);
+        if (existing) {
+          existing.amount += t.amount;
+        } else {
+          row.leverageByLoan.set(loan.id, {
+            liabilityId: loan.id,
+            liabilityName: loan.name,
+            startDate: loan.startDate!,
+            amount: t.amount,
+          });
+        }
+        if (!matchedLoan) {
+          row.leverageAmount += t.amount;
+          matchedLoan = true;
+        }
+      }
+    }
+  }
+
+  return [...map.values()]
+    .map(({ leverageByLoan, ...row }) => ({
+      ...row,
+      avgPrice: row.buyQty > 0 ? row.buyAmount / row.buyQty : 0,
+      leverageLinks: [...leverageByLoan.values()].sort((a, b) => b.amount - a.amount),
+    }))
+    .filter((row) => row.buyCount > 0);
 }
 
 // ─── 레버리지 투자 분석 패널 ─────────────────────────────────────────────
@@ -240,23 +343,37 @@ export default function TradesPage() {
   const [side, setSide] = useState<SideFilter>("ALL");
   const [source, setSource] = useState<SourceFilter>("ALL");
   const [symbol, setSymbol] = useState("");
-  const [period, setPeriod] = useState<TradePeriod>("6M");
-  const [start, setStart] = useState(() => rangeForPeriod("6M").start);
-  const [end, setEnd] = useState(() => rangeForPeriod("6M").end);
-  const [symbolSort, setSymbolSort] = useState<"amount" | "net">("amount");
+  const [period, setPeriod] = useState<TradePeriod>("1W");
+  const [start, setStart] = useState(() => rangeForPeriod("1W").start);
+  const [end, setEnd] = useState(() => rangeForPeriod("1W").end);
+  const [symbolSort, setSymbolSort] = useState<"amount" | "qty">("amount");
   const [detailSide, setDetailSide] = useState<"ALL" | "SELL">("ALL");
+  const [liabilities, setLiabilities] = useState<Liability[]>([]);
 
   useEffect(() => {
-    const saved = localStorage.getItem(TRADE_PERIOD_STORAGE);
-    if (!saved || saved === "CUSTOM") return;
-    if (!TRADE_PERIODS.some((p) => p.id === saved)) return;
-    const p = saved as Exclude<TradePeriod, "CUSTOM">;
-    if (p === "ALL") {
-      setPeriod("ALL");
-      setStart("");
-      setEnd("");
+    api
+      .getFinanceState()
+      .then((state: FinanceHubState) => {
+        setLiabilities(
+          state.liabilities.filter((l) => l.lenderType !== "auction_settlement_loan"),
+        );
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const savedRange = readSavedDateRange();
+    if (savedRange) {
+      setStart(savedRange.start);
+      setEnd(savedRange.end);
+      setPeriod("CUSTOM");
       return;
     }
+
+    const saved = localStorage.getItem(TRADE_PERIOD_STORAGE);
+    if (!saved || saved === "CUSTOM" || REMOVED_PERIODS.has(saved)) return;
+    if (!TRADE_PERIODS.some((p) => p.id === saved)) return;
+    const p = saved as Exclude<TradePeriod, "CUSTOM">;
     const range = rangeForPeriod(p);
     setPeriod(p);
     setStart(range.start);
@@ -264,28 +381,26 @@ export default function TradesPage() {
   }, []);
 
   const applyPeriod = useCallback((next: Exclude<TradePeriod, "CUSTOM">) => {
-    setPeriod(next);
-    localStorage.setItem(TRADE_PERIOD_STORAGE, next);
-    if (next === "ALL") {
-      setStart("");
-      setEnd("");
-      return;
-    }
     const range = rangeForPeriod(next);
+    setPeriod(next);
     setStart(range.start);
     setEnd(range.end);
+    localStorage.setItem(TRADE_PERIOD_STORAGE, next);
+    saveDateRange(range.start, range.end);
   }, []);
 
   const handleStartChange = (value: string) => {
     setStart(value);
     setPeriod("CUSTOM");
     localStorage.setItem(TRADE_PERIOD_STORAGE, "CUSTOM");
+    if (value && end) saveDateRange(value, end);
   };
 
   const handleEndChange = (value: string) => {
     setEnd(value);
     setPeriod("CUSTOM");
     localStorage.setItem(TRADE_PERIOD_STORAGE, "CUSTOM");
+    if (start && value) saveDateRange(start, value);
   };
 
   const load = useCallback(async () => {
@@ -325,15 +440,10 @@ export default function TradesPage() {
     setError(null);
     setSyncInfo(null);
     try {
-      let res;
-      if (period === "ALL") {
-        const range = syncRangeWhenAll();
-        res = await api.syncTradeHistory({ start: range.start, end: range.end });
-      } else if (start || end) {
-        res = await api.syncTradeHistory({ start: start || undefined, end: end || undefined });
-      } else {
-        res = await api.syncTradeHistory({ days: 90 });
-      }
+      const fallback = rangeForPeriod(period === "CUSTOM" ? "3M" : period);
+      const syncStart = start || fallback.start;
+      const syncEnd = end || fallback.end;
+      const res = await api.syncTradeHistory({ start: syncStart, end: syncEnd });
       const yearSummary = res.years
         ? Object.entries(res.years)
             .sort(([a], [b]) => a.localeCompare(b))
@@ -376,40 +486,41 @@ export default function TradesPage() {
     return [...map.values()].sort((a, b) => a.month.localeCompare(b.month));
   }, [displayedTrades]);
 
-  // ── 종목별 집계 ──
+  // ── 종목별 매수 집계 ──
+  const buyTrades = useMemo(
+    () => trades.filter((t) => t.side === "BUY"),
+    [trades],
+  );
+
   const bySymbol = useMemo(() => {
-    const map = new Map<string, {
-      symbol: string; name: string;
-      buyQty: number; buyAmount: number; buyCount: number;
-      sellQty: number; sellAmount: number; sellCount: number;
-      realizedPnl: number; realizedEstimated: boolean;
-    }>();
-    for (const t of displayedTrades) {
-      if (!map.has(t.symbol)) {
-        map.set(t.symbol, {
-          symbol: t.symbol, name: t.name,
-          buyQty: 0, buyAmount: 0, buyCount: 0,
-          sellQty: 0, sellAmount: 0, sellCount: 0,
-          realizedPnl: 0, realizedEstimated: false,
-        });
-      }
-      const row = map.get(t.symbol)!;
-      if (t.side === "BUY") { row.buyQty += t.qty; row.buyAmount += t.amount; row.buyCount += 1; }
-      else {
-        row.sellQty += t.qty; row.sellAmount += t.amount; row.sellCount += 1;
-        row.realizedPnl += t.realized_pnl || 0;
-        if (t.realized_pnl_estimated) row.realizedEstimated = true;
-      }
-    }
-    const list = [...map.values()];
+    const list = buildSymbolBuyAgg(buyTrades, liabilities);
     list.sort((a, b) => {
-      if (symbolSort === "net") {
-        return (b.sellAmount - b.buyAmount) - (a.sellAmount - a.buyAmount);
-      }
-      return (b.buyAmount + b.sellAmount) - (a.buyAmount + a.sellAmount);
+      if (symbolSort === "qty") return b.buyQty - a.buyQty;
+      return b.buyAmount - a.buyAmount;
     });
     return list;
-  }, [displayedTrades, symbolSort]);
+  }, [buyTrades, liabilities, symbolSort]);
+
+  const symbolBuySummary = useMemo(() => {
+    const totalBuyAmount = bySymbol.reduce((sum, r) => sum + r.buyAmount, 0);
+    const leverageRows = bySymbol.filter((r) => r.leverageAmount > 0);
+    const totalLeverageAmount = leverageRows.reduce((sum, r) => sum + r.leverageAmount, 0);
+    const loanTotals = new Map<string, { name: string; amount: number }>();
+    for (const row of leverageRows) {
+      for (const link of row.leverageLinks) {
+        const prev = loanTotals.get(link.liabilityId);
+        if (prev) prev.amount += link.amount;
+        else loanTotals.set(link.liabilityId, { name: link.liabilityName, amount: link.amount });
+      }
+    }
+    const leverageLoans = [...loanTotals.values()].sort((a, b) => b.amount - a.amount);
+    return {
+      totalBuyAmount,
+      totalLeverageAmount,
+      leverageSymbolCount: leverageRows.length,
+      leverageLoans,
+    };
+  }, [bySymbol]);
 
   return (
     <div className="space-y-6">
@@ -431,14 +542,9 @@ export default function TradesPage() {
             {syncing ? "동기화 중..." : "KIS 체결내역 동기화"}
           </button>
           <p className="text-[11px] text-neutral-400">
-            {period === "ALL"
-              ? (() => {
-                  const r = syncRangeWhenAll();
-                  return `조회: 저장된 전체 내역 · KIS 동기화: ${r.start} ~ ${r.end}`;
-                })()
-              : period === "CUSTOM"
-                ? `기간: ${start || "시작"} ~ ${end || "종료"} (사용자 지정)`
-                : `기간: ${periodLabel(period)} (${start} ~ ${end}) — 동기화·조회에 동일 적용`}
+            {period === "CUSTOM"
+              ? `조회·동기화 기간: ${start || "시작"} ~ ${end || "종료"}`
+              : `조회·동기화 기간: ${periodLabel(period)} (${start} ~ ${end})`}
           </p>
         </div>
       </div>
@@ -463,8 +569,28 @@ export default function TradesPage() {
 
       {/* 필터 */}
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-3">
+        <label className="flex flex-col gap-1 text-xs text-neutral-500">
+          시작일
+          <input
+            type="date"
+            value={start}
+            max={end || undefined}
+            onChange={(e) => handleStartChange(e.target.value)}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs focus:outline-none"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-neutral-500">
+          종료일
+          <input
+            type="date"
+            value={end}
+            min={start || undefined}
+            onChange={(e) => handleEndChange(e.target.value)}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs focus:outline-none"
+          />
+        </label>
         <div className="flex w-full flex-col gap-1.5 sm:w-auto">
-          <span className="text-xs text-neutral-500">조회 기간</span>
+          <span className="text-xs text-neutral-500">빠른 선택</span>
           <div className="flex flex-wrap gap-1 rounded-md bg-[var(--surface-elevated)] p-1 text-xs">
             {TRADE_PERIODS.map(({ id, label }) => (
               <button
@@ -476,9 +602,6 @@ export default function TradesPage() {
                 {label}
               </button>
             ))}
-            {period === "CUSTOM" && (
-              <span className="rounded px-2.5 py-1 font-medium text-neutral-600 dark:text-neutral-300">사용자 지정</span>
-            )}
           </div>
         </div>
         <div className="flex gap-1 rounded-md bg-[var(--surface-elevated)] p-1 text-xs">
@@ -513,14 +636,6 @@ export default function TradesPage() {
             placeholder="예: 005930"
             className="w-28 rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs focus:outline-none"
           />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-neutral-500">
-          시작일
-          <input type="date" value={start} onChange={(e) => handleStartChange(e.target.value)} className="rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs focus:outline-none" />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-neutral-500">
-          종료일
-          <input type="date" value={end} onChange={(e) => handleEndChange(e.target.value)} className="rounded-md border border-[var(--border-subtle)] bg-[var(--background)] px-2 py-1 text-xs focus:outline-none" />
         </label>
       </div>
 
@@ -593,13 +708,37 @@ export default function TradesPage() {
             </ResponsiveContainer>
           </div>
 
-          {/* 종목별 집계 */}
+          {/* 종목별 집계 (매수) */}
           <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] overflow-hidden">
-            <div className="flex items-center justify-between border-b border-[var(--border-subtle)] p-3">
-              <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">종목별 집계</h2>
-              <div className="flex gap-1 rounded-md bg-[var(--surface-elevated)] p-1 text-xs">
-                <button type="button" onClick={() => setSymbolSort("amount")} className={`rounded px-2 py-0.5 ${symbolSort === "amount" ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900" : "text-neutral-500"}`}>거래금액순</button>
-                <button type="button" onClick={() => setSymbolSort("net")} className={`rounded px-2 py-0.5 ${symbolSort === "net" ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900" : "text-neutral-500"}`}>순매수순</button>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] p-3">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 min-w-0">
+                <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 shrink-0">
+                  종목별 집계
+                </h2>
+                <span className="text-xs text-neutral-500">
+                  전체 매수금액{" "}
+                  <strong className="text-red-600 dark:text-red-400 tabular-nums">{fmt(symbolBuySummary.totalBuyAmount)}</strong>
+                </span>
+                {symbolBuySummary.totalLeverageAmount > 0 ? (
+                  <span className="text-xs text-emerald-700 dark:text-emerald-400">
+                    레버리지 연결{" "}
+                    <strong className="tabular-nums">{fmt(symbolBuySummary.totalLeverageAmount)}</strong>
+                    <span className="text-neutral-400 dark:text-neutral-500">
+                      {" "}· {symbolBuySummary.leverageSymbolCount}종목
+                      {symbolBuySummary.leverageLoans.length > 0 && (
+                        <> ({symbolBuySummary.leverageLoans.map((l) => `${l.name} ${fmt(l.amount)}`).join(" · ")})</>
+                      )}
+                    </span>
+                  </span>
+                ) : liabilities.some((l) => l.startDate) ? (
+                  <span className="text-xs text-neutral-400">레버리지 연결 없음</span>
+                ) : (
+                  <span className="text-xs text-neutral-400">부채관리에서 대출 실행일 등록 시 연결 표시</span>
+                )}
+              </div>
+              <div className="flex gap-1 rounded-md bg-[var(--surface-elevated)] p-1 text-xs shrink-0">
+                <button type="button" onClick={() => setSymbolSort("amount")} className={`rounded px-2 py-0.5 ${symbolSort === "amount" ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900" : "text-neutral-500"}`}>매수금액순</button>
+                <button type="button" onClick={() => setSymbolSort("qty")} className={`rounded px-2 py-0.5 ${symbolSort === "qty" ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900" : "text-neutral-500"}`}>수량순</button>
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -607,48 +746,58 @@ export default function TradesPage() {
                 <thead>
                   <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface-elevated)] text-xs text-neutral-500">
                     <th className="px-4 py-2 text-left font-medium">종목</th>
-                    <th className="px-4 py-2 text-right font-medium">매수횟수</th>
+                    <th className="px-4 py-2 text-right font-medium">매수회수</th>
+                    <th className="px-4 py-2 text-right font-medium">수량</th>
+                    <th className="px-4 py-2 text-right font-medium">단가</th>
+                    <th className="px-4 py-2 text-right font-medium">비용 (KIS)</th>
+                    <th className="px-4 py-2 text-left font-medium">레버리지 연결</th>
                     <th className="px-4 py-2 text-right font-medium">매수금액</th>
-                    <th className="px-4 py-2 text-right font-medium">매도횟수</th>
-                    <th className="px-4 py-2 text-right font-medium">매도금액</th>
-                    <th className="px-4 py-2 text-right font-medium">실제수익(세후)</th>
-                    <th className="px-4 py-2 text-right font-medium">순매수</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border-subtle)]">
-                  {bySymbol.map((r) => {
-                    const net = r.buyAmount - r.sellAmount;
-                    return (
+                  {bySymbol.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-8 text-center text-xs text-neutral-400">
+                        조회 기간 내 매수 체결이 없습니다.
+                      </td>
+                    </tr>
+                  ) : (
+                    bySymbol.map((r) => (
                       <tr key={r.symbol}>
                         <td className="px-4 py-2">
                           <span className="font-medium text-neutral-900 dark:text-neutral-100">{r.name}</span>
                           <span className="ml-1 text-xs text-neutral-400">{r.symbol}</span>
                         </td>
-                        <td className="px-4 py-2 text-right text-neutral-600 dark:text-neutral-300">{r.buyCount}</td>
-                        <td className="px-4 py-2 text-right text-red-600 dark:text-red-400">{fmt(r.buyAmount)}</td>
-                        <td className="px-4 py-2 text-right text-neutral-600 dark:text-neutral-300">{r.sellCount}</td>
-                        <td className="px-4 py-2 text-right text-blue-600 dark:text-blue-400">{fmt(r.sellAmount)}</td>
-                        <td className="px-4 py-2 text-right">
-                          {r.sellCount > 0 ? (
-                            <span className={r.realizedPnl >= 0 ? "text-red-600 dark:text-red-400" : "text-blue-600 dark:text-blue-400"}>
-                              {r.realizedPnl >= 0 ? "+" : ""}{fmt(r.realizedPnl)}
-                              {r.realizedEstimated && <span title="동기화 범위 이전 매수 내역은 추적되지 않아 추정치일 수 있습니다" className="ml-1 cursor-help text-amber-500">*</span>}
-                            </span>
+                        <td className="px-4 py-2 text-right text-neutral-600 dark:text-neutral-300 tabular-nums">{r.buyCount}</td>
+                        <td className="px-4 py-2 text-right text-neutral-600 dark:text-neutral-300 tabular-nums">{r.buyQty.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-right text-neutral-700 dark:text-neutral-300 tabular-nums">{fmt(r.avgPrice)}</td>
+                        <td className="px-4 py-2 text-right text-neutral-600 dark:text-neutral-300 tabular-nums">
+                          {r.kisCost > 0 ? fmt(r.kisCost) : <span className="text-neutral-400">—</span>}
+                        </td>
+                        <td className="px-4 py-2 text-xs text-neutral-600 dark:text-neutral-300">
+                          {r.leverageAmount > 0 ? (
+                            <div className="space-y-0.5">
+                              {r.leverageLinks.map((link) => (
+                                <p key={link.liabilityId}>
+                                  <span className="font-medium text-emerald-700 dark:text-emerald-400">{link.liabilityName}</span>
+                                  <span className="ml-1 text-neutral-500 tabular-nums">{fmt(link.amount)}</span>
+                                  <span className="ml-1 text-[10px] text-neutral-400">({link.startDate}~)</span>
+                                </p>
+                              ))}
+                            </div>
                           ) : (
                             <span className="text-neutral-400">—</span>
                           )}
                         </td>
-                        <td className={`px-4 py-2 text-right font-medium ${net >= 0 ? "text-red-600 dark:text-red-400" : "text-blue-600 dark:text-blue-400"}`}>
-                          {net >= 0 ? "+" : ""}{fmt(net)}
-                        </td>
+                        <td className="px-4 py-2 text-right font-medium text-red-600 dark:text-red-400 tabular-nums">{fmt(r.buyAmount)}</td>
                       </tr>
-                    );
-                  })}
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
             <p className="border-t border-[var(--border-subtle)] px-4 py-2 text-[11px] text-neutral-400">
-              실제수익(세후) = (매도금액 − 증권거래세 0.18% − 매도수수료 0.015%) − 매수원가. * 표시는 동기화된 체결내역 범위 이전에 매수한 물량이 섞여 있어 추정치일 수 있음을 의미합니다.
+              단가 = 매수금액 ÷ 수량 · 비용(KIS) = KIS 동기화 체결의 수량×단가 합 · 레버리지 연결 = 부채관리 대출 실행일 이후 매수분
             </p>
           </div>
 

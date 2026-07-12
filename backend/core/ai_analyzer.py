@@ -139,8 +139,8 @@ def _analysis_prompt_parts(
             "각 항목은 문자열 또는 {\"text\":\"...\",\"importance\":\"high|normal\"}; "
             "가장 중요한 3개는 importance high"
         )
-        macro_rule = '   {{"summary":"4~6문장","topics":[...]}}'
-        sector_rule = '   [{{"sector":"반도체","summary":"4~6문장",...}}]'
+        macro_rule = '   {"summary":"4~6문장","topics":[{"topic":"금리","summary":"2~3문장","sentiment":"POSITIVE|NEUTRAL|NEGATIVE","impact":"2~3문장"}]}'
+        sector_rule = '   [{"sector":"반도체","summary":"4~6문장","sentiment":"POSITIVE|NEUTRAL|NEGATIVE","outlook":"2~3문장","mentioned_stocks":["삼성전자","SK하이닉스"]}]'
         doc_limit = 50_000
         cache_suffix = "_deep"
     else:
@@ -151,8 +151,8 @@ def _analysis_prompt_parts(
             "2. key_points: 핵심 포인트 5개 이내. "
             "문자열 또는 {\"text\":\"...\",\"importance\":\"high|normal\"}; 핵심 2개는 high"
         )
-        macro_rule = '   {{"summary":"2~3문장","topics":[...]}}'
-        sector_rule = '   [{{"sector":"반도체","summary":"2~3문장",...}}]'
+        macro_rule = '   {"summary":"2~3문장","topics":[{"topic":"금리","summary":"1문장","sentiment":"POSITIVE|NEUTRAL|NEGATIVE","impact":"1문장"}]}'
+        sector_rule = '   [{"sector":"반도체","summary":"2~3문장","sentiment":"POSITIVE|NEUTRAL|NEGATIVE","outlook":"1문장","mentioned_stocks":["삼성전자"]}]'
         doc_limit = 20_000
         cache_suffix = ""
 
@@ -622,7 +622,14 @@ class AIAnalyzer:
         provider: Optional[str] = None,
         *,
         detailed: bool = False,
-    ) -> Optional[dict]:
+    ) -> tuple[Optional[dict], Optional[str]]:
+        if provider is None:
+            try:
+                from core.provider_scorecard import get_optimal_provider
+
+                provider = get_optimal_provider(self.db, default=self.default_provider)
+            except Exception:
+                pass  # 표본 부족·DB 오류 시 기존 default_provider로 조용히 폴백
         preferred = normalize_provider(provider, self.default_provider)
         static, dynamic, cache_suffix = _analysis_prompt_parts(
             portfolio, source_label, document, detailed=detailed
@@ -660,7 +667,8 @@ class AIAnalyzer:
     ) -> Optional[dict]:
         """임의 프롬프트 → provider chain으로 JSON 분석"""
         preferred = normalize_provider(provider, self.default_provider)
-        return self._run_provider_chain(preferred, prompt, f"🤖 {log_label}")
+        result, _provider_used = self._run_provider_chain(preferred, prompt, f"🤖 {log_label}")
+        return result
 
     def _run_provider_chain(
         self,
@@ -668,11 +676,12 @@ class AIAnalyzer:
         prompt: str,
         log_prefix: str,
         gemini_cache: Optional[dict] = None,
-    ) -> Optional[dict]:
+    ) -> tuple[Optional[dict], Optional[str]]:
+        """반환: (결과, 실제로 성공한 provider) — fallback 시 preferred와 다를 수 있어 둘 다 넘긴다."""
         chain = build_provider_chain(preferred, self, self.ai_fallback)
         if not chain:
             self._log("error", "❌ 구조화 분석 API 키 없음 (ANTHROPIC / OPENAI / GEMINI)")
-            return None
+            return None, None
 
         if self.ai_fallback and len(chain) > 1:
             self._log("info", f"{log_prefix}: {preferred} (429 시 fallback: {' → '.join(chain[1:])})")
@@ -685,7 +694,7 @@ class AIAnalyzer:
                 if result:
                     if i > 0:
                         self._log("info", f"↪️ {chain[i - 1]} quota 초과 → {p}로 완료")
-                    return result
+                    return result, p
                 self._log("warn", f"❌ {p} 분석 실패 — 추가 provider 시도하지 않음")
                 break
             except ProviderQuotaError:
@@ -694,7 +703,7 @@ class AIAnalyzer:
                     continue
                 raise
         self._log("error", "❌ 분석 AI 실패")
-        return None
+        return None, None
 
     def analyze_youtube(
         self,
@@ -755,7 +764,7 @@ class AIAnalyzer:
                 keywords=extracted.get("topics") or [],
             )
 
-        analysis = self._analyze_document(
+        analysis, provider_used = self._analyze_document(
             document,
             portfolio,
             "YouTube",
@@ -775,6 +784,7 @@ class AIAnalyzer:
             source_document=document,
             published_at=published_at,
             content_scope="market",
+            analysis_provider=provider_used,
         )
 
     def _extract_knowledge_document(self, document: str, label: str = "문서") -> Optional[dict]:
@@ -819,7 +829,7 @@ class AIAnalyzer:
                 keywords=extracted.get("keywords") or [],
             )
         portfolio = self._get_portfolio()
-        analysis = self._analyze_document(doc, portfolio, "뉴스", analysis_provider)
+        analysis, provider_used = self._analyze_document(doc, portfolio, "뉴스", analysis_provider)
         if not analysis:
             return None
         return self._save_intel_content(
@@ -829,6 +839,7 @@ class AIAnalyzer:
             portfolio=portfolio,
             source_document=doc,
             content_scope="market",
+            analysis_provider=provider_used,
         )
 
     def analyze_text(
@@ -858,7 +869,7 @@ class AIAnalyzer:
                 keywords=extracted.get("keywords") or [],
             )
         portfolio = self._get_portfolio()
-        analysis = self._analyze_document(doc, portfolio, "텍스트", analysis_provider)
+        analysis, provider_used = self._analyze_document(doc, portfolio, "텍스트", analysis_provider)
         if not analysis:
             return None
         return self._save_intel_content(
@@ -868,6 +879,7 @@ class AIAnalyzer:
             portfolio=portfolio,
             source_document=doc,
             content_scope="market",
+            analysis_provider=provider_used,
         )
 
     def reanalyze_content(
@@ -892,7 +904,7 @@ class AIAnalyzer:
         self._log("info", f"🔄 재분석 (ID:{content_id}, Gemini 재호출 없음)")
         portfolio = self._get_portfolio()
         label = {"YOUTUBE": "YouTube", "NEWS": "뉴스", "TEXT": "텍스트"}.get(content.source_type, "문서")
-        analysis = self._analyze_document(content.source_document, portfolio, label, analysis_provider)
+        analysis, provider_used = self._analyze_document(content.source_document, portfolio, label, analysis_provider)
         if not analysis:
             return None
 
@@ -907,6 +919,7 @@ class AIAnalyzer:
         content.macro_analysis = json.dumps(macro, ensure_ascii=False)
         content.sector_analysis = json.dumps(sectors, ensure_ascii=False)
         content.sentiment = analysis.get("sentiment", "NEUTRAL")
+        content.analysis_provider = provider_used
         content.analyzed_at = datetime.utcnow()
         self._save_stock_issues(content, analysis, portfolio)
         self.db.commit()
@@ -1061,6 +1074,7 @@ class AIAnalyzer:
         source_document: str = "",
         published_at: Optional[datetime] = None,
         content_scope: str = "market",
+        analysis_provider: Optional[str] = None,
     ) -> IntelContent:
         macro = analysis.get("macro_analysis") or {}
         sectors = analysis.get("sector_analysis") or []
@@ -1081,6 +1095,7 @@ class AIAnalyzer:
             sector_analysis=json.dumps(sectors, ensure_ascii=False),
             sentiment=analysis.get("sentiment", "NEUTRAL"),
             content_scope=content_scope,
+            analysis_provider=analysis_provider,
             analyzed_at=datetime.utcnow(),
         )
         self.db.add(content)

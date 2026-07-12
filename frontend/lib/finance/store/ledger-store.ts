@@ -50,6 +50,12 @@ interface LedgerState {
     month: number,
     category: string
   ) => number;
+  /** 특정 부채에 연결된 이자(지출) 합계. year/month 지정 시 해당 월, 미지정 시 전체 누적 */
+  getLiabilityInterest: (
+    liabilityId: string,
+    year?: number,
+    month?: number
+  ) => number;
 }
 
 const INITIAL_CATEGORIES = Object.values(DEFAULT_CATEGORY_META);
@@ -277,6 +283,20 @@ export const useLedgerStore = create<LedgerState>()((set, get) => ({
     return get()
       .getMonthTransactions(year, month)
       .filter((t) => t.type === "income" && t.category === category)
+      .reduce((s, t) => s + t.amount, 0);
+  },
+  getLiabilityInterest: (liabilityId, year, month) => {
+    const prefix =
+      year != null && month != null
+        ? `${year}-${String(month).padStart(2, "0")}`
+        : null;
+    return get()
+      .transactions.filter((t) => {
+        if (t.linkedLiabilityId !== liabilityId) return false;
+        if (t.type !== "expense") return false;
+        if (prefix && !t.date.startsWith(prefix)) return false;
+        return true;
+      })
       .reduce((s, t) => s + t.amount, 0);
   },
 }));

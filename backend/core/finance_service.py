@@ -64,6 +64,31 @@ def _load_row(db: Session, store_key: str) -> FinanceJsonStore | None:
     return db.query(FinanceJsonStore).filter(FinanceJsonStore.store_key == store_key).first()
 
 
+def load_json_store(db: Session, store_key: str) -> Any | None:
+    """FinanceJsonStore에서 임의 key의 JSON 값 로드 (없거나 깨졌으면 None)"""
+    row = _load_row(db, store_key)
+    if not row:
+        return None
+    try:
+        return json.loads(row.data_json)
+    except json.JSONDecodeError:
+        logger.warning("JSON store 파싱 실패 (key=%s)", store_key)
+        return None
+
+
+def save_json_store(db: Session, store_key: str, payload: Any) -> None:
+    """FinanceJsonStore에 임의 key의 JSON 값 upsert (commit 포함)"""
+    row = _load_row(db, store_key)
+    encoded = json.dumps(payload, ensure_ascii=False)
+    now = datetime.utcnow()
+    if row:
+        row.data_json = encoded
+        row.updated_at = now
+    else:
+        db.add(FinanceJsonStore(store_key=store_key, data_json=encoded, updated_at=now))
+    db.commit()
+
+
 def _parse_json(raw: str, fallback: dict[str, Any]) -> dict[str, Any]:
     try:
         parsed = json.loads(raw or "{}")
@@ -338,22 +363,13 @@ def _cashflow_opinion_key(year: int, month: int) -> str:
 
 
 def get_saved_cashflow_opinion(db: Session, year: int, month: int) -> dict[str, Any] | None:
-    from config.database import FinanceJsonStore
-    import json
-
-    key = _cashflow_opinion_key(year, month)
-    row = db.query(FinanceJsonStore).filter(FinanceJsonStore.store_key == key).first()
-    if not row:
-        return None
-    return json.loads(row.data_json)
+    return load_json_store(db, _cashflow_opinion_key(year, month))
 
 
 def generate_cashflow_opinion(
     db: Session, year: int, month: int, provider: str | None = None
 ) -> dict[str, Any]:
     from core.ai_analyzer import create_analyzer
-    from config.database import FinanceJsonStore
-    import json
     from datetime import datetime as _dt
 
     state = get_ledger_state(db)
@@ -379,14 +395,7 @@ def generate_cashflow_opinion(
     }
 
     # DB에 월별로 저장 (재생성 시 덮어쓰기)
-    key = _cashflow_opinion_key(year, month)
-    row = db.query(FinanceJsonStore).filter(FinanceJsonStore.store_key == key).first()
-    if row:
-        row.data_json = json.dumps(payload, ensure_ascii=False)
-        row.updated_at = _dt.utcnow()
-    else:
-        db.add(FinanceJsonStore(store_key=key, data_json=json.dumps(payload, ensure_ascii=False)))
-    db.commit()
+    save_json_store(db, _cashflow_opinion_key(year, month), payload)
 
     return payload
 

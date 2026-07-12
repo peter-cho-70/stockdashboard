@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-CHART_MD_PATH = ROOT / "chart.md"
+CHART_MD_PATH = ROOT / "doc" / "guide" / "차트패턴-보는법.md"
 
 LESSON_META: list[dict[str, Any]] = [
     {

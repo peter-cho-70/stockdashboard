@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import Link from 'next/link';
 import { useFinanceStore } from '@/lib/finance/store/finance-store';
 import { coverageStatusLabel } from '@/lib/finance/payment-coverage';
+import { detectSecuritiesOverlap, securitiesOverlapMessage } from '@/lib/finance/asset-warnings';
 import { AssetTrendChart } from '@/components/finance/dashboard/asset-trend-chart';
 import {
   ArrowUpRight,
@@ -17,6 +18,7 @@ import {
   ChevronRight,
   Info,
   CheckCircle2,
+  CircleCheck,
 } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -56,6 +58,15 @@ export default function DashboardPage() {
   const today = new Date();
   const paymentCoverage = store.getPaymentCoverage();
   const upcomingExpenses = paymentCoverage.payments.map((p) => p.expense);
+  const securitiesOverlap = detectSecuritiesOverlap(
+    breakdown.securitiesCash,
+    breakdown.stockHoldings
+  );
+
+  const handleMarkPaid = (expenseId: string, name: string) => {
+    if (!confirm(`"${name}" 결제를 완료 처리하고 다음 회차 일정으로 넘길까요?`)) return;
+    store.markFixedExpensePaid(expenseId);
+  };
 
   // 재무 건강도 동적 계산
   const debtRatioScore = (() => {
@@ -101,6 +112,17 @@ export default function DashboardPage() {
           </Link>
         </div>
       </div>
+
+      {securitiesOverlap && (
+        <div className="flex items-start gap-2 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+          <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-amber-800 font-medium">증권 자산 중복 가능성</p>
+            <p className="text-amber-700 text-xs mt-0.5">{securitiesOverlapMessage(securitiesOverlap)}</p>
+            <Link href="/finance/assets" className="text-xs text-amber-800 underline mt-1 inline-block">자산 페이지에서 확인</Link>
+          </div>
+        </div>
+      )}
 
       {urgentFunding.length > 0 && (
         <div className="flex items-center justify-between px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg text-sm">
@@ -407,14 +429,24 @@ export default function DashboardPage() {
                           <p className="text-[11px] text-amber-600 mt-0.5">결제 계좌 미지정</p>
                         )}
                       </div>
-                      <div className="text-right shrink-0">
+                      <div className="text-right shrink-0 flex flex-col items-end gap-1">
                         <span className="text-sm font-semibold text-gray-800 tabular-nums block">{formatKRW(expense.amount)}</span>
-                        <span className={`inline-flex items-center gap-0.5 mt-1 text-[10px] font-medium px-1.5 py-0.5 rounded border ${coverageBadgeClass(check.status)}`}>
-                          {check.status === 'ok' && <CheckCircle2 size={9} />}
-                          {check.status === 'shortfall' && <AlertTriangle size={9} />}
-                          {coverageStatusLabel(check.status)}
-                          {check.shortfall ? ` ${formatKRW(check.shortfall)}` : ''}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleMarkPaid(expense.id, expense.name)}
+                            className="text-[10px] text-emerald-600 hover:text-emerald-700 flex items-center gap-0.5"
+                          >
+                            <CircleCheck size={11} />
+                            결제 완료
+                          </button>
+                          <span className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded border ${coverageBadgeClass(check.status)}`}>
+                            {check.status === 'ok' && <CheckCircle2 size={9} />}
+                            {check.status === 'shortfall' && <AlertTriangle size={9} />}
+                            {coverageStatusLabel(check.status)}
+                            {check.shortfall ? ` ${formatKRWFull(check.shortfall)}` : ''}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   );

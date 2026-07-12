@@ -19,7 +19,7 @@ from config.database import (
     Stock,
     StockSignal,
 )
-from core.sector_peers import sectors_match
+from core.sector_peers import find_active_stocks_in_sector, sectors_match
 
 logger = logging.getLogger(__name__)
 
@@ -152,15 +152,7 @@ def _record_outcome(
 
 
 def _stocks_for_sector_eval(db: Session, signal_sector: str) -> list[Stock]:
-    stocks = db.query(Stock).filter(Stock.is_active == True).all()
-    matched = [
-        s
-        for s in stocks
-        if _is_krx_stock(s) and sectors_match(s.sector, signal_sector, s.symbol)
-    ]
-    if matched:
-        return matched
-    return [s for s in stocks if _is_krx_stock(s) and (s.qty or 0) > 0]
+    return find_active_stocks_in_sector(db, signal_sector)
 
 
 def _stocks_for_macro_eval(db: Session) -> list[Stock]:

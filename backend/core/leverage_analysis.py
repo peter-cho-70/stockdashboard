@@ -71,9 +71,11 @@ def analyze_leverage_investment(
         agg["cost"] += t.qty * t.price
 
     realized_by_stock: dict[int, float] = {}
+    sold_qty_by_stock: dict[int, float] = {}
     for t in sells:
         basis = t.avg_price_before if t.avg_price_before is not None else 0.0
         realized_by_stock[t.stock_id] = realized_by_stock.get(t.stock_id, 0.0) + (t.price - basis) * t.qty
+        sold_qty_by_stock[t.stock_id] = sold_qty_by_stock.get(t.stock_id, 0.0) + t.qty
 
     stocks = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(stock_ids)).all()}
 
@@ -93,7 +95,12 @@ def analyze_leverage_investment(
         held_qty = stock.qty or 0.0
         current_price = stock.current_price or 0.0
         realized_profit = realized_by_stock.get(stock_id, 0.0)
-        unrealized_post_loan = (current_price - post_loan_avg_price) * held_qty
+
+        # 대출 후 매수분 중 실제로 아직 보유 중인 수량 (대출 후 매도분 차감, 전체 보유수량 상한)
+        sold_qty = sold_qty_by_stock.get(stock_id, 0.0)
+        post_loan_remaining_qty = min(max(post_loan_qty - sold_qty, 0.0), held_qty)
+
+        unrealized_post_loan = (current_price - post_loan_avg_price) * post_loan_remaining_qty
         unrealized_overall = (current_price - overall_avg_price) * held_qty
 
         items.append({
@@ -102,6 +109,7 @@ def analyze_leverage_investment(
             "post_loan_buy_qty": round(post_loan_qty, 4),
             "post_loan_avg_price": round(post_loan_avg_price, 2),
             "post_loan_cost": round(agg["cost"], 0),
+            "post_loan_remaining_qty": round(post_loan_remaining_qty, 4),
             "overall_avg_price": round(overall_avg_price, 2),
             "held_qty": round(held_qty, 4),
             "current_price": round(current_price, 2),

@@ -25,6 +25,7 @@ from core.us_market_report import (
     SECTOR_LABELS,
     add_tracked_us_stock,
     fetch_live_snapshot,
+    fetch_ticker_history,
     generate_us_morning_report,
     get_report,
     list_reports,
@@ -243,6 +244,18 @@ def api_us_live_snapshot(
         raise HTTPException(status_code=500, detail=str(e)[:300]) from e
 
 
+@market_router.get("/reports/us/daily/history")
+def api_us_ticker_history(
+    ticker: str = Query(..., min_length=1, max_length=20),
+    period: str = Query("3mo", description="1mo | 3mo | 6mo | 1y"),
+):
+    """지수·유가·환율·미국주식 등 티커의 일별 종가 시계열 (차트용)"""
+    try:
+        return fetch_ticker_history(ticker.strip(), period=period)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"시계열 조회 실패: {e}") from e
+
+
 @market_router.post("/reports/us/daily/refresh-news")
 def api_refresh_us_report_news(
     date: Optional[str] = Query(None, description="YYYY-MM-DD"),
@@ -265,12 +278,14 @@ class TrackedUsStockBody(BaseModel):
     name_kr: str = Field(..., min_length=1, max_length=100)
     sector: str = Field("other", max_length=30)
     korea_related: Optional[str] = Field(None, max_length=200)
+    compare_krx_symbol: Optional[str] = Field(None, max_length=10)
 
 
 class TrackedUsStockUpdateBody(BaseModel):
     name_kr: Optional[str] = Field(None, min_length=1, max_length=100)
     sector: Optional[str] = Field(None, max_length=30)
     korea_related: Optional[str] = Field(None, max_length=200)
+    compare_krx_symbol: Optional[str] = Field(None, max_length=10)
 
 
 @market_router.get("/reports/us/tracked-stocks")
@@ -287,6 +302,7 @@ def api_add_tracked_us_stock(body: TrackedUsStockBody, db: Session = Depends(get
             name_kr=body.name_kr,
             sector=body.sector,
             korea_related=body.korea_related,
+            compare_krx_symbol=body.compare_krx_symbol,
         )
         return {"stock": stock}
     except ValueError as e:
@@ -304,6 +320,7 @@ def api_update_tracked_us_stock(
             name_kr=body.name_kr,
             sector=body.sector,
             korea_related=body.korea_related,
+            compare_krx_symbol=body.compare_krx_symbol,
         )
         return {"stock": stock}
     except ValueError as e:

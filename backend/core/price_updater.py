@@ -4,24 +4,16 @@ pykrx를 이용한 국내 주식 현재가 / 종가 갱신
 KIS API 없이도 무료로 KRX 데이터 사용 가능
 """
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from typing import Optional
 from sqlalchemy.orm import Session
 
-from config.database import Stock, PriceHistory, PortfolioSnapshot, AlertHistory
-from core.portfolio import format_price_alert_message, resolve_prev_close
-from core.target_alerts import check_all_targets_for_stock
+from config.database import Stock, PriceHistory, PortfolioSnapshot
+from core.portfolio import resolve_prev_close
+from core.target_alerts import check_all_targets_for_stock, check_price_move_alert
+from core.market_calendar import get_latest_trading_date, get_latest_trading_date_str
 
 logger = logging.getLogger(__name__)
-
-
-def get_latest_trading_date() -> str:
-    """최근 거래일 반환 (주말/휴일 제외)"""
-    d = date.today()
-    # 토요일(5), 일요일(6) 이면 금요일로
-    while d.weekday() >= 5:
-        d -= timedelta(days=1)
-    return d.strftime("%Y%m%d")
 
 
 def fetch_krx_prices(symbols: list[str]) -> dict[str, dict]:
@@ -33,7 +25,7 @@ def fetch_krx_prices(symbols: list[str]) -> dict[str, dict]:
         from pykrx import stock as krx
         import time
 
-        trading_date = get_latest_trading_date()
+        trading_date = get_latest_trading_date_str()
         result = {}
 
         for symbol in symbols:
@@ -41,23 +33,23 @@ def fetch_krx_prices(symbols: list[str]) -> dict[str, dict]:
                 df = krx.get_market_ohlcv_by_date(
                     trading_date, trading_date, symbol
                 )
+                # 장마감 직후엔 KRX가 당일 데이터를 아직 확정하지 않아 df가 비어있을 수 있다.
+                # 예전엔 여기서 전일 데이터로 조용히 폴백해 "당일 종가"로 잘못 저장하는 버그가 있었다
+                # (2026-07-10 스냅샷에 7/9 데이터가 그대로 중복 저장된 사고, DEVLOG 참고).
+                # 데이터가 없으면 그냥 이번 갱신에서 스킵 — 이후 KIS 실시세 동기화나 다음 스케줄 실행이 채운다.
                 if df.empty:
-                    # 전일 데이터 시도
-                    prev_date = (
-                        date.today() - timedelta(days=1)
-                    ).strftime("%Y%m%d")
-                    df = krx.get_market_ohlcv_by_date(prev_date, prev_date, symbol)
+                    logger.info("%s: %s pykrx 데이터 아직 없음 (장마감 직후) — 이번 갱신 스킵", symbol, trading_date)
+                    continue
 
-                if not df.empty:
-                    row = df.iloc[-1]
-                    result[symbol] = {
-                        "current_price": float(row.get("종가", row.get("Close", 0))),
-                        "open_price": float(row.get("시가", row.get("Open", 0))),
-                        "high_price": float(row.get("고가", row.get("High", 0))),
-                        "low_price": float(row.get("저가", row.get("Low", 0))),
-                        "volume": float(row.get("거래량", row.get("Volume", 0))),
-                        "change_rate": float(row.get("등락률", row.get("등락률", 0))),
-                    }
+                row = df.iloc[-1]
+                result[symbol] = {
+                    "current_price": float(row.get("종가", row.get("Close", 0))),
+                    "open_price": float(row.get("시가", row.get("Open", 0))),
+                    "high_price": float(row.get("고가", row.get("High", 0))),
+                    "low_price": float(row.get("저가", row.get("Low", 0))),
+                    "volume": float(row.get("거래량", row.get("Volume", 0))),
+                    "change_rate": float(row.get("등락률", row.get("등락률", 0))),
+                }
                 time.sleep(0.1)  # 요청 간격 조절
             except Exception as e:
                 logger.warning(f"⚠️ {symbol} 시세 조회 실패: {e}")
@@ -121,26 +113,14 @@ def update_prices_from_krx(db: Session, alert_threshold: float = 5.0) -> dict:
         stock.updated_at = datetime.utcnow()
         updated += 1
 
-        # 5% 이상 변동 감지
-        if abs(change_rate) >= alert_threshold:
-            msg = format_price_alert_message(
-                name=stock.name,
-                symbol=stock.symbol,
-                change_rate=change_rate,
-                prev_close=prev_close,
-                current_price=new_price,
-                currency=stock.currency or "KRW",
+        # 급등락 감지 — 임계값을 넘은 최초 1회만 알림(재갱신마다 재알림 방지)
+        alerts.extend(
+            check_price_move_alert(
+                db, stock,
+                change_rate=change_rate, prev_close=prev_close, current_price=new_price,
+                threshold=alert_threshold,
             )
-            alert = AlertHistory(
-                stock_symbol=stock.symbol,
-                alert_type="PRICE_SURGE" if change_rate > 0 else "PRICE_DROP",
-                message=msg,
-                change_rate=change_rate,
-            )
-            db.add(alert)
-            alerts.append({"symbol": stock.symbol, "name": stock.name,
-                           "change_rate": change_rate, "message": msg})
-            logger.warning(f"⚠️ {msg}")
+        )
 
         alerts.extend(check_all_targets_for_stock(db, stock))
 
@@ -150,8 +130,9 @@ def update_prices_from_krx(db: Session, alert_threshold: float = 5.0) -> dict:
 
 
 def save_daily_snapshot(db: Session):
-    """일별 포트폴리오 스냅샷 저장"""
-    today = date.today().strftime("%Y-%m-%d")
+    """일별 포트폴리오 스냅샷 저장 — 호출 시점(wall clock)이 아니라 최근 거래일 기준으로 저장한다.
+    그래야 주말/휴일이나 자정을 넘겨 실행된 재동기화가 엉뚱한 날짜에 찍히지 않는다."""
+    today = get_latest_trading_date().strftime("%Y-%m-%d")
     stocks = db.query(Stock).filter(Stock.is_active == True).all()
 
     total_value = sum(s.current_value for s in stocks)
