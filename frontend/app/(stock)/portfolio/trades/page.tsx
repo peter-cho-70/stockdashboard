@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -10,6 +10,7 @@ import { ArrowUpRight, ArrowDownRight, RefreshCw, Calculator, TrendingUp, Chevro
 import { api, type AllTradeItem, type FinanceHubState } from "@/lib/api";
 import type { Liability } from "@/lib/finance/types";
 import { LeverageAnalysisPanel } from "@/components/finance/leverage-analysis-panel";
+import { krChangeClass } from "@/lib/krMarketColors";
 
 type SideFilter = "ALL" | "BUY" | "SELL";
 type SourceFilter = "ALL" | "manual" | "kis";
@@ -349,6 +350,8 @@ export default function TradesPage() {
   const [symbolSort, setSymbolSort] = useState<"amount" | "qty">("amount");
   const [detailSide, setDetailSide] = useState<"ALL" | "SELL">("ALL");
   const [liabilities, setLiabilities] = useState<Liability[]>([]);
+  const [currentPrices, setCurrentPrices] = useState<Record<string, number>>({});
+  const attemptedPriceSymbols = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     api
@@ -500,6 +503,49 @@ export default function TradesPage() {
     });
     return list;
   }, [buyTrades, liabilities, symbolSort]);
+
+  // ── 종목별 집계용 현재가 참고 조회 (보유 종목은 일괄, 청산된 종목은 개별 조회) ──
+  useEffect(() => {
+    const symbols = bySymbol
+      .map((r) => r.symbol)
+      .filter((s) => !attemptedPriceSymbols.current.has(s));
+    if (symbols.length === 0) return;
+    symbols.forEach((s) => attemptedPriceSymbols.current.add(s));
+
+    let cancelled = false;
+    (async () => {
+      const found: Record<string, number> = {};
+
+      try {
+        const stocks = await api.getStocks();
+        for (const s of stocks) {
+          if (symbols.includes(s.symbol) && s.current_price) found[s.symbol] = s.current_price;
+        }
+      } catch {
+        /* 무시: 개별 조회로 폴백 */
+      }
+
+      const remaining = symbols.filter((s) => found[s] == null);
+      const CONCURRENCY = 4;
+      for (let i = 0; i < remaining.length; i += CONCURRENCY) {
+        const batch = remaining.slice(i, i + CONCURRENCY);
+        const results = await Promise.allSettled(batch.map((s) => api.ensureStock(s)));
+        results.forEach((res, idx) => {
+          if (res.status === "fulfilled" && res.value.stock.current_price) {
+            found[batch[idx]] = res.value.stock.current_price;
+          }
+        });
+      }
+
+      if (!cancelled && Object.keys(found).length > 0) {
+        setCurrentPrices((prev) => ({ ...prev, ...found }));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bySymbol]);
 
   const symbolBuySummary = useMemo(() => {
     const totalBuyAmount = bySymbol.reduce((sum, r) => sum + r.buyAmount, 0);
@@ -749,6 +795,7 @@ export default function TradesPage() {
                     <th className="px-4 py-2 text-right font-medium">매수회수</th>
                     <th className="px-4 py-2 text-right font-medium">수량</th>
                     <th className="px-4 py-2 text-right font-medium">단가</th>
+                    <th className="px-4 py-2 text-right font-medium">현재가</th>
                     <th className="px-4 py-2 text-right font-medium">비용 (KIS)</th>
                     <th className="px-4 py-2 text-left font-medium">레버리지 연결</th>
                     <th className="px-4 py-2 text-right font-medium">매수금액</th>
@@ -757,12 +804,15 @@ export default function TradesPage() {
                 <tbody className="divide-y divide-[var(--border-subtle)]">
                   {bySymbol.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-xs text-neutral-400">
+                      <td colSpan={8} className="px-4 py-8 text-center text-xs text-neutral-400">
                         조회 기간 내 매수 체결이 없습니다.
                       </td>
                     </tr>
                   ) : (
-                    bySymbol.map((r) => (
+                    bySymbol.map((r) => {
+                      const currentPrice = currentPrices[r.symbol];
+                      const diffPct = currentPrice != null && r.avgPrice > 0 ? (currentPrice / r.avgPrice - 1) * 100 : null;
+                      return (
                       <tr key={r.symbol}>
                         <td className="px-4 py-2">
                           <span className="font-medium text-neutral-900 dark:text-neutral-100">{r.name}</span>
@@ -771,6 +821,20 @@ export default function TradesPage() {
                         <td className="px-4 py-2 text-right text-neutral-600 dark:text-neutral-300 tabular-nums">{r.buyCount}</td>
                         <td className="px-4 py-2 text-right text-neutral-600 dark:text-neutral-300 tabular-nums">{r.buyQty.toLocaleString()}</td>
                         <td className="px-4 py-2 text-right text-neutral-700 dark:text-neutral-300 tabular-nums">{fmt(r.avgPrice)}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">
+                          {currentPrice != null ? (
+                            <div>
+                              <span className="font-medium text-neutral-900 dark:text-neutral-100">{fmt(currentPrice)}</span>
+                              {diffPct != null && (
+                                <span className={`ml-1.5 text-[11px] ${krChangeClass(diffPct)}`}>
+                                  {diffPct >= 0 ? "+" : ""}{diffPct.toFixed(1)}%
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-neutral-400">…</span>
+                          )}
+                        </td>
                         <td className="px-4 py-2 text-right text-neutral-600 dark:text-neutral-300 tabular-nums">
                           {r.kisCost > 0 ? fmt(r.kisCost) : <span className="text-neutral-400">—</span>}
                         </td>
@@ -791,7 +855,8 @@ export default function TradesPage() {
                         </td>
                         <td className="px-4 py-2 text-right font-medium text-red-600 dark:text-red-400 tabular-nums">{fmt(r.buyAmount)}</td>
                       </tr>
-                    ))
+                      );
+                    })
                   )}
                 </tbody>
               </table>

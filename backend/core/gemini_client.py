@@ -337,6 +337,70 @@ class GeminiClient:
                 return None
         return None
 
+    def generate_json_from_youtube(
+        self,
+        youtube_url: str,
+        prompt: str,
+        *,
+        purpose: str = "YouTube 영상 JSON 분석",
+        model: Optional[str] = None,
+        system_instruction: Optional[str] = None,
+    ) -> Optional[dict]:
+        """자막이 없을 때(IP 차단 등) Gemini가 YouTube URL을 직접 시청해서 분석 → JSON.
+
+        일반 generate_json은 텍스트 프롬프트만 보내므로, 자막 없이 URL 문자열만 넘기면
+        모델이 실제 영상을 볼 수 없어 그럴듯한 내용을 지어내는(환각) 문제가 있었다.
+        file_data로 YouTube URL을 media part로 첨부하면 모델이 영상을 직접 시청한다.
+        """
+        if not self._client:
+            self._log("error", "❌ Gemini Client 미초기화")
+            return None
+
+        use_model = model or self.model
+        self._log("info", f"📡 Gemini YouTube 직접 시청 ({purpose}, {use_model})")
+
+        parts = [
+            types.Part.from_uri(file_uri=youtube_url, mime_type="video/*"),
+            prompt,
+        ]
+
+        for attempt in range(1, JSON_PARSE_RETRIES + 1):
+            try:
+                config = types.GenerateContentConfig(
+                    temperature=0.3,
+                    response_mime_type="application/json",
+                    max_output_tokens=DEFAULT_JSON_MAX_OUTPUT_TOKENS,
+                )
+                if system_instruction:
+                    config.system_instruction = system_instruction
+
+                resp = self._client.models.generate_content(
+                    model=use_model, contents=parts, config=config
+                )
+                raw = resp.text or ""
+                result = _extract_json(raw)
+                if result:
+                    self._log("info", "✅ Gemini YouTube 직접 시청 JSON 완료")
+                    return result
+                if attempt < JSON_PARSE_RETRIES:
+                    self._log("warning", f"⚠️ Gemini YouTube JSON 파싱 재시도 ({attempt}/{JSON_PARSE_RETRIES})")
+                    continue
+                self._log("error", f"❌ Gemini YouTube JSON 파싱 실패 ({len(raw)}자): {raw[:200]}")
+                return None
+            except (GeminiQuotaError, GeminiAuthError):
+                raise
+            except Exception as e:
+                err = str(e)
+                outcome = self._handle_error(err, attempt)
+                if outcome is None:
+                    continue
+                if isinstance(outcome, Exception):
+                    self._log("error", f"❌ {outcome}")
+                    raise outcome
+                self._log("error", f"❌ Gemini YouTube 직접 시청 실패: {err[:200]}")
+                return None
+        return None
+
     def generate_json_with_images(
         self,
         prompt: str,

@@ -89,6 +89,7 @@ export default function DashboardPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [catchingUp, setCatchingUp] = useState(false);
   const [apiStatus, setApiStatus] = useState<"checking" | "ok" | "error">("checking");
   const [lastUpdated, setLastUpdated] = useState("");
   const [refreshMsg, setRefreshMsg] = useState("");
@@ -168,6 +169,20 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleCatchupPriceHistory() {
+    setCatchingUp(true);
+    setRefreshMsg("");
+    try {
+      const result = await api.catchupPriceHistory();
+      setRefreshMsg(result.message);
+      await loadHistory(chartDays);
+    } catch {
+      setRefreshMsg("시세 이력 복원 실패. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setCatchingUp(false);
+    }
+  }
+
   const unreadCount = alerts.length;
 
   const chartLabelFormat = chartDays > 90 ? (d: string) => d.slice(2, 7) : (d: string) => d.slice(5);
@@ -225,6 +240,15 @@ export default function DashboardPage() {
           )}
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={handleCatchupPriceHistory}
+            disabled={catchingUp}
+            title="컴퓨터를 꺼둬서 조회하지 않은 날의 시세·수익 이력을 다시 복원합니다 (알림은 생성되지 않습니다)"
+            className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-100 disabled:opacity-50 dark:text-neutral-300 dark:hover:bg-neutral-800"
+          >
+            <RefreshCw size={14} className={catchingUp ? "animate-spin" : ""} />
+            {catchingUp ? "복원 중..." : "놓친 시세 다시 체크"}
+          </button>
           <button
             onClick={handleRefreshPrices}
             disabled={refreshing}

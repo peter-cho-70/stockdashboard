@@ -612,6 +612,14 @@ export const api = {
     );
   },
   refreshPrices: () => fetchApi<{ message: string; updated: number; alerts: unknown[] }>("/portfolio/refresh-prices", { method: "POST" }),
+  catchupPriceHistory: () =>
+    fetchApi<{
+      message: string;
+      stocks_checked: number;
+      stocks_filled: number;
+      days_filled: number;
+      snapshot_days_filled: number;
+    }>("/portfolio/price-history/catchup", { method: "POST" }),
   getHistory: (days?: number) => fetchApi<PortfolioSnapshot[]>(`/portfolio/history${days ? `?days=${days}` : ""}`),
   updateMemo: (symbol: string, memo: string, sector?: string) =>
     fetchApi<unknown>(`/portfolio/stocks/${symbol}/memo`, {

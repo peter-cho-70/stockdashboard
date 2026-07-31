@@ -23,6 +23,7 @@ backend/data/stock_basics_cache/
 backend/data/auction_files/
 backend/data/backend.pid
 backend/data/kr_snapshot_cache.json
+backend/data/price_catchup_state.json
 backend/nohup.out
 backend/.vercel
 /stockmind.db

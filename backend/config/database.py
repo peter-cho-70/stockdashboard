@@ -195,6 +195,10 @@ class PriceHistory(Base):
 
     stock = relationship("Stock", back_populates="price_history")
 
+    __table_args__ = (
+        UniqueConstraint("stock_id", "date", name="uq_price_history_stock_date"),
+    )
+
 
 # ─────────────────────────────────────────────
 # 포트폴리오 일별 스냅샷

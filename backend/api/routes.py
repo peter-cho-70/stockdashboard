@@ -754,6 +754,35 @@ def refresh_prices_krx(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/portfolio/price-history/catchup")
+def catchup_price_history_endpoint(db: Session = Depends(get_db)):
+    """마지막으로 저장된 이후 비어있는 날짜의 국내 종목 시세 이력 + 포트폴리오
+    스냅샷(총 평가금액·손익·수익률)을 복원. 컴퓨터를 꺼둬서 장마감 스케줄러가 못
+    돈 날짜의 실제 등락률·수익을 다시 확인할 수 있게 한다 (앱 시작 시 자동으로도
+    실행되지만, 필요할 때 수동으로도 재실행 가능). 수동 호출이므로 자동 실행
+    쿨다운(`CATCHUP_COOLDOWN_MINUTES`)과 무관하게 항상 실행(`force=True`)."""
+    from core.price_updater import catchup_portfolio_snapshots, catchup_price_history
+
+    try:
+        price_result = catchup_price_history(db, force=True)
+        snap_result = catchup_portfolio_snapshots(db)
+
+        parts = []
+        if price_result.get("days_filled"):
+            parts.append(f"시세 {price_result['stocks_filled']}개 종목 {price_result['days_filled']}일치")
+        if snap_result.get("days_filled"):
+            parts.append(f"수익 이력 {snap_result['days_filled']}일치")
+        message = f"{' + '.join(parts)} 복원 완료" if parts else "복원할 누락 날짜가 없습니다 (이미 최신 상태)"
+
+        return {
+            "message": message,
+            **price_result,
+            "snapshot_days_filled": snap_result.get("days_filled", 0),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─────────────────────────────────────────────
 # 포트폴리오 이력 (수익률 차트용)
 # ─────────────────────────────────────────────

@@ -436,7 +436,7 @@ function ChannelPanel({
   const [analysisMap, setAnalysisMap] = useState<Record<string, VideoAnalysis>>({});
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
-  const MAX_VIDEOS = 30;
+  const MAX_VIDEOS = 50;
 
   const loadChannels = useCallback(async () => {
     try { setChannels(await fetchJson<YTChannel[]>("/youtube/channels")); }
@@ -595,11 +595,11 @@ function ChannelPanel({
       preloadAnalyzed(data.videos, true);
 
       if (!append && data.from_cache) {
-        setBulkMsg("캐시에서 불러왔습니다 · 채널을 다시 누르면 이전 영상 추가 (최대 30개)");
+        setBulkMsg(`캐시에서 불러왔습니다 · 채널을 다시 누르면 이전 영상 추가 (최대 ${MAX_VIDEOS}개)`);
       } else if (append) {
         setBulkMsg(`${data.videos.length}개 추가 · 총 ${merged.length}개`);
       } else if (data.has_more) {
-        setBulkMsg("채널을 한 번 더 누르면 이전 영상 10개를 더 불러옵니다 (최대 30개)");
+        setBulkMsg(`채널을 한 번 더 누르면 이전 영상 10개를 더 불러옵니다 (최대 ${MAX_VIDEOS}개)`);
       }
     } catch {
       if (!append) setVideos([]);
@@ -805,7 +805,7 @@ function ChannelPanel({
                 {selectedCh.channel_name} · 최신 영상
               </h2>
               <p className="text-xs text-neutral-400 mt-0.5">
-                영상 클릭으로 개별 분석 · 채널 재클릭 또는 더보기로 이전 영상 (최대 30개) · 분석 완료 영상은 결과 자동 표시
+                영상 클릭으로 개별 분석 · 채널 재클릭 또는 더보기로 이전 영상 (최대 {MAX_VIDEOS}개) · 분석 완료 영상은 결과 자동 표시
               </p>
             </div>
             <div className="flex gap-2">

@@ -407,6 +407,30 @@ class AIAnalyzer:
         except GeminiQuotaError as e:
             raise ProviderQuotaError("gemini", e.delay)
 
+    def _call_gemini_json_from_youtube(
+        self,
+        youtube_url: str,
+        prompt: str,
+        purpose: str = "YouTube 직접 시청",
+        *,
+        model: Optional[str] = None,
+    ) -> Optional[dict]:
+        if not self._gemini or not self._gemini.ready:
+            self._log("error", "❌ Gemini 미초기화")
+            return None
+        try:
+            return self._gemini.generate_json_from_youtube(
+                youtube_url,
+                prompt,
+                purpose=purpose,
+                model=model or self.gemini_model,
+                system_instruction="주식·경제 전문 분석가. 반드시 유효한 JSON만 출력.",
+            )
+        except GeminiAuthError:
+            raise
+        except GeminiQuotaError as e:
+            raise ProviderQuotaError("gemini", e.delay)
+
     def _call_claude(self, prompt: str) -> Optional[dict]:
         if not self._anthropic:
             self._log("error", "❌ Claude 미초기화 — ANTHROPIC_API_KEY 확인")
@@ -644,19 +668,32 @@ class AIAnalyzer:
         return self._run_provider_chain(preferred, prompt, label, gemini_cache=gemini_cache)
 
     def _extract_youtube_with_gemini(
-        self, extract_dynamic: str, *, detailed: bool
+        self, extract_dynamic: str = "", *, detailed: bool, youtube_url: str | None = None
     ) -> Optional[dict]:
+        prompt = YOUTUBE_EXTRACT_PROMPT_DEEP if detailed else YOUTUBE_EXTRACT_PROMPT
+        purpose = "YouTube 상세 문서 추출 (~3배)" if detailed else "YouTube 문서 추출"
+
+        if youtube_url:
+            # 자막 없음(IP 차단 등) — URL 텍스트만 넘기면 모델이 실제 영상을 못 보고
+            # 그럴듯한 내용을 지어내므로(환각), file_data로 영상을 직접 시청시킨다.
+            return self._call_gemini_json_from_youtube(
+                youtube_url,
+                prompt,
+                purpose=f"{purpose} (직접 시청)",
+                model=self.gemini_extract_model,
+            )
+
         if detailed:
             return self._call_gemini_json(
                 extract_dynamic,
-                purpose="YouTube 상세 문서 추출 (~3배)",
+                purpose=purpose,
                 cache_key="youtube_extract_deep_v1",
                 cache_static=YOUTUBE_EXTRACT_PROMPT_DEEP,
                 model=self.gemini_extract_model,
             )
         return self._call_gemini_json(
             extract_dynamic,
-            purpose="YouTube 문서 추출",
+            purpose=purpose,
             cache_key="youtube_extract_v1",
             cache_static=YOUTUBE_EXTRACT_PROMPT,
             model=self.gemini_extract_model,
@@ -730,11 +767,10 @@ class AIAnalyzer:
         if transcript:
             self._log("info", f"📝 자막 {len(transcript):,}자 → Gemini 문서화")
             extract_dynamic = f"[YouTube 자막]\n{transcript[:transcript_limit]}"
+            extracted = self._extract_youtube_with_gemini(extract_dynamic, detailed=detailed_extract)
         else:
-            self._log("warn", "⚠️ 자막 없음 → Gemini URL 직접 분석")
-            extract_dynamic = f"[YouTube URL]\n{url}"
-
-        extracted = self._extract_youtube_with_gemini(extract_dynamic, detailed=detailed_extract)
+            self._log("warn", "⚠️ 자막 없음 → Gemini가 영상을 직접 시청해 분석")
+            extracted = self._extract_youtube_with_gemini(detailed=detailed_extract, youtube_url=url)
         if not extracted:
             self._log("error", "❌ Gemini 문서 추출 실패")
             return None

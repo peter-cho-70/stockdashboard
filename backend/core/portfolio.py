@@ -166,13 +166,26 @@ def run_startup_catchup_sync() -> dict:
     if is_demo_mode():
         logger.info("ℹ️ 데모 모드 — 시작 시 자동 동기화 생략")
         return {"skipped": "demo_mode"}
-    if not (settings.kis_is_configured() or settings.kiwoom_is_configured()):
-        logger.info("ℹ️ KIS/키움 미설정 — 시작 시 자동 동기화 생략")
-        return {"skipped": "not_configured"}
 
     db = SessionLocal()
     try:
         result: dict = {}
+
+        try:
+            from core.price_updater import catchup_price_history
+
+            price_result = catchup_price_history(db)
+            logger.info("✅ 시작 시 가격 이력 캐치업: %s", price_result)
+            result["price_history"] = price_result
+        except Exception as e:
+            logger.warning("⚠️ 시작 시 가격 이력 캐치업 실패: %s", e)
+            result["price_history_error"] = str(e)
+
+        if not (settings.kis_is_configured() or settings.kiwoom_is_configured()):
+            logger.info("ℹ️ KIS/키움 미설정 — 잔고·체결 동기화 생략")
+            result.update(_catchup_portfolio_snapshots_safe(db))
+            return result
+
         if settings.kis_is_configured():
             try:
                 start = compute_trade_sync_start(db)
@@ -192,9 +205,25 @@ def run_startup_catchup_sync() -> dict:
             logger.warning("⚠️ 시작 시 잔고·시세 동기화 실패: %s", e)
             result["sync_error"] = str(e)
 
+        # 체결내역까지 최신화된 뒤에 스냅샷을 복원해야 매매로 바뀐 수량을
+        # 정확히 되돌려 계산할 수 있다 (그래서 잔고·체결 동기화 다음에 실행).
+        result.update(_catchup_portfolio_snapshots_safe(db))
+
         return result
     finally:
         db.close()
+
+
+def _catchup_portfolio_snapshots_safe(db: Session) -> dict:
+    try:
+        from core.price_updater import catchup_portfolio_snapshots
+
+        snap_result = catchup_portfolio_snapshots(db)
+        logger.info("✅ 시작 시 포트폴리오 스냅샷 캐치업: %s", snap_result)
+        return {"portfolio_snapshots": snap_result}
+    except Exception as e:
+        logger.warning("⚠️ 시작 시 포트폴리오 스냅샷 캐치업 실패: %s", e)
+        return {"portfolio_snapshots_error": str(e)}
 
 
 def resolve_prev_close(
@@ -359,8 +388,10 @@ class PortfolioManager:
     # 가격 이력 저장
     # ─────────────────────────────────────────
     def save_price_history(self):
-        """오늘 종가 이력 저장 (하루 1회 장마감 후 실행)"""
-        today = date.today().strftime("%Y-%m-%d")
+        """오늘 종가 이력 저장 (하루 1회 장마감 후 실행) — 호출 시점(wall clock)이
+        아니라 최근 거래일 기준으로 저장한다. 그렇지 않으면 주말/공휴일에 동기화가
+        한 번이라도 돌 때 그 요일에 직전 거래일 값이 그대로 중복 저장된다."""
+        today = get_latest_trading_date().strftime("%Y-%m-%d")
         stocks = self.db.query(Stock).filter(Stock.is_active == True).all()
         saved = 0
 
