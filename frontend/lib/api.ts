@@ -1,4 +1,9 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+// 명시적으로 설정 안 하면 상대경로 "/api"를 쓴다 — next.config.ts의 rewrites가
+// 이걸 (Next 서버 프로세스가 돌고 있는 PC 기준) 백엔드로 그대로 proxy해준다.
+// 그래야 폰이 Tailscale 등 사설망으로 이 PC의 프론트 개발서버(예: 4000번 포트)에
+// 접속했을 때도, 응답 JS에 박힌 "localhost"가 폰 자신을 가리켜버리는 문제 없이
+// 같은 PC의 백엔드에 정상적으로 닿는다.
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 
 const REPORT_GENERATE_TIMEOUT_MS = 300_000;
 
@@ -393,6 +398,25 @@ export interface FinanceLedgerState {
   budgets: import("@/lib/finance/types").Budget[];
   settings: import("@/lib/finance/types").LedgerSettings;
 }
+
+// 모바일 빠른입력 → 받은상자 (PC에서 확인 후 가계부에 합침)
+export interface LedgerInboxItem {
+  id: string;
+  date: string;
+  amount: number;
+  type: import("@/lib/finance/types").TransactionType;
+  category: string | null;
+  subCategory: string | null;
+  paymentMethod: import("@/lib/finance/types").PaymentMethod;
+  cardIssuer: string | null;
+  memo: string | null;
+  isFixed: boolean;
+  user: string | null;
+  linkedLiabilityId: string | null;
+  receivedAt: string;
+}
+
+export type LedgerInboxItemDraft = Omit<LedgerInboxItem, "id" | "receivedAt">;
 
 export interface PortfolioAIAnalysisResult {
   analysis: {
@@ -830,6 +854,15 @@ export const api = {
     }),
   resetLedgerState: () =>
     fetchApi<FinanceLedgerState>("/finance/ledger", { method: "DELETE" }),
+  getLedgerInbox: () =>
+    fetchApi<{ items: LedgerInboxItem[] }>("/finance/ledger/inbox"),
+  addLedgerInboxItem: (pin: string, body: LedgerInboxItemDraft) =>
+    fetchApi<LedgerInboxItem>("/finance/ledger/inbox", {
+      method: "POST",
+      body: JSON.stringify({ pin, ...body }),
+    }),
+  deleteLedgerInboxItem: (id: string) =>
+    fetchApi<{ ok: boolean }>(`/finance/ledger/inbox/${id}`, { method: "DELETE" }),
   getFinanceStockSnapshot: () =>
     fetchApi<FinanceStockSnapshot>("/finance/stock-snapshot"),
   getLeverageAnalysis: (startDate: string, principal: number, annualRate: number) =>

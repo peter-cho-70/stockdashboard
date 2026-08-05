@@ -33,6 +33,12 @@ from core.finance_service import (
     save_finance_state,
     save_ledger_state,
 )
+from core.ledger_inbox_store import (
+    add_ledger_inbox_item,
+    delete_ledger_inbox_item,
+    list_ledger_inbox,
+)
+from core.ledger_mobile import verify_ledger_mobile_pin
 from core.leverage_analysis import analyze_leverage_investment
 
 finance_router = APIRouter(prefix="/finance", tags=["finance"])
@@ -86,6 +92,43 @@ def write_ledger_state(body: LedgerStateBody, db: Session = Depends(get_db)):
 def clear_ledger_state(db: Session = Depends(get_db)):
     demo_write_blocked()
     return reset_ledger_state(db)
+
+
+# ─── 가계부 받은상자 (모바일 빠른입력) ───────────────────────────────────────
+
+class LedgerInboxItemBody(BaseModel):
+    pin: str
+    date: str
+    amount: float
+    type: str
+    category: str | None = None
+    subCategory: str | None = None
+    paymentMethod: str = "cash"
+    cardIssuer: str | None = None
+    memo: str | None = None
+    isFixed: bool = False
+    user: str | None = None
+    linkedLiabilityId: str | None = None
+
+
+@finance_router.get("/ledger/inbox")
+def read_ledger_inbox():
+    return {"items": list_ledger_inbox()}
+
+
+@finance_router.post("/ledger/inbox")
+def create_ledger_inbox_item(body: LedgerInboxItemBody):
+    verify_ledger_mobile_pin(body.pin)
+    payload = body.model_dump(exclude={"pin"})
+    return add_ledger_inbox_item(payload)
+
+
+@finance_router.delete("/ledger/inbox/{item_id}")
+def remove_ledger_inbox_item(item_id: str):
+    demo_write_blocked()
+    if not delete_ledger_inbox_item(item_id):
+        raise HTTPException(status_code=404, detail="받은상자 항목을 찾을 수 없습니다.")
+    return {"ok": True}
 
 
 class CashflowOpinionBody(BaseModel):

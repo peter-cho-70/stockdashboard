@@ -1,15 +1,17 @@
 'use client';
 
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   ChevronLeft, ChevronRight, Plus, Pencil, Trash2,
   TrendingUp, TrendingDown, Minus, BookOpen, SlidersHorizontal,
-  Search, PieChart, ClipboardList,
+  Search, PieChart, ClipboardList, Inbox as InboxIcon,
 } from 'lucide-react';
 import { useLedgerStore } from '@/lib/finance/store/ledger-store';
 import { useFinanceStore } from '@/lib/finance/store/finance-store';
 import { CategoryBreakdownPanel } from '@/components/finance/ledger/category-breakdown-panel';
 import { BulkImportPanel } from '@/components/finance/ledger/bulk-import-panel';
+import { LedgerInboxPanel } from '@/components/finance/ledger/inbox-panel';
+import { api, type LedgerInboxItem } from '@/lib/api';
 import {
   type Transaction, type TransactionType, type PaymentMethod,
 } from '@/lib/finance/types';
@@ -128,6 +130,39 @@ export default function LedgerPage() {
   const [showBudgetPanel, setShowBudgetPanel] = useState(false);
   const [showAnalysisPanel, setShowAnalysisPanel] = useState(false);
   const [showBulkImport, setShowBulkImport] = useState(false);
+  const [showInboxPanel, setShowInboxPanel] = useState(false);
+
+  // ─ 모바일 받은상자 ─
+  const [inboxItems, setInboxItems] = useState<LedgerInboxItem[]>([]);
+  const loadInbox = useCallback(() => {
+    api.getLedgerInbox().then((res) => setInboxItems(res.items)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    loadInbox();
+  }, [loadInbox]);
+  function commitInboxItem(item: LedgerInboxItem) {
+    store.addTransaction({
+      id: `t${Date.now()}`,
+      date: item.date,
+      amount: item.amount,
+      type: item.type,
+      category: item.category ?? '',
+      subCategory: item.subCategory ?? undefined,
+      paymentMethod: item.paymentMethod,
+      cardIssuer: item.cardIssuer ?? undefined,
+      memo: item.memo ?? undefined,
+      isFixed: item.isFixed,
+      user: item.user ?? undefined,
+      linkedLiabilityId: item.linkedLiabilityId ?? undefined,
+      createdAt: new Date().toISOString(),
+    });
+    api.deleteLedgerInboxItem(item.id).catch(() => {});
+    setInboxItems((prev) => prev.filter((i) => i.id !== item.id));
+  }
+  function discardInboxItem(id: string) {
+    api.deleteLedgerInboxItem(id).catch(() => {});
+    setInboxItems((prev) => prev.filter((i) => i.id !== id));
+  }
 
   // ─ 거래 폼 ─
   const [form, setForm] = useState(emptyForm());
@@ -271,6 +306,18 @@ export default function LedgerPage() {
             텍스트 일괄 추가
           </button>
           <button
+            onClick={() => setShowInboxPanel(v => !v)}
+            className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-all ${showInboxPanel ? 'bg-gray-900 text-white border-gray-900' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+          >
+            <InboxIcon size={12} />
+            모바일 받은상자
+            {inboxItems.length > 0 && (
+              <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-600 px-1 text-[10px] font-semibold text-white">
+                {inboxItems.length}
+              </span>
+            )}
+          </button>
+          <button
             onClick={openNew}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition-all"
           >
@@ -340,6 +387,20 @@ export default function LedgerPage() {
           users={users ?? []}
           onImport={(items) => { store.addTransactions(items); setShowBulkImport(false); }}
           onClose={() => setShowBulkImport(false)}
+        />
+      )}
+
+      {/* ─ 모바일 받은상자 패널 ──────────────────────────────────────── */}
+      {showInboxPanel && (
+        <LedgerInboxPanel
+          items={inboxItems}
+          categories={categories}
+          cardIssuers={cardIssuers}
+          users={users ?? []}
+          liabilities={liabilities}
+          onCommit={commitInboxItem}
+          onDiscard={discardInboxItem}
+          onClose={() => setShowInboxPanel(false)}
         />
       )}
 

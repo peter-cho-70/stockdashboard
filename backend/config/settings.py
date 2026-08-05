@@ -293,6 +293,12 @@ class Settings(BaseSettings):
     demo_mode: bool = Field(False, env="DEMO_MODE")
     demo_pin: str = Field("", env="DEMO_PIN")  # 설정 화면 토글용 PIN (평문, .env만)
 
+    # ── 모바일 가계부 빠른입력 (같은 사설망에서 폰으로 받은상자에 추가) ──
+    ledger_mobile_pin: str = Field("", env="LEDGER_MOBILE_PIN")  # 미설정 시 모바일 입력 API 자체를 막음
+    # 받은상자는 SQLite DB를 거치지 않고 이 경로의 JSON 파일에 바로 저장/삭제된다.
+    # DB_BACKUP_DIR처럼 구글 드라이브 동기화 폴더 등으로 바꿔도 됨 (기기 간 공유 목적)
+    ledger_inbox_file: str = Field("./data/ledger_inbox.json", env="LEDGER_INBOX_FILE")
+
     # ── 알림 설정 ─────────────────────────────────
     alert_threshold: float = Field(5.0, env="ALERT_THRESHOLD")
     smtp_host: str = Field("smtp.gmail.com", env="SMTP_HOST")

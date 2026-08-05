@@ -150,6 +150,11 @@ function AppShellFallback({ children }: { children: React.ReactNode }) {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  // /mobile 하위 페이지는 독립된 단독 화면 — 허브 탭·테마 토글 등 PC용 상단 메뉴 없이 그대로 렌더링
+  if (pathname?.startsWith("/mobile")) {
+    return <>{children}</>;
+  }
   return (
     <Suspense fallback={<AppShellFallback>{children}</AppShellFallback>}>
       <AppShellInner>{children}</AppShellInner>

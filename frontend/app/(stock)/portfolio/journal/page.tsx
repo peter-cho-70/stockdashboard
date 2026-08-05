@@ -227,11 +227,13 @@ function TradeDayContext({ symbol, tradedAt }: { symbol: string; tradedAt: strin
 function JournalEditForm({
   trade,
   options,
+  siblingBuys,
   onCancel,
   onSaved,
 }: {
   trade: JournalTradeItem;
   options: JournalOptions;
+  siblingBuys: JournalTradeItem[];
   onCancel: () => void;
   onSaved: () => void;
 }) {
@@ -247,6 +249,8 @@ function JournalEditForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [planDismissed, setPlanDismissed] = useState(false);
+  const [shareWithSiblings, setShareWithSiblings] = useState(false);
+  const siblingsWithData = useMemo(() => siblingBuys.filter(hasJournalData), [siblingBuys]);
 
   const routineStore = useRoutineStore();
   const morningPlan: StockPlan | null = useMemo(
@@ -276,6 +280,17 @@ function JournalEditForm({
     setError(null);
     try {
       await api.updateTradeJournalEntry(trade.id, draft);
+      if (shareWithSiblings && siblingBuys.length > 0) {
+        // 매수 관련 필드만 공유 — 매도사유/복기 메모는 매수 체결에 의미가 없으므로 제외
+        const sharedFields: JournalEntryUpdate = {
+          buy_reason: draft.buy_reason,
+          conviction: draft.conviction,
+          entry_emotion: draft.entry_emotion,
+          target_price: draft.target_price,
+          stop_price: draft.stop_price,
+        };
+        await Promise.all(siblingBuys.map((s) => api.updateTradeJournalEntry(s.id, sharedFields)));
+      }
       onSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : "저장 실패");
@@ -383,6 +398,27 @@ function JournalEditForm({
               placeholder="사기 전에 정하세요"
             />
           </label>
+          {siblingBuys.length > 0 && (
+            <label className="flex w-full items-start gap-2 rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2 text-xs text-neutral-500">
+              <input
+                type="checkbox"
+                checked={shareWithSiblings}
+                onChange={(e) => setShareWithSiblings(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                같은 날 매수한 {trade.name} 다른 체결 {siblingBuys.length}건에도 위 매수사유·확신도·진입감정·목표가·손절가를 동일하게 적용
+                <span className="mt-0.5 block text-[10px] text-neutral-400">
+                  {siblingBuys.map((s) => `${s.qty.toLocaleString()}주 @ ${fmt(s.price)}원`).join(" · ")}
+                </span>
+                {shareWithSiblings && siblingsWithData.length > 0 && (
+                  <span className="mt-0.5 block text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                    ⚠ 이 중 {siblingsWithData.length}건은 이미 기록이 있어 지금 입력한 내용으로 덮어씁니다.
+                  </span>
+                )}
+              </span>
+            </label>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -752,6 +788,13 @@ export default function TradeJournalPage() {
                           <JournalEditForm
                             trade={t}
                             options={options}
+                            siblingBuys={
+                              t.side === "BUY"
+                                ? trades.filter(
+                                    (o) => o.id !== t.id && o.side === "BUY" && o.symbol === t.symbol && o.traded_at === t.traded_at,
+                                  )
+                                : []
+                            }
                             onCancel={() => setExpandedId(null)}
                             onSaved={() => {
                               // 저장하면 이 행의 펼침 폼이 접히면서 아래 내용이 위로 당겨진다 —

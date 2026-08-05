@@ -504,11 +504,19 @@ export default function TradesPage() {
     return list;
   }, [buyTrades, liabilities, symbolSort]);
 
+  // bySymbol은 liabilities·정렬 순서가 바뀔 때마다 새 배열 참조가 되므로, 실제
+  // 종목 구성이 그대로인데도 아래 현재가 조회 effect가 재실행되어 진행 중이던
+  // fetch가 취소되는 레이스가 있었다. 종목 집합이 실제로 바뀔 때만 문자열 키가
+  // 바뀌도록 해서 effect 의존성으로 사용한다.
+  const bySymbolKey = useMemo(
+    () => [...new Set(bySymbol.map((r) => r.symbol))].sort().join(","),
+    [bySymbol],
+  );
+
   // ── 종목별 집계용 현재가 참고 조회 (보유 종목은 일괄, 청산된 종목은 개별 조회) ──
   useEffect(() => {
-    const symbols = bySymbol
-      .map((r) => r.symbol)
-      .filter((s) => !attemptedPriceSymbols.current.has(s));
+    const allSymbols = bySymbolKey ? bySymbolKey.split(",") : [];
+    const symbols = allSymbols.filter((s) => !attemptedPriceSymbols.current.has(s));
     if (symbols.length === 0) return;
     symbols.forEach((s) => attemptedPriceSymbols.current.add(s));
 
@@ -545,7 +553,7 @@ export default function TradesPage() {
     return () => {
       cancelled = true;
     };
-  }, [bySymbol]);
+  }, [bySymbolKey]);
 
   const symbolBuySummary = useMemo(() => {
     const totalBuyAmount = bySymbol.reduce((sum, r) => sum + r.buyAmount, 0);

@@ -61,6 +61,7 @@ export function PortfolioAIAnalysis() {
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(true);
 
   useEffect(() => {
     api.getPortfolioAnalysis()
@@ -70,6 +71,7 @@ export function PortfolioAIAnalysis() {
   }, []);
 
   async function handleGenerate() {
+    setCollapsed(false);
     setLoading(true);
     setError(null);
     try {
@@ -204,53 +206,69 @@ export function PortfolioAIAnalysis() {
               </div>
             )}
 
-            {/* 분석 섹션 */}
-            <div className="space-y-2">
-              <Section
-                icon={<Lightbulb size={12} className="text-amber-500" />}
-                title="포트폴리오 특징"
-                content={analysis.characteristics}
-              />
-              <Section
-                icon={<PieChart size={12} className="text-indigo-500" />}
-                title="섹터 구성 분석"
-                content={analysis.sector_analysis}
-              />
-              <Section
-                icon={<Activity size={12} className="text-orange-500" />}
-                title="오늘 하루 변동 분석"
-                content={analysis.daily_analysis}
-              />
-              <Section
-                icon={<BarChart2 size={12} className="text-blue-500" />}
-                title="시장 대비 성과 비교"
-                content={analysis.market_comparison}
-              />
-              <Section
-                icon={<ArrowUpDown size={12} className="text-teal-500" />}
-                title="수익·손실 종목 리뷰"
-                content={analysis.profit_loss_review}
-              />
-              <Section
-                icon={<ShieldAlert size={12} className="text-rose-500" />}
-                title="집중 리스크 분석"
-                content={analysis.concentration_risk}
-              />
-              <Section
-                icon={<Compass size={12} className="text-violet-500" />}
-                title="주도주 전략 평가"
-                content={analysis.strategy_assessment}
-              />
-              <Section
-                icon={<Target size={12} className="text-emerald-500" />}
-                title="개선 제언"
-                content={analysis.suggestions}
-              />
-            </div>
+            {/* 상세 분석 접기/펼치기 토글 — 기본은 현재 시장까지만 보여주고 접어둔 상태 */}
+            <button
+              onClick={() => setCollapsed((v) => !v)}
+              className="w-full flex items-center justify-center gap-1.5 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 border-t border-gray-100"
+            >
+              {collapsed ? (
+                <>상세 분석 보기 <ChevronDown size={13} /></>
+              ) : (
+                <>상세 분석 접기 <ChevronUp size={13} /></>
+              )}
+            </button>
 
-            <p className="text-[10px] text-gray-300 text-right">
-              * AI 분석은 참고용이며 투자 권유가 아닙니다.
-            </p>
+            {!collapsed && (
+              <>
+                {/* 분석 섹션 */}
+                <div className="space-y-2">
+                  <Section
+                    icon={<Lightbulb size={12} className="text-amber-500" />}
+                    title="포트폴리오 특징"
+                    content={analysis.characteristics}
+                  />
+                  <Section
+                    icon={<PieChart size={12} className="text-indigo-500" />}
+                    title="섹터 구성 분석"
+                    content={analysis.sector_analysis}
+                  />
+                  <Section
+                    icon={<Activity size={12} className="text-orange-500" />}
+                    title="오늘 하루 변동 분석"
+                    content={analysis.daily_analysis}
+                  />
+                  <Section
+                    icon={<BarChart2 size={12} className="text-blue-500" />}
+                    title="시장 대비 성과 비교"
+                    content={analysis.market_comparison}
+                  />
+                  <Section
+                    icon={<ArrowUpDown size={12} className="text-teal-500" />}
+                    title="수익·손실 종목 리뷰"
+                    content={analysis.profit_loss_review}
+                  />
+                  <Section
+                    icon={<ShieldAlert size={12} className="text-rose-500" />}
+                    title="집중 리스크 분석"
+                    content={analysis.concentration_risk}
+                  />
+                  <Section
+                    icon={<Compass size={12} className="text-violet-500" />}
+                    title="주도주 전략 평가"
+                    content={analysis.strategy_assessment}
+                  />
+                  <Section
+                    icon={<Target size={12} className="text-emerald-500" />}
+                    title="개선 제언"
+                    content={analysis.suggestions}
+                  />
+                </div>
+
+                <p className="text-[10px] text-gray-300 text-right">
+                  * AI 분석은 참고용이며 투자 권유가 아닙니다.
+                </p>
+              </>
+            )}
           </>
         )}
 
